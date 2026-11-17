@@ -105,10 +105,10 @@ void commit_failure(const char* fault){
 void bounded_pending(){
   using namespace product;
   auto pending=std::make_shared<StoragePending>();
-  PacketQueue queue;CapturePacket preparation;preparation.frames=480;queue.push(std::move(preparation));queue.attach_storage(pending,0);
+  PacketQueue queue;CapturePacket preparation;preparation.frames=480;preparation.flags=2;queue.push(std::move(preparation));queue.attach_storage(pending,0);
   require(queue.pop()->storage_end==480,"adoption did not charge preparation ingress");
   pending->acquire(0,48000*120-480);bool failed=false;
-  try{CapturePacket extra;extra.frames=1;queue.push(std::move(extra));}catch(const std::exception&){failed=true;}
+  try{CapturePacket extra;extra.frames=1;extra.flags=2;queue.push(std::move(extra));}catch(const std::exception&){failed=true;}
   require(failed&&queue.pending_frames()==0&&pending->snapshot().frames[0]==48000*120,"120-second guard mutated accepted ingress");
   StoragePending bytes_budget;for(unsigned i=0;i<64;++i)bytes_budget.active();failed=false;
   try{bytes_budget.active();}catch(const std::exception&){failed=true;}

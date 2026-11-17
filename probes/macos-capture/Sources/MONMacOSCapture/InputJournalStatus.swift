@@ -39,7 +39,8 @@ struct InputJournalStatusReport: Encodable, Sendable {
 
 /// Production telemetry is descriptor-relative too. Its unsynced atomic update
 /// is not a new journal commit receipt; only the copied writer result is shown.
-final class InputJournalStatusPublisher {
+final class InputJournalStatusPublisher: @unchecked Sendable {
+  private let lock = NSLock()
   private let owner: String
   private let file: InputEventJournalFile
   private var revision: Int64 = 1
@@ -54,6 +55,8 @@ final class InputJournalStatusPublisher {
   }
 
   func publish(_ persistence: InputJournalPersistence) throws {
+    lock.lock()
+    defer { lock.unlock() }
     guard revision < Int64(InputEventHistory.safe) else {
       throw ProbeError.capture("input journal diagnostic heartbeat is exhausted")
     }
@@ -64,5 +67,5 @@ final class InputJournalStatusPublisher {
       ).encodedData())
   }
 
-  func removeIfOwned() { file.removeEphemeralIfOwned() }
+  func removeIfOwned() { lock.withLock { file.removeEphemeralIfOwned() } }
 }

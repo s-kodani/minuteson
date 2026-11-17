@@ -18,6 +18,7 @@ struct SystemAudioRecovery {
   private var reason: String?
   private var stopped: Bool { lifecycle.stopped }
   private var formatBlocked = false
+  private let recoverFormatChanges: Bool
   private var startedAt: Int64?
   private var lastAttempt: Int64?
   private(set) var history = InputEventHistory()
@@ -25,7 +26,7 @@ struct SystemAudioRecovery {
 
   init(
     targetPID: pid_t?, applicationIdentity: CaptureApplicationIdentity?, retries: Bool,
-    observe: InputEventJournal.Observer? = nil
+    observe: InputEventJournal.Observer? = nil, recoverFormatChanges: Bool = false
   ) throws {
     guard targetPID.map({ $0 > 0 }) ?? true,
       applicationIdentity.map({ $0.valid && $0.pid == targetPID }) ?? true,
@@ -34,6 +35,7 @@ struct SystemAudioRecovery {
     self.targetPID = targetPID
     self.applicationIdentity = applicationIdentity
     self.observe = observe
+    self.recoverFormatChanges = recoverFormatChanges
   }
 
   var status: Status {
@@ -89,7 +91,7 @@ struct SystemAudioRecovery {
 
   mutating func interrupt(_ reason: String, unavailable: Bool = false) {
     guard !stopped, !formatBlocked else { return }
-    if reason == "format_changed" { formatBlocked = true }
+    if reason == "format_changed", !recoverFormatChanges { formatBlocked = true }
     guard let first = lifecycle.interrupt(unavailable: unavailable) else { return }
     binding = nil
     self.reason = reason

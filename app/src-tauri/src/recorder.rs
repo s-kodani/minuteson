@@ -101,9 +101,7 @@ fn recording_command(
         .arg(parent_pid.to_string())
         .arg("--until-stopped")
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    command.stderr(Stdio::piped());
+        .stderr(Stdio::piped());
     if let Some(uid) = microphone_uid {
         command.arg("--microphone-uid").arg(uid);
     }
@@ -628,7 +626,6 @@ impl RecorderController {
             #[cfg(not(windows))]
             let job = ();
             let mut child = command.spawn().map_err(|error| error.to_string())?;
-            #[cfg(windows)]
             if let Some(stderr) = child.stderr.take() {
                 let context = crate::internal_logs::Context {
                     category: "recording".into(),

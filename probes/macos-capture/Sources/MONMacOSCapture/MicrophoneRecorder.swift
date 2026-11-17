@@ -14,6 +14,9 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private var configurationRevision: UInt64 = 0
   private var recovery: MicrophoneRecovery?
   private var lastRecoveryAttempt: ContinuousClock.Instant?
+  private var inputRetry = CaptureInputRetry()
+  private let retryOrigin: ContinuousClock.Instant
+  private var preparationReports = 0
   private struct NormalPreparation {
     let token: MicrophoneRecovery.Binding
     let format: AVAudioFormat
@@ -97,6 +100,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
     self.rawSegments = rawSegments
     self.mayContinue = mayContinue
     self.controlNow = controlNow
+    self.retryOrigin = controlNow()
     self.makeEngine = makeEngine
     self.devices = devices
     self.permission = permission
@@ -160,6 +164,12 @@ final class MicrophoneRecorder: @unchecked Sendable {
       }
       try configure(selected)
     } catch {
+      lock.withLock {
+        if clock != nil, testWindow == nil, initialNativePending, !stopped, mayContinue() {
+          inputRetry.acquisitionFailed(at: retryNow())
+        }
+      }
+      reportPreparationFailure(error, stage: "initial")
       suspend("restart_failed", unavailable: true)
       if clock == nil || testWindow != nil || !mayContinue() {
         lock.withLock { recovery?.stop() }
@@ -245,8 +255,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
       throw ProbeError.capture("microphone has no usable audio format")
     }
     try lock.withLock {
+      captureFormat = format
       if rawSegments != nil {
-        captureFormat = format
         stats.sampleRate = format.sampleRate
         stats.channels = format.channelCount
         normalizer = nil
@@ -314,13 +324,16 @@ final class MicrophoneRecorder: @unchecked Sendable {
         return self.configurationRevision
       }
       guard let revision else { return }
-      // Core Audio property reads may notify or wait for another queue. Keep
-      // them outside the callback/state lock, then fence the proof against
-      // notification changes and binding retirement before writing any PCM.
+      // The native input uses an ownership proof revoked by metadata listeners;
+      // HAL reads belong to the control owner, never this audio callback.
+      // Fence that proof against notification and binding retirement again
+      // under the writer lock before admitting any PCM.
       let identityError: Error?
       do {
-        try engine.verifyDevice(token)
+        try engine.verifyCallbackDevice(token)
         identityError = nil
+      } catch is MicrophoneDeviceProofPending {
+        return
       } catch { identityError = error }
       self.lock.lock()
       defer { self.lock.unlock() }
@@ -373,12 +386,14 @@ final class MicrophoneRecorder: @unchecked Sendable {
           guard let captureFormat = self.captureFormat,
             self.stats.acceptsMicrophonePCM(buffer, at: when, processingFormat: captureFormat)
           else {
-            self.recovery?.interrupt("format_changed", unavailable: true)
-            self.configurationChanged = true
-            self.stats.inputLevel.invalidate()
-            return
+            throw CaptureInputFault.invalidFormat
           }
-          let sourceFrame = when.isSampleTimeValid ? when.sampleTime + sourceFrameOffset : nil
+          var sourceFrame: Int64?
+          if when.isSampleTimeValid {
+            let (frame, overflow) = when.sampleTime.addingReportingOverflow(sourceFrameOffset)
+            guard !overflow else { throw CaptureInputFault.sourceCounter }
+            sourceFrame = frame
+          }
           try rawSegments.enqueue(
             buffer, observation: observation, sourceFrame: sourceFrame, sourceEpoch: token.epoch)
           if self.levelsEnabled { self.stats.inputLevel.receive(buffer, at: receivedAt) }
@@ -425,6 +440,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
           guard !overflow else { throw ProbeError.capture("microphone frame offset overflows") }
           savedSourceFrame = frame
         }
+        try CaptureInputFault.validate(buffer)
         try self.stats.prepareSavedClock(
           observation, frames: Int64(buffer.frameLength), sourceFrame: savedSourceFrame,
           sourceEpoch: token.epoch)
@@ -446,6 +462,15 @@ final class MicrophoneRecorder: @unchecked Sendable {
           self.normalAdmission = nil
         }
         self.receivedPCM(token)
+      } catch let fault as CaptureInputFault {
+        if self.clock != nil, self.testWindow == nil, self.rawSegments != nil {
+          self.inputRetry.fault(fault, at: self.retryNow(), input: "microphone")
+          self.retireBinding("invalid_audio_data", unavailable: true)
+        } else {
+          self.stats.appendFailures += 1
+          self.stats.retainCaptureFailure(fault)
+          self.stats.inputLevel.invalidate()
+        }
       } catch {
         self.stats.appendFailures += 1
         self.stats.retainCaptureFailure(error)
@@ -468,7 +493,9 @@ final class MicrophoneRecorder: @unchecked Sendable {
         else { throw ProbeError.capture("microphone activation is obsolete or stopped") }
         return configurationRevision
       }
-      try engine.verifyDevice(token)
+      do { try engine.verifyDevice(token) } catch is MicrophoneDeviceProofPending {
+        continue
+      }
       guard MicrophonePCMFormat.matches(format, engine.inputFormat) else {
         throw RebindError.formatChanged
       }
@@ -504,14 +531,24 @@ final class MicrophoneRecorder: @unchecked Sendable {
     throw ProbeError.capture("microphone configuration did not stabilize during initialization")
   }
 
-  private func releaseEngine() {
+  @discardableResult
+  private func releaseEngine() -> Bool {
     engine?.observeConfiguration(nil)
     if tapInstalled, let engine {
       engine.removeTap()
       tapInstalled = false
     }
-    engine?.stop()
+    do { try engine?.stop() } catch {
+      // Keep the native owner alive until an actual stop succeeds. A source
+      // failure must never fabricate acquisition closure or permit overlap.
+      lock.withLock {
+        stats.appendFailures += 1
+        stats.retainCaptureFailure(error)
+      }
+      return false
+    }
     engine = nil
+    return true
   }
 
   // Called only with the callback/state lock held.
@@ -523,9 +560,29 @@ final class MicrophoneRecorder: @unchecked Sendable {
   // Called under the callback lock, after valid PCM has been accepted. Silent
   // samples count; engine flags, notifications and retired callbacks do not.
   private func receivedPCM(_ token: MicrophoneRecovery.Binding) {
+    inputRetry.valid(at: retryNow())
     if pcmFlow?.token == token {
       pcmFlow?.deadline = controlNow().advanced(by: Self.pcmTimeout)
     }
+  }
+
+  private func retryNow() -> Int64 {
+    let elapsed = retryOrigin.duration(to: controlNow()).components
+    return max(0, elapsed.seconds * 1_000_000_000 + elapsed.attoseconds / 1_000_000_000)
+  }
+
+  private func reportPreparationFailure(_ error: Error, stage: String) {
+    let status = lock.withLock { () -> MicrophoneRecovery.Status? in
+      guard preparationReports < 16 else { return nil }
+      preparationReports += 1
+      return recovery?.status
+    }
+    guard let status else { return }
+    let detail = String(String(describing: error).prefix(1200)).replacingOccurrences(
+      of: "\n", with: " ")
+    CaptureInputRetry.diagnostic(
+      "mon_capture_microphone_preparation: stage=\(stage) epoch=\(status.sourceEpoch) error=\(detail)"
+    )
   }
 
   /// Serialized control-loop proofs, not sleeps or engine control on Apple's
@@ -548,6 +605,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
         configurationRevision < UInt64.max
       else { throw ProbeError.capture("microphone preparation is obsolete or stopped") }
       try stats.requireWritable(raw: rawSegments?.snapshot())
+      pending.nextProof = now.advanced(by: .milliseconds(100))
+      normalPreparation = pending
       return configurationRevision
     }
     try engine.verifyDevice(pending.token)
@@ -642,7 +701,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
       guard selected.objectID == token.objectID else {
         throw ProbeError.capture("microphone identity changed during test preparation")
       }
-      try engine.verifyDevice(token)
+      do { try engine.verifyDevice(token) } catch is MicrophoneDeviceProofPending {
+        previousRevision = nil
+        stableProofs = 0
+        continue
+      }
       guard MicrophonePCMFormat.matches(format, engine.inputFormat) else {
         throw RebindError.formatChanged
       }
@@ -693,7 +756,19 @@ final class MicrophoneRecorder: @unchecked Sendable {
       retireBinding(reason, unavailable: unavailable)
     }
     releaseEngine()
+    flushRetiredSource()
     // The current CAF remains open. Recreating it would overwrite prior PCM.
+  }
+
+  private func flushRetiredSource() {
+    do {
+      if lock.withLock({ inputRetry.recovering }) { try rawSegments?.retireSource() }
+    } catch {
+      lock.withLock {
+        stats.appendFailures += 1
+        stats.retainCaptureFailure(error)
+      }
+    }
   }
 
   // Caller holds the callback lock. Invalidation and the last-PCM timeout
@@ -724,6 +799,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       try stats.requireWritable(raw: rawSegments?.snapshot())
     }
     suspend("clock_changed")
+    try lock.withLock { try stats.requireWritable(raw: rawSegments?.snapshot()) }
     // Invalidation takes the callback lock, draining already-admitted writes.
     // After removeTap/stop, late callbacks still carry the retired binding and
     // are rejected before timestamps, CAF or raw writes are considered.
@@ -822,33 +898,69 @@ final class MicrophoneRecorder: @unchecked Sendable {
         controlNow() >= flow.deadline
       else { return false }
       stats.microphoneFlowTimeouts = (stats.microphoneFlowTimeouts ?? 0) + 1
+      inputRetry.acquisitionFailed(at: retryNow())
       retireBinding("engine_changed", unavailable: true)
       return true
     }
     if flowExpired {
       releaseEngine()
+      flushRetiredSource()
       lastRecoveryAttempt = nil
     }
     if lock.withLock({ normalPreparation != nil && selectedDeviceID == selected.objectID }) {
-      do { try maintainNormalPreparation() } catch RebindError.formatChanged {
+      do { try maintainNormalPreparation() } catch is MicrophoneDeviceProofPending {
+        // Keep the same input fenced until the next spaced proof. The original
+        // preparation deadline still bounds a stream of racing notifications.
+        return
+      } catch RebindError.formatChanged {
+        reportPreparationFailure(RebindError.formatChanged, stage: "stabilization")
+        lock.withLock { inputRetry.acquisitionFailed(at: retryNow()) }
         suspend("format_changed", unavailable: true)
-      } catch { suspend("restart_failed", unavailable: true) }
+      } catch {
+        reportPreparationFailure(error, stage: "stabilization")
+        lock.withLock { inputRetry.acquisitionFailed(at: retryNow()) }
+        suspend("restart_failed", unavailable: true)
+      }
       return
     }
     let healthy = lock.withLock {
-      (recovery?.status.state == "connected" || normalAdmission != nil) && !configurationChanged
+      (recovery?.status.state == "connected" || normalAdmission != nil)
         && selectedDeviceID == selected.objectID
     }
     if healthy, let engine, engine.isRunning {
       do {
-        let binding = try lock.withLock {
-          if let token = normalAdmission, recovery?.owns(token) == true { return token }
-          guard let binding = try recovery?.currentBinding() else {
+        let proof = try lock.withLock {
+          let binding: MicrophoneRecovery.Binding
+          if let token = normalAdmission, recovery?.owns(token) == true {
+            binding = token
+          } else if let current = try recovery?.currentBinding() {
+            binding = current
+          } else {
             throw ProbeError.capture("microphone binding is missing")
           }
-          return binding
+          guard let captureFormat else {
+            throw ProbeError.capture("microphone input format is missing")
+          }
+          return (binding, captureFormat, configurationRevision)
         }
-        try engine.verifyDevice(binding)
+        try engine.verifyDevice(proof.0)
+        guard MicrophonePCMFormat.matches(proof.1, engine.inputFormat) else {
+          throw RebindError.formatChanged
+        }
+        lock.withLock {
+          // A notification is a request to inspect the input, not proof that
+          // it was lost. Keep a running, unchanged physical input open rather
+          // than renegotiating a Bluetooth profile for an output-only event.
+          if mayContinue(), recovery?.owns(proof.0) == true,
+            configurationRevision == proof.2
+          {
+            configurationChanged = false
+          }
+        }
+        return
+      } catch is MicrophoneDeviceProofPending {
+        // Listener and metadata read raced. Recheck on the next heartbeat;
+        // opening the device again would turn notification noise into IO loss.
         return
       } catch {
         // Continue only after invalidating the old engine binding.
@@ -858,12 +970,22 @@ final class MicrophoneRecorder: @unchecked Sendable {
     // backoff instead of changing unavailable/restart_failed to engine_changed
     // on every heartbeat without any new acquisition evidence.
     if engine != nil { suspend() }
+    guard engine == nil,
+      lock.withLock({ (try? stats.requireWritable(raw: rawSegments?.snapshot())) != nil })
+    else { return }
     let now = controlNow()
+    guard lock.withLock({ inputRetry.permits(retryNow()) }) else { return }
     if let lastRecoveryAttempt, now < lastRecoveryAttempt.advanced(by: .seconds(1)) { return }
     lastRecoveryAttempt = now
     do { try configure(selected) } catch RebindError.formatChanged {
+      reportPreparationFailure(RebindError.formatChanged, stage: "recovery")
+      lock.withLock { inputRetry.acquisitionFailed(at: retryNow()) }
       suspend("format_changed", unavailable: true)
-    } catch { suspend("restart_failed", unavailable: true) }
+    } catch {
+      reportPreparationFailure(error, stage: "recovery")
+      lock.withLock { inputRetry.acquisitionFailed(at: retryNow()) }
+      suspend("restart_failed", unavailable: true)
+    }
   }
 
   func stop() {
@@ -890,7 +1012,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       return initialNativePending
     }
     guard !pending else { return }
-    releaseEngine()
+    guard releaseEngine() else { return }
     lock.withLock {
       if captureClosure == nil {
         do { captureClosure = try clock?.close(.microphone) } catch {

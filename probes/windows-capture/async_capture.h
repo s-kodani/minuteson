@@ -20,7 +20,8 @@ class AsyncCapture final : public CaptureReader {
   bool startup_finished_=false;
   std::exception_ptr startup_error_;
   void startup(std::exception_ptr error=nullptr){std::lock_guard lock(startup_mutex_);if(!startup_finished_){startup_error_=error;startup_finished_=true;startup_changed_.notify_all();}}
-  bool drain(IAudioCaptureClient* capture) {
+  bool drain(IAudioCaptureClient* capture,EndpointLifetime* lifetime) {
+    if(lifetime)lifetime->require_current();
     bool received=false;
     UINT32 available=0;
     acquisition(capture->GetNextPacketSize(&available),"poll WASAPI packets");
@@ -28,14 +29,16 @@ class AsyncCapture final : public CaptureReader {
       BYTE* data=nullptr;UINT32 count=0;DWORD flags=0;UINT64 position=0,time=0;
       acquisition(capture->GetBuffer(&data,&count,&flags,&position,&time),"read WASAPI packet");
       try {
+        if(lifetime)lifetime->require_current();
         if(count) {
           if(count>PacketQueue::max_frames)throw std::runtime_error("Windows音声パケットが保存待ち上限を超えています");
           CapturePacket packet;packet.frames=count;packet.flags=flags;packet.time=time;packet.position=position;packet.arrival=qpc();
           if(!(flags&AUDCLNT_BUFFERFLAGS_SILENT)) {
-            if(!data)throw std::runtime_error("Windows音声パケットのPCMがありません");
+            require_input_pcm(reinterpret_cast<const float*>(data),count,channels_);
             const auto samples=reinterpret_cast<const float*>(data);
             packet.samples.assign(samples,samples+std::size_t(count)*channels_);
           }
+          else require_input_pcm(nullptr,count,channels_,true);
           queue.push(std::move(packet));
           received=true;
         }
@@ -46,8 +49,8 @@ class AsyncCapture final : public CaptureReader {
     return received;
   }
  public:
-  AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels,bool microphone=false,std::string uid={}):channels_(channels) {
-    thread_=std::thread([this,client=std::move(client),microphone,uid=std::move(uid)]() mutable {
+  AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels,bool microphone=false,std::string uid={},std::shared_ptr<EndpointLifetime> lifetime={}):channels_(channels) {
+    thread_=std::thread([this,client=std::move(client),microphone,uid=std::move(uid),lifetime=std::move(lifetime)]() mutable {
       const auto initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
       DWORD index=0;HANDLE priority=nullptr;
       {
@@ -57,6 +60,7 @@ class AsyncCapture final : public CaptureReader {
         ComPtr<IAudioCaptureClient> capture;bool started=false;
         try {
           acquisition(initialized,"initialize WASAPI acquisition thread");
+          if(lifetime)lifetime->require_current();
           acquisition(client->GetService(IID_PPV_ARGS(capture.GetAddressOf())),"get WASAPI capture service");
           acquisition(client->Start(),"音声入力を開始できません");started=true;
           priority=AvSetMmThreadCharacteristicsW(L"Audio",&index);
@@ -64,17 +68,18 @@ class AsyncCapture final : public CaptureReader {
           MicrophoneFlow flow(GetTickCount64());
           if(!microphone)startup(); // loopback can legitimately have no playback
           while(!stopping_.load(std::memory_order_acquire)){
-            if(drain(capture.Get())){flow.packet(GetTickCount64());if(microphone)startup();}
+            if(drain(capture.Get(),lifetime.get())){flow.packet(GetTickCount64());if(microphone)startup();}
             if(microphone&&flow.expired(GetTickCount64())){
               std::cerr<<"mon_capture_input: "+Json{{"event","no_packets"},{"uid",uid},{"receivedBefore",flow.received},{"elapsedMs",GetTickCount64()-flow.last_packet_at}}.dump()+"\n";
               throw InputFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),flow.received?"microphone packet delivery stopped":"microphone Start succeeded without delivering packets");
             }
             Sleep(1);
           }
-          client->Stop();started=false;drain(capture.Get());
+          client->Stop();started=false;drain(capture.Get(),lifetime.get());
         }catch(...){auto error=std::current_exception();queue.fail(error);if(started)client->Stop();startup(error);}
       }
       client.Reset();
+      lifetime.reset();
       if(priority)AvRevertMmThreadCharacteristics(priority);
       if(SUCCEEDED(initialized))CoUninitialize();
     });

@@ -229,3 +229,14 @@ fn swift_generated_input_status_is_owner_bound_and_never_pcm_proof() {
     assert!(!path.join("microphone.caf").exists());
     assert!(!path.join("system.caf").exists());
 }
+
+#[test]
+fn source_data_fault_reason_round_trips_for_both_inputs_and_their_history() {
+    let mut value = publication(1);
+    for input in ["microphone", "system"] {
+        value[input]["reason"] = json!("invalid_audio_data");
+        value[format!("{input}History")]["events"][0]["status"]["reason"] =
+            json!("invalid_audio_data");
+    }
+    assert!(parse(&serde_json::to_vec(&value).unwrap(), OWNER).is_ok());
+}

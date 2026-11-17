@@ -34,6 +34,7 @@ class FakeCapture final : public IAudioCaptureClient {
   void same_thread(){auto id=GetCurrentThreadId();if(!thread)thread=id;require(thread==id,"GetBuffer/ReleaseBuffer changed acquisition threads");}
  public:
   std::atomic<unsigned> released{0},packet_limit{500};DWORD thread=0,service_release_thread=0;
+  unsigned invalid_at=std::numeric_limits<unsigned>::max();
   explicit FakeCapture(bool fail):fail_(fail){}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** value) override{*value=nullptr;return E_NOINTERFACE;}
   ULONG STDMETHODCALLTYPE AddRef() override{return ++references_;}
@@ -43,12 +44,151 @@ class FakeCapture final : public IAudioCaptureClient {
     same_thread();auto p=released.load();*count=479;*position=p*160;*time=p*75000;
     *flags=p%17==0?AUDCLNT_BUFFERFLAGS_SILENT:0;
     for(unsigned i=0;i<479;++i){buffer_[2*i]=float(std::sin(double(p*479+i)*0.04));buffer_[2*i+1]=-buffer_[2*i];}
+    if(p==invalid_at){*flags=0;buffer_[0]=NAN;}
     *data=(*flags&AUDCLNT_BUFFERFLAGS_SILENT)?nullptr:reinterpret_cast<BYTE*>(buffer_.data());return S_OK;
   }
   HRESULT STDMETHODCALLTYPE ReleaseBuffer(UINT32 count) override{same_thread();require(count==479,"buffer released with wrong frame count");std::fill(buffer_.begin(),buffer_.end(),NAN);++released;return S_OK;}
 };
+class QueuedReader final : public product::CaptureReader {
+ public: void stop() override{}
+};
+void source_fault_preserves_both_recording_lanes(){
+  const auto directory=fs::temp_directory_path()/(L"mon-input-fault-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(product::qpc()));
+  fs::create_directory(directory);
+  struct Cleanup {fs::path path;~Cleanup(){fs::remove_all(path);}} cleanup{directory};
+  auto pending=std::make_shared<product::StoragePending>();
+  auto commits=std::make_shared<product::RawCommitWorker>(pending);
+  product::Lane mic(directory/L"microphone.caf",1),system(directory/L"system.caf",2);
+  constexpr auto owner="735027d4-a03e-43d3-830a-21e767dfaf88";
+  mic.raw=std::make_unique<product::RawSegments>(directory,owner,"microphone",1,commits);
+  system.raw=std::make_unique<product::RawSegments>(directory,owner,"system",2,commits);
+  auto prepare=[](unsigned channels,std::uint64_t start,bool fault){
+    product::PreparedInput ready;ready.matching_position_rate=true;auto reader=std::make_unique<QueuedReader>();
+    for(unsigned i=0;i<2;++i){product::CapturePacket p;p.frames=480;p.samples.assign(480*channels,0.25f);p.time=start+i*100000;p.arrival=p.time;p.position=i*480;reader->queue.push(std::move(p));}
+    if(fault)reader->queue.fail(std::make_exception_ptr(product::InputDataFault("invalid source data")));
+    ready.reader=std::move(reader);return ready;
+  };
+  mic.adopt(prepare(1,100000000,true));system.adopt(prepare(2,100000000,false));
+  bool rejected=false;try{mic.pump();}catch(const product::InputDataFault&){rejected=true;mic.input_fault();}
+  require(rejected&&mic.binding.state=="unavailable"&&mic.binding.reason=="invalid_audio_data","input data error did not retire the affected binding");
+  require(system.binding.state=="connected","microphone fault interrupted PC audio");
+  system.pump();
+  const auto retired_by=GetTickCount64()+5000;
+  while(mic.retirement&&GetTickCount64()<retired_by){mic.poll_retirement();Sleep(1);}
+  require(!mic.retirement,"source fault did not finish its owned retirement");
+  mic.adopt(prepare(1,110000000,false));mic.pump();
+  mic.close();system.close();mic.raw->finish();system.raw->finish();commits->wait();
+  require(mic.raw->stored_frames()==640&&system.raw->stored_frames()==320,"reacquisition lost valid PCM or included the rejected packet");
+  const auto state=pending->snapshot();require(state.frames[0]==0&&state.frames[1]==0&&state.bytes==0&&state.jobs==0,"source fault leaked pending storage credits");
+}
+struct StopGate {
+  std::mutex mutex;std::condition_variable changed;bool entered=false,open=false;
+  void wait(){std::unique_lock lock(mutex);entered=true;changed.notify_all();changed.wait(lock,[&]{return open;});}
+  void release(){{std::lock_guard lock(mutex);open=true;}changed.notify_all();}
+};
+class HeldStopReader final : public product::CaptureReader {
+  std::shared_ptr<StopGate> gate_;
+ public: explicit HeldStopReader(std::shared_ptr<StopGate> gate):gate_(std::move(gate)){}
+  void stop() override{gate_->wait();}
+};
+void bluetooth_stop_wait_cannot_block_pc_audio_or_status(){
+  const auto directory=fs::temp_directory_path()/(L"mon-bt-stop-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(product::qpc()));
+  fs::create_directory(directory);
+  struct Cleanup {fs::path path;~Cleanup(){fs::remove_all(path);}} cleanup{directory};
+  constexpr auto owner="735027d4-a03e-43d3-830a-21e767dfaf88";
+  auto pending=std::make_shared<product::StoragePending>();auto commits=std::make_shared<product::RawCommitWorker>(pending);
+  product::Lane mic(directory/L"microphone.caf",1),pc(directory/L"system.caf",2);
+  mic.raw=std::make_unique<product::RawSegments>(directory,owner,"microphone",1,commits);
+  pc.raw=std::make_unique<product::RawSegments>(directory,owner,"system",2,commits);
+  auto gate=std::make_shared<StopGate>();
+  // A watchdog makes the old synchronous implementation fail instead of
+  // hanging the test forever. No physical Bluetooth or WASAPI device opens.
+  std::jthread watchdog([gate]{std::unique_lock lock(gate->mutex);gate->changed.wait_for(lock,std::chrono::seconds(5),[&]{return gate->open;});lock.unlock();gate->release();});
+  struct Release {std::shared_ptr<StopGate> gate;~Release(){gate->release();}} release{gate};
+  product::PreparedInput input;input.matching_position_rate=true;input.reader=std::make_unique<HeldStopReader>(gate);
+  for(unsigned i=0;i<20;++i){product::CapturePacket first;first.frames=480;first.samples.assign(480,0.25f);first.time=100000000+i*100000ULL;first.arrival=first.time;first.position=i*480;input.reader->queue.push(std::move(first));}
+  mic.adopt(std::move(input));
+  pc.clock.begin_stream(true);pc.binding.connected();
+  const auto started=GetTickCount64();mic.detach("device_changed");
+  require(GetTickCount64()-started<1000,"Bluetooth Stop blocked input status/control thread");
+  bool overlap=false;try{product::PreparedInput replacement;replacement.reader=std::make_unique<QueuedReader>();mic.adopt(std::move(replacement));}catch(const std::logic_error&){overlap=true;}
+  require(overlap,"replacement input opened before old native stop completed");
+  product::MetadataWorker metadata(directory,owner);std::vector<float> signal(960,0.25f);std::uint64_t revision=0;
+  for(unsigned i=0;i<125;++i){
+    mic.poll_retirement();pc.append(signal.data(),480,100000000+i*100000ULL,i*480,0,100000000+i*100000ULL);
+    if(i%20==0)metadata.publish(product::Json{{"schemaVersion",3},{"ownerId",owner},{"revision",++revision},{"microphone",mic.binding.status()},{"system",pc.binding.status()},{"microphoneHistory",mic.binding.history()},{"systemHistory",pc.binding.history()}},false);
+    Sleep(10);
+  }
+  {std::lock_guard lock(gate->mutex);require(gate->entered&&!gate->open,"native stop was not held during status publication");}
+  metadata.finish();
+  product::Json status;{std::ifstream file(directory/L"input-status.json");file>>status;}
+  require(status["revision"]==revision&&status["system"]["state"]=="connected"&&status["microphone"]["state"]=="disconnected","pending Bluetooth retirement aged or falsified live PC status");
+  // Virtual expiry proves stop cannot publish closure or start another Stop
+  // while the original native call is still owned. Accepted PCM remains salvageable.
+  mic.retirement_wait_expired=true;bool unproven=false;
+  try{mic.close();}catch(const std::runtime_error&){unproven=true;}
+  require(unproven&&!mic.acquisition_closed(),"pending native stop manufactured recording closure");
+  mic.raw->drain();mic.raw->seal();commits->wait();
+  require(mic.raw->stored_frames()==20*160&&mic.raw->status()["producerClosed"]==false,"pending stop lost the validated prefix or closed it falsely");
+  gate->release();watchdog.join();
+  const auto deadline=GetTickCount64()+5000;while(mic.retirement&&GetTickCount64()<deadline){mic.poll_retirement();Sleep(1);}
+  require(!mic.retirement,"completed native stop remained owned");
+  mic.close();pc.close();mic.raw->finish();pc.raw->finish();commits->wait();
+  require(mic.raw->stored_frames()==20*160&&pc.raw->stored_frames()==125*160,"retirement lost accepted mic/PC samples");
+  const auto remaining=pending->snapshot();require(!remaining.frames[0]&&!remaining.frames[1]&&!remaining.jobs&&!remaining.bytes,"native retirement leaked recording credits");
+}
+void stalled_microphone_retries_keep_backoff_and_accepted_audio(){
+  const auto directory=fs::temp_directory_path()/(L"mon-flow-retry-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(product::qpc()));
+  fs::create_directory(directory);
+  struct Cleanup {fs::path path;~Cleanup(){fs::remove_all(path);}} cleanup{directory};
+  constexpr auto owner="735027d4-a03e-43d3-830a-21e767dfaf88";
+  auto pending=std::make_shared<product::StoragePending>();auto commits=std::make_shared<product::RawCommitWorker>(pending);
+  product::Lane mic(directory/L"microphone.caf",1),pc(directory/L"system.caf",2);
+  mic.raw=std::make_unique<product::RawSegments>(directory,owner,"microphone",1,commits);
+  pc.raw=std::make_unique<product::RawSegments>(directory,owner,"system",2,commits);
+  pc.clock.begin_stream(true);pc.binding.connected();
+  std::uint64_t now_ms=1000;unsigned failures=0;
+  std::vector<float> signal(960,0.25f);
+  for(auto delay_ms:{1000ULL,2000ULL,4000ULL,8000ULL,16000ULL,30000ULL,30000ULL}){
+    // First reproduce Start succeeding without any packet. Later attempts
+    // receive only 20 ms of silence before the same three-second timeout.
+    if(failures){
+      product::PreparedInput ready;ready.matching_position_rate=true;auto reader=std::make_unique<QueuedReader>();
+      for(unsigned i=0;i<2;++i){
+        product::CapturePacket packet;packet.frames=480;packet.flags=AUDCLNT_BUFFERFLAGS_SILENT;
+        packet.time=100000000+failures*1000000ULL+i*100000ULL;packet.arrival=packet.time;packet.position=i*480;
+        reader->queue.push(std::move(packet));
+      }
+      reader->queue.fail(std::make_exception_ptr(product::InputFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),"microphone packet delivery stopped")));
+      ready.reader=std::move(reader);mic.adopt(std::move(ready));
+      require(mic.input_retry.failures==failures,"native Start/adopt cleared stalled-input retry history");
+      bool stalled=false;
+      try{mic.pump();}catch(const product::InputFailure& error){
+        stalled=error.result==HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        require(mic.input_retry.failures==failures,"brief silent PCM cleared stalled-input retry history");
+        mic.acquisition_failed("device_disconnected",false,now_ms);
+      }
+      require(stalled,"stalled microphone did not report its receive timeout");
+    }else mic.acquisition_failed("device_disconnected",false,now_ms);
+    ++failures;
+    require(mic.input_retry.failures==failures&&mic.input_retry.retry_at==(now_ms+delay_ms)*1000000ULL,"packet stalls bypassed bounded acquisition backoff");
+    require(mic.binding.state=="disconnected"&&mic.binding.reason=="device_disconnected","packet timeout became a PCM format error");
+    const auto deadline=GetTickCount64()+5000;
+    while(mic.retirement&&GetTickCount64()<deadline){mic.poll_retirement();Sleep(1);}
+    require(!mic.retirement,"stalled input cleanup did not complete before its next attempt");
+    pc.append(signal.data(),480,200000000+failures*100000ULL,failures*480ULL,0,200000000+failures*100000ULL);
+    require(pc.binding.state=="connected"&&!pc.input_retry.failures,"microphone retry affected PC audio");
+    now_ms+=delay_ms+3000;
+  }
+  mic.close();pc.close();mic.raw->finish();pc.raw->finish();commits->wait();
+  require(mic.raw->stored_frames()==6*320&&pc.raw->stored_frames()==7*160,"stalled-input retries lost accepted microphone or PC audio");
+  const auto remaining=pending->snapshot();require(!remaining.frames[0]&&!remaining.frames[1]&&!remaining.jobs&&!remaining.bytes,"packet-stall retries leaked recording credits");
+}
 int main(){
   try {
+    source_fault_preserves_both_recording_lanes();
+    bluetooth_stop_wait_cannot_block_pc_audio_or_status();
+    stalled_microphone_retries_keep_backoff_and_accepted_audio();
     product::MicrophoneFlow flow(100);
     require(!flow.expired(3099)&&flow.expired(3100)&&!flow.received,"microphone first-packet deadline changed");
     flow.packet(3000);
@@ -129,6 +269,18 @@ int main(){
       require(meter.frames==480&&meter.packets==1&&level["state"]=="measured"&&level["peak"]==0.25&&level["rms"]==0.25,"received endpoint audio did not reach the saved lane and PC meter");
     }
     fs::remove(meter_path);
+    for(UINT32 channels:{1u,2u}){
+      ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(false);capture.Attach(input);input->invalid_at=1;
+      ComPtr<IAudioClient> client;auto* device=new FakeClient(input);client.Attach(device);
+      product::AsyncCapture reader(client,channels);
+      const auto deadline=GetTickCount64()+5000;
+      while(input->released<2&&GetTickCount64()<deadline)Sleep(1);
+      reader.stop();
+      require(input->released==2&&device->stops>0,"invalid packet did not release native buffer and stop on owner thread");
+      require(reader.queue.pop()->frames==479,"valid packet before input fault was lost");
+      bool rejected=false;try{reader.queue.pop();}catch(const product::InputDataFault&){rejected=true;}
+      require(rejected,"native input fault became a generic writer error");
+    }
     for(bool fail:{false,true}) {
       ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(fail);capture.Attach(input);
       ComPtr<IAudioClient> client;auto* device=new FakeClient(input);client.Attach(device);

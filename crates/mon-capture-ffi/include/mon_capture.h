@@ -13,6 +13,14 @@
 #include <stdlib.h>
 struct VoiceConverter;
 
+typedef struct MonCaptureInputRetry {
+  uint32_t failures;
+  uint32_t reserved;
+  uint64_t retry_at;
+  uint64_t healthy_since;
+  uint64_t last_valid;
+} MonCaptureInputRetry;
+
 /**
  * PCM and timestamps are borrowed during the callback. Returning false makes
  * the converter terminal; native IO failures must never drop audio silently.
@@ -47,6 +55,14 @@ typedef struct MonRawPrefix {
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+bool mon_capture_pcm_geometry(uint32_t rate, uint32_t channels, uint64_t frames);
+
+bool mon_capture_pcm_samples(const float *values, size_t count);
+
+void mon_capture_input_fault(struct MonCaptureInputRetry *value, uint64_t now);
+
+void mon_capture_input_valid(struct MonCaptureInputRetry *value, uint64_t now);
 
 struct VoiceConverter *mon_voice_new(uint32_t rate, uint32_t channels);
 

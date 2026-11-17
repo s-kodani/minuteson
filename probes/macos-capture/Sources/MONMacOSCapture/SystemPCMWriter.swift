@@ -50,6 +50,13 @@ final class SystemPCMWriter: @unchecked Sendable {
     lock.withLock { savedStats.retainCaptureFailure(error) }
   }
 
+  func retireSource() throws {
+    do { try rawSegments?.retireSource() } catch {
+      recordFailure(error)
+      throw error
+    }
+  }
+
   func append(
     _ sample: CMSampleBuffer, observation: CaptureClockObservation?, sourceEpoch: UInt64,
     levelsEnabled: Bool, receivedAt: Int64?
@@ -68,23 +75,36 @@ final class SystemPCMWriter: @unchecked Sendable {
         savedStats.inputLevel.invalidate()
       }
     }
-    guard !closed, sample.isValid, sample.numSamples > 0,
+    guard !closed else { throw ProbeError.capture("system audio writer is closed") }
+    guard sample.isValid, sample.numSamples > 0,
       let description = sample.formatDescription,
       let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee
-    else { throw ProbeError.capture("system audio format or writer is unavailable") }
+    else {
+      if rawSegments != nil {
+        formatChanged = true
+        throw CaptureInputFault.invalidFormat
+      }
+      throw ProbeError.capture("system audio format is unavailable")
+    }
     let format = AVAudioFormat(cmAudioFormatDescription: description)
     // A new, owned binding can have a different hardware format. The raw
     // normalizer already drains its old converter at an epoch boundary and
     // stores every epoch as 16 kHz mono. A legacy continuous CAF or an
     // unexpected format change inside one live binding remains rejected.
-    let ownedRawTransition = rawSegments != nil
+    let ownedRawTransition =
+      rawSegments != nil
       && self.sourceEpoch.map({ sourceEpoch > $0 }) == true
     if let sourceFormat, !sourceFormat.isEqual(format), !ownedRawTransition {
       formatChanged = true
       throw AppendError.formatChanged
     }
     if let rawSegments {
-      try rawSegments.enqueue(sample, observation: observation, sourceEpoch: sourceEpoch)
+      do {
+        try rawSegments.enqueue(sample, observation: observation, sourceEpoch: sourceEpoch)
+      } catch let fault as CaptureInputFault {
+        formatChanged = true  // Rejected input did not fail the persistent writer.
+        throw fault
+      }
       sourceFormat = format
       self.sourceEpoch = sourceEpoch
       savedStats.sampleRate = asbd.mSampleRate
@@ -95,6 +115,7 @@ final class SystemPCMWriter: @unchecked Sendable {
       accepted = true
       return
     }
+    try CaptureInputFault.validate(CaptureInputFault.copy(sample))
     let contiguous = try continuousPCMSample(
       sample, frameOffset: savedStats.frames, sampleRate: asbd.mSampleRate)
     if writer == nil {

@@ -15,6 +15,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   private let queue = DispatchQueue(label: "app.mon.capture.system")
   private let lock = NSLock()
   private let pcm: SystemPCMWriter
+  private var inputRetry = CaptureInputRetry()
+  private let recoversInputData: Bool
   private var stream: (any SystemCaptureStream)?
   private var streamToken: SystemAudioRecovery.Binding?
   private var streamEnded = false
@@ -56,6 +58,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   ) {
     self.outputURL = outputURL
     self.pcm = SystemPCMWriter(outputURL: outputURL, rawSegments: rawSegments)
+    self.recoversInputData = retries && testWindow == nil && rawSegments != nil
     self.clock = clock
     self.levelsEnabled = levelsEnabled
     self.testWindow = testWindow
@@ -75,7 +78,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   {
     let policy = try SystemAudioRecovery(
       targetPID: targetPID, applicationIdentity: applicationIdentity, retries: retries,
-      observe: inputEventObserver)
+      observe: inputEventObserver, recoverFormatChanges: recoversInputData)
     let token = try lock.withLock {
       guard recovery == nil, !stopping else {
         throw ProbeError.capture("system start is already owned")
@@ -265,6 +268,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       }
       try stream.detach()
       queue.sync {}
+      if lock.withLock({ inputRetry.recovering }) { try pcm.retireSource() }
       lock.withLock {
         if self.stream === stream {
           self.stream = nil
@@ -294,13 +298,16 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     lock.withLock {
       guard !stopping, let policy = recovery else { return }
       if recovery?.expire(at: now) == true {
+        inputRetry.failedAttempt(at: now)
         pcm.invalidateLevels()
         operationTask?.cancel()
       }
       // A timed-out request retains operation ownership. Do not accumulate
       // simultaneous SCStreams, tasks or permission prompts on every poll.
-      let retirementOnly = policy.status.reason == "format_changed" && stream != nil
+      let retirementOnly =
+        !recoversInputData && policy.status.reason == "format_changed" && stream != nil
       guard policy.status.state != "connected", recovery?.operation == nil,
+        inputRetry.permits(now),
         let token = try?
           (retirementOnly ? recovery?.beginRetirement(at: now) : recovery?.begin(at: now))
       else { return }
@@ -320,6 +327,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         } catch {
           lock.withLock {
             if recovery?.owns(token) == true {
+              inputRetry.failedAttempt(at: self.now() ?? now)
               recovery?.interrupt(failureReason(error), unavailable: true)
             }
             pcm.invalidateLevels()
@@ -345,6 +353,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       guard self.stream === stream, let token = streamToken else { return }
       streamEnded = true
       guard !stopping, recovery?.owns(token) == true else { return }
+      inputRetry.failedAttempt(at: now() ?? 0)
       recovery?.interrupt("stream_stopped")
       pcm.invalidateLevels()
       if !retries, testWindow == nil || testWindow?.accepting == true { pcm.recordFailure(error) }
@@ -549,7 +558,6 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     from stream: any SystemCaptureStream, sampleBuffer: CMSampleBuffer,
     observation suppliedObservation: CaptureClockObservation? = nil
   ) {
-    guard sampleBuffer.isValid, sampleBuffer.numSamples > 0 else { return }
     let receivedAt = levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
     lock.lock()
     defer { lock.unlock() }
@@ -559,6 +567,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         || (stopping && drainingToken == token)
     else { return }
     do {
+      guard sampleBuffer.isValid, sampleBuffer.numSamples > 0 else {
+        throw CaptureInputFault.invalidPCM
+      }
       if let testWindow, !testWindow.accepting { return }
       if let identity = applicationIdentity {
         do { try requireIdentity(identity) } catch {
@@ -601,10 +612,25 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       try pcm.append(
         sampleBuffer, observation: observation, sourceEpoch: token.epoch,
         levelsEnabled: levelsEnabled, receivedAt: receivedAt)
+      inputRetry.valid(at: now() ?? 0)
     } catch SystemPCMWriter.AppendError.formatChanged {
+      if recoversInputData {
+        inputRetry.fault(.invalidFormat, at: now() ?? 0, input: "system")
+        recovery?.interrupt("invalid_audio_data", unavailable: true)
+        pcm.invalidateLevels()
+        return
+      }
       recovery?.interrupt("format_changed", unavailable: true)
       pcm.invalidateLevels()
       if !retries { pcm.recordFailure(ProbeError.capture("PC音声の保存中に音声形式が変わりました")) }
+    } catch let fault as CaptureInputFault {
+      if recoversInputData {
+        inputRetry.fault(fault, at: now() ?? 0, input: "system")
+        recovery?.interrupt("invalid_audio_data", unavailable: true)
+        pcm.invalidateLevels()
+      } else {
+        pcm.recordFailure(fault)
+      }
     } catch {
       pcm.retainFailure(error)
       if pcm.stats.captureFailure == nil { pcm.recordFailure() }

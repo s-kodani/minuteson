@@ -59,3 +59,15 @@ test("sleep-related clock changes make both inputs stale without an audio claim"
   const clock=new InputLevelClock(100,100000),s=new RecordingInputSession();s.reset(owner);s.accept(report(),clock.read(100,100000));
   assert.equal(s.read(clock.read(101,101100)).microphone.state,"stale");
 });
+
+test("invalid audio data is a recoverable reason for both independent inputs",()=>{
+  for(const input of ["microphone","system"] as const){
+    const status={...connected,state:"unavailable",interruptions:1,reason:"invalid_audio_data"};
+    const value={...report(),[input]:status};
+    assert.deepEqual(checkedInputStatus(value,owner),value);
+    const session=new RecordingInputSession();session.reset(owner);session.accept(value,0);
+    assert.equal(inputLabel(session.read(0)[input],input),"音声データの異常により再取得中");
+    assert.equal(session.read(0)[input==="microphone"?"system":"microphone"].state,"connected");
+    assert.deepEqual(session.read(0).notices,[]);
+  }
+});

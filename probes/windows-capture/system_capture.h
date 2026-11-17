@@ -4,16 +4,6 @@
 // EXCLUDE_TARGET_PROCESS_TREE. System scope must read the render endpoints.
 // Application scope continues to use process loopback, without broadening it.
 #include "render_endpoints.h"
-class RenderChangeSignal final : public Microsoft::WRL::RuntimeClass<
-  Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IMMNotificationClient,Microsoft::WRL::FtmBase> {
- public:
-  std::atomic<bool> changed{false};
-  HRESULT STDMETHODCALLTYPE OnDefaultDeviceChanged(EDataFlow flow,ERole,LPCWSTR) override{if(flow==eRender)changed.store(true);return S_OK;}
-  HRESULT STDMETHODCALLTYPE OnDeviceAdded(LPCWSTR) override{changed.store(true);return S_OK;}
-  HRESULT STDMETHODCALLTYPE OnDeviceRemoved(LPCWSTR) override{changed.store(true);return S_OK;}
-  HRESULT STDMETHODCALLTYPE OnDeviceStateChanged(LPCWSTR,DWORD) override{changed.store(true);return S_OK;}
-  HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR,const PROPERTYKEY) override{changed.store(true);return S_OK;}
-};
 class SystemCapture final : public CaptureReader {
   struct Stream {
     ComPtr<IAudioClient> client;
@@ -81,6 +71,7 @@ class SystemCapture final : public CaptureReader {
       acquisition(stream.capture->GetBuffer(&data,&frames,&flags,&position,&time),"read PC audio output packet");
       try{
         if(frames){
+          require_input_pcm(reinterpret_cast<const float*>(data),frames,2,(flags&AUDCLNT_BUFFERFLAGS_SILENT)!=0);
           auto arrival=qpc();const auto mapped=stream.clock.observe(frames,time,position,flags,arrival);
           const auto first=EndpointMixer::frame_at(mapped.start);
           if(mapped.boundary)flags|=AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY;
@@ -96,14 +87,12 @@ class SystemCapture final : public CaptureReader {
     return available!=0;
   }
  public:
-  SystemCapture(){
-    thread_=std::thread([this]{
+  explicit SystemCapture(std::function<ComPtr<IMMDeviceEnumerator>()> device_enumerator=enumerator){
+    thread_=std::thread([this,device_enumerator=std::move(device_enumerator)]{
       try{
         CaptureApartment apartment;
-        auto e=enumerator();
-        auto changes=Microsoft::WRL::Make<RenderChangeSignal>();
-        const bool registered=SUCCEEDED(e->RegisterEndpointNotificationCallback(changes.Get()));
-        struct Notifications {IMMDeviceEnumerator* e;RenderChangeSignal* signal;bool registered;~Notifications(){if(registered)e->UnregisterEndpointNotificationCallback(signal);}} notifications{e.Get(),changes.Get(),registered};
+        auto e=device_enumerator();
+        EndpointLifetime lifetime(e);auto changes=lifetime.changes;
         std::map<std::wstring,std::unique_ptr<Stream>> streams;
         auto devices=endpoints(e.Get(),streams);
         if(devices.empty())throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio output unavailable");
@@ -119,12 +108,13 @@ class SystemCapture final : public CaptureReader {
         try{
           while(!stopping_.load(std::memory_order_acquire)){
             if(changes->changed.exchange(false)||GetTickCount64()>=next_check){
+              auto revoked=changes->take();
               next_check=GetTickCount64()+100;auto current=endpoints(e.Get(),streams);
               if(current.empty())throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio output unavailable");
               reconcile_render_streams(streams,current,[&](Stream& stream){
                 if(stream.started){stream.client->Stop();stream.started=false;}
                 try{drain(stream,mixer,256);}catch(const InputFailure&){}
-              },[&](const ComPtr<IMMDevice>& device){auto stream=open(device.Get());acquisition(stream->client->Start(),"start changed PC audio output loopback");stream->started=true;return stream;});
+              },[&](const ComPtr<IMMDevice>& device){auto stream=open(device.Get());acquisition(stream->client->Start(),"start changed PC audio output loopback");stream->started=true;return stream;},revoked.endpoints,revoked.all);
             }
             bool backlog=false;
             for(auto& [id,stream]:streams)backlog|=drain(*stream,mixer);
@@ -141,7 +131,7 @@ class SystemCapture final : public CaptureReader {
           auto error=std::current_exception();
           for(auto& [id,stream]:streams){
             if(stream->started){stream->client->Stop();stream->started=false;}
-            try{drain(*stream,mixer,256);}catch(const InputFailure&){}catch(...){error=std::current_exception();}
+            try{drain(*stream,mixer,256);}catch(const InputFailure&){}catch(const InputDataFault&){}catch(...){error=std::current_exception();}
           }
           try{
             mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);

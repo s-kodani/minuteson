@@ -1499,7 +1499,8 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       let value = Float(index + 1) * 0.25
       recorder.receive(
         from: sources[index],
-        sampleBuffer: try sample(frames: Int(rate / 100), value: value, rate: rate, rightValue: value),
+        sampleBuffer: try sample(
+          frames: Int(rate / 100), value: value, rate: rate, rightValue: value),
         observation: .timestamp(1_000_000_000 + Int64(index) * 10_000_000))
       XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
       XCTAssertNil(recorder.snapshot().systemRecovery?.reason)
@@ -1516,14 +1517,95 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(saved.appendFailures, 0)
     XCTAssertNil(saved.captureFailure)
     XCTAssertTrue(raw.snapshot().producerClosed)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("system.caf").path))
-    let audio = try AVAudioFile(forReading: directory.appendingPathComponent("raw-system-00000001.caf"))
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: directory.appendingPathComponent("system.caf").path))
+    let audio = try AVAudioFile(
+      forReading: directory.appendingPathComponent("raw-system-00000001.caf"))
     XCTAssertEqual(audio.length, 480)
-    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 480))
+    let buffer = try XCTUnwrap(
+      AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 480))
     try audio.read(into: buffer)
     let pcm = try XCTUnwrap(buffer.floatChannelData)
     for index in 0..<3 {
       XCTAssertEqual(pcm[0][index * 160 + 80], Float(index + 1) * 0.25, accuracy: 0.002)
+    }
+  }
+
+  func testLegacyTestWriterRejectsInvalidPCMWithoutClaimingSuccess() async throws {
+    let directory = try directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let writer = SystemPCMWriter(outputURL: directory.appendingPathComponent("system.caf"))
+    XCTAssertThrowsError(
+      try writer.append(
+        sample(value: .nan), observation: .timestamp(1_000_000_000),
+        sourceEpoch: 1, levelsEnabled: false, receivedAt: nil)
+    ) { XCTAssertTrue($0 is CaptureInputFault) }
+    XCTAssertEqual(writer.stats.frames, 0)
+    XCTAssertEqual(writer.stats.appendFailures, 1)
+    do {
+      try await writer.finish(allowUnreceivedAudio: true)
+      XCTFail("input rejection must not become a passing silent test")
+    } catch {}
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: directory.appendingPathComponent("system.caf").path))
+  }
+
+  func testRawSystemInputFaultReacquiresAndKeepsEveryPreviouslyAcceptedFrame() async throws {
+    for kind in ["nan", "format", "clock"] {
+      let directory = try canonicalDirectory()
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let old = SilentSystemSource()
+      let next = SilentSystemSource()
+      let third = SilentSystemSource()
+      let factory = SilentSystemFactory([old, next, third])
+      let time = SystemTestTime()
+      let commits = RawSegmentCommitWorker()
+      let raw = try RawRecordingSegments(
+        output: directory, owner: "735027d4-a03e-43d3-830a-21e767dfaf88", lane: "system",
+        commits: commits)
+      let recorder = try recorder(directory, factory, time, rawSegments: raw)
+      try await recorder.start(targetPID: nil)
+      recorder.receive(
+        from: old, sampleBuffer: try sample(rightValue: 0.25),
+        observation: .timestamp(1_000_000_000))
+      recorder.receive(
+        from: old,
+        sampleBuffer: try sample(
+          value: kind == "nan" ? .nan : 0.25, rate: kind == "format" ? 44100 : 48000),
+        observation: .timestamp(kind == "clock" ? -1 : 1_010_000_000))
+      XCTAssertEqual(recorder.snapshot().systemRecovery?.reason, "invalid_audio_data")
+      XCTAssertNil(recorder.snapshot().captureFailure)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 1)
+      time.set(1_999_999_999)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 1)
+      time.set(2_000_000_000)
+      recorder.maintain()
+      try await wait { !recorder.acquisitionPending }
+      XCTAssertEqual(factory.calls, 2)
+      XCTAssertEqual(old.counts.1, 1)
+      XCTAssertEqual(old.counts.2, 1)
+      recorder.receive(
+        from: next, sampleBuffer: try sample(frames: 441, value: 0.5, rate: 44100, rightValue: 0.5),
+        observation: .timestamp(1_030_000_000))
+      recorder.receive(
+        from: old, sampleBuffer: try sample(value: .nan), observation: .timestamp(1_040_000_000))
+      XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+      recorder.sourceEnded(next)
+      time.set(3_999_999_999)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 2, "one valid packet must not reset backoff")
+      time.set(4_000_000_000)
+      recorder.maintain()
+      try await wait { !recorder.acquisitionPending }
+      XCTAssertEqual(factory.calls, 3)
+      _ = try await recorder.stopRecording()
+      XCTAssertEqual(recorder.snapshot().frames, 320)
+      XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+      XCTAssertNil(raw.snapshot().failure)
+      XCTAssertEqual(commits.pending(lane: "system").nanoseconds, 0)
+      try raw.verifyClosed(expected: recorder.snapshot())
     }
   }
 
@@ -1538,9 +1620,10 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       sample(), observation: .timestamp(1_000_000_000), sourceEpoch: 2,
       levelsEnabled: false, receivedAt: nil)
     for epoch in [UInt64(1), UInt64(2)] {
-      XCTAssertThrowsError(try writer.append(
-        sample(frames: 441, rate: 44100), observation: .timestamp(1_010_000_000),
-        sourceEpoch: epoch, levelsEnabled: false, receivedAt: nil))
+      XCTAssertThrowsError(
+        try writer.append(
+          sample(frames: 441, rate: 44100), observation: .timestamp(1_010_000_000),
+          sourceEpoch: epoch, levelsEnabled: false, receivedAt: nil))
     }
     try await writer.finish()
     XCTAssertEqual(writer.stats.frames, 160)

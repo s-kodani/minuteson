@@ -1,6 +1,6 @@
 import { ErrorNotice } from "./toast";
 import {invoke,isTauri} from "./ipc.ts";
-import {useEffect,useId,useRef,useState} from "react";
+import {useCallback,useEffect,useId,useRef,useState} from "react";
 import {checkedCaptureInputs,microphoneChoice,usableAutomaticMicrophone,usableMicrophone,type CaptureInputs} from "./capture-input-state";
 import {InfoPopover} from "./info-popover";
 import {IconButton} from "./action-icon";
@@ -12,17 +12,33 @@ export function useCaptureInputs(enabled:boolean,meetingId:string|null){
   const [inputs,setInputs]=useState<CaptureInputs|null>(null),[uid,setUID]=useState(""),[mode,setMode]=useState<"automatic"|"fixed">("automatic"),[loading,setLoading]=useState(false),[error,setError]=useState(""),[retry,setRetry]=useState(0);
   const choice=useRef<string|null>(null);
   const modeChoice=useRef<"automatic"|"fixed">("automatic");
+  const catalogGeneration=useRef(0);
+  const receiveInputs=useCallback((result:CaptureInputs)=>{
+    const selected=modeChoice.current==="automatic"?usableAutomaticMicrophone(result)?.uid??"":microphoneChoice(result,choice.current);
+    if(modeChoice.current==="fixed")choice.current=selected;
+    setInputs(result);setUID(selected);
+  },[]);
   useEffect(()=>{
     if(!enabled||!isTauri())return;
+    const generation=++catalogGeneration.current;
     let disposed=false;setInputs(null);setLoading(true);setError("");
     void invoke<unknown>("get_capture_inputs").then(checkedCaptureInputs).then(result=>{
-      if(disposed)return;
-      const selected=modeChoice.current==="automatic"?usableAutomaticMicrophone(result)?.uid??"":microphoneChoice(result,choice.current);
-      if(modeChoice.current==="fixed")choice.current=selected;
-      setInputs(result);setUID(selected);
-    }).catch(cause=>{if(!disposed)setError(`マイク一覧を確認できません。選択は変更していません: ${String(cause)}`);}).finally(()=>{if(!disposed)setLoading(false);});
-    return()=>{disposed=true;};
-  },[enabled,meetingId,retry]);
+      if(disposed||catalogGeneration.current!==generation)return;
+      receiveInputs(result);
+    }).catch(cause=>{if(!disposed&&catalogGeneration.current===generation)setError(`マイク一覧を確認できません。選択は変更していません: ${String(cause)}`);}).finally(()=>{if(!disposed&&catalogGeneration.current===generation)setLoading(false);});
+    return()=>{disposed=true;catalogGeneration.current++;};
+  },[enabled,meetingId,retry,receiveInputs]);
+  const refreshSelection=useCallback(()=>{
+    if(!enabled||!isTauri())return;
+    const generation=++catalogGeneration.current;
+    // A recording can acquire a newly connected UID before this window's
+    // catalog knows its name. Refresh metadata without clearing the current
+    // choices or turning a catalog read failure into a capture notification.
+    void invoke<unknown>("get_capture_inputs").then(checkedCaptureInputs).then(result=>{
+      if(catalogGeneration.current!==generation)return;
+      receiveInputs(result);setError("");
+    }).catch(()=>{}).finally(()=>{if(catalogGeneration.current===generation)setLoading(false);});
+  },[enabled,meetingId,receiveInputs]);
   const select=(value:string)=>{
     if(value===""){
       modeChoice.current="automatic";setMode("automatic");setUID(usableAutomaticMicrophone(inputs)?.uid??"");
@@ -30,7 +46,7 @@ export function useCaptureInputs(enabled:boolean,meetingId:string|null){
       modeChoice.current="fixed";setMode("fixed");choice.current=value;setUID(value);
     }
   };
-  return {inputs:enabled?inputs:null,uid,mode,loading,error,select,reload:()=>setRetry(n=>n+1),selected:enabled?mode==="automatic"?usableAutomaticMicrophone(inputs):usableMicrophone(inputs,uid):null};
+  return {inputs:enabled?inputs:null,uid,mode,loading,error,select,reload:()=>setRetry(n=>n+1),refreshSelection,selected:enabled?mode==="automatic"?usableAutomaticMicrophone(inputs):usableMicrophone(inputs,uid):null};
 }
 
 export function CaptureInputSelection({control,scopeControl,locked}:{control:ReturnType<typeof useCaptureInputs>;scopeControl:ReturnType<typeof useCaptureScope>;locked:boolean}){
@@ -59,7 +75,9 @@ export function CaptureInputSelection({control,scopeControl,locked}:{control:Ret
 }
 
 export function ActiveMicrophoneSelection({control,locked,onSelect,status,pending}:{control:ReturnType<typeof useCaptureInputs>;locked:boolean;onSelect:(value:string)=>void;status:MicrophoneSelectionStatus|null;pending:boolean}){
-  const {inputs,uid,mode,loading}=control;
+  const {inputs,uid,mode,loading,refreshSelection}=control;
+  const reportedUID=status?.deviceUID;
+  useEffect(()=>{if(reportedUID)refreshSelection();},[reportedUID,refreshSelection]);
   return <div className="active-microphone-selection">
     <label>録音するマイク<select aria-label="録音中のマイク" value={mode==="automatic"?"":uid} disabled={locked||loading||!inputs} onChange={event=>onSelect(event.target.value)}>
       <option value="">自動（使用中のマイク／OSの既定入力）</option>
