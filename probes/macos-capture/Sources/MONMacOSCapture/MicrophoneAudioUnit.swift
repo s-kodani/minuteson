@@ -103,8 +103,10 @@ final class NativeMicrophoneAudioUnitAPI: MicrophoneAudioUnitAPI, @unchecked Sen
       mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
     var value: CFString = "" as CFString
     var size = UInt32(MemoryLayout<CFString>.size)
-    try check(
-      AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value), "read device UID")
+    try withUnsafeMutablePointer(to: &value) { pointer in
+      try check(
+        AudioObjectGetPropertyData(device, &address, 0, nil, &size, pointer), "read device UID")
+    }
     guard size == MemoryLayout<CFString>.size else {
       throw ProbeError.capture("microphone UID size changed")
     }

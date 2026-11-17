@@ -55,13 +55,13 @@ final class NativeMicrophoneCaptureEngine: MicrophoneCaptureEngine, @unchecked S
     if let context { owner.async { try? context.close() } }
   }
   var inputFormat: AVAudioFormat {
-    state.withLock { context }?.currentFormat()
+    state.withLock { self.context }?.currentFormat()
       ?? AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
   }
-  var isRunning: Bool { state.withLock { context }?.running() ?? false }
+  var isRunning: Bool { state.withLock { self.context }?.running() ?? false }
   func selectDevice(_ binding: MicrophoneRecovery.Binding) throws {
     try owner.sync {
-      guard state.withLock({ context == nil }) else {
+      guard state.withLock({ self.context == nil }) else {
         throw ProbeError.capture("microphone AUHAL is already owned")
       }
       let unit = try api.create()
@@ -71,36 +71,36 @@ final class NativeMicrophoneCaptureEngine: MicrophoneCaptureEngine, @unchecked S
     }
   }
   func verifyDevice(_ binding: MicrophoneRecovery.Binding) throws {
-    guard let context = state.withLock({ context }) else {
+    guard let context = state.withLock({ self.context }) else {
       throw ProbeError.capture("microphone AUHAL is missing")
     }
     try context.verify(binding)
   }
   func verifyCallbackDevice(_ binding: MicrophoneRecovery.Binding) throws {
-    guard let context = state.withLock({ context }) else {
+    guard let context = state.withLock({ self.context }) else {
       throw ProbeError.capture("microphone AUHAL is missing")
     }
     try context.verifyCallback(binding)
   }
   func observeConfiguration(_ handler: (@Sendable () -> Void)?) {
-    state.withLock { context }?.observe(handler)
+    state.withLock { self.context }?.observe(handler)
   }
   func installTap(
     format: AVAudioFormat,
     handler: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
   ) throws {
     try owner.sync {
-      guard let context = state.withLock({ context }) else {
+      guard let context = state.withLock({ self.context }) else {
         throw ProbeError.capture("microphone AUHAL is missing")
       }
       try context.install(format: format, handler: handler)
     }
   }
-  func removeTap() { state.withLock { context }?.removeTap() }
+  func removeTap() { state.withLock { self.context }?.removeTap() }
   func prepare() {
     owner.sync {
       do {
-        guard let context = state.withLock({ context }) else {
+        guard let context = state.withLock({ self.context }) else {
           throw ProbeError.capture("microphone AUHAL is missing")
         }
         try context.prepare()
@@ -110,7 +110,7 @@ final class NativeMicrophoneCaptureEngine: MicrophoneCaptureEngine, @unchecked S
   func start() throws {
     try owner.sync {
       if let preparationFailure { throw preparationFailure }
-      guard let context = state.withLock({ context }) else {
+      guard let context = state.withLock({ self.context }) else {
         throw ProbeError.capture("microphone AUHAL is missing")
       }
       try context.start()
@@ -118,7 +118,7 @@ final class NativeMicrophoneCaptureEngine: MicrophoneCaptureEngine, @unchecked S
   }
   func stop() throws {
     try owner.sync {
-      guard let context = state.withLock({ context }) else { return }
+      guard let context = state.withLock({ self.context }) else { return }
       try context.close()
       state.withLock { self.context = nil }
     }
