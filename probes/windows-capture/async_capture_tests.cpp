@@ -137,10 +137,58 @@ void bluetooth_stop_wait_cannot_block_pc_audio_or_status(){
   require(mic.raw->stored_frames()==20*160&&pc.raw->stored_frames()==125*160,"retirement lost accepted mic/PC samples");
   const auto remaining=pending->snapshot();require(!remaining.frames[0]&&!remaining.frames[1]&&!remaining.jobs&&!remaining.bytes,"native retirement leaked recording credits");
 }
+void stalled_microphone_retries_keep_backoff_and_accepted_audio(){
+  const auto directory=fs::temp_directory_path()/(L"mon-flow-retry-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(product::qpc()));
+  fs::create_directory(directory);
+  struct Cleanup {fs::path path;~Cleanup(){fs::remove_all(path);}} cleanup{directory};
+  constexpr auto owner="735027d4-a03e-43d3-830a-21e767dfaf88";
+  auto pending=std::make_shared<product::StoragePending>();auto commits=std::make_shared<product::RawCommitWorker>(pending);
+  product::Lane mic(directory/L"microphone.caf",1),pc(directory/L"system.caf",2);
+  mic.raw=std::make_unique<product::RawSegments>(directory,owner,"microphone",1,commits);
+  pc.raw=std::make_unique<product::RawSegments>(directory,owner,"system",2,commits);
+  pc.clock.begin_stream(true);pc.binding.connected();
+  std::uint64_t now_ms=1000;unsigned failures=0;
+  std::vector<float> signal(960,0.25f);
+  for(auto delay_ms:{1000ULL,2000ULL,4000ULL,8000ULL,16000ULL,30000ULL,30000ULL}){
+    // First reproduce Start succeeding without any packet. Later attempts
+    // receive only 20 ms of silence before the same three-second timeout.
+    if(failures){
+      product::PreparedInput ready;ready.matching_position_rate=true;auto reader=std::make_unique<QueuedReader>();
+      for(unsigned i=0;i<2;++i){
+        product::CapturePacket packet;packet.frames=480;packet.flags=AUDCLNT_BUFFERFLAGS_SILENT;
+        packet.time=100000000+failures*1000000ULL+i*100000ULL;packet.arrival=packet.time;packet.position=i*480;
+        reader->queue.push(std::move(packet));
+      }
+      reader->queue.fail(std::make_exception_ptr(product::InputFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),"microphone packet delivery stopped")));
+      ready.reader=std::move(reader);mic.adopt(std::move(ready));
+      require(mic.input_retry.failures==failures,"native Start/adopt cleared stalled-input retry history");
+      bool stalled=false;
+      try{mic.pump();}catch(const product::InputFailure& error){
+        stalled=error.result==HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+        require(mic.input_retry.failures==failures,"brief silent PCM cleared stalled-input retry history");
+        mic.acquisition_failed("device_disconnected",false,now_ms);
+      }
+      require(stalled,"stalled microphone did not report its receive timeout");
+    }else mic.acquisition_failed("device_disconnected",false,now_ms);
+    ++failures;
+    require(mic.input_retry.failures==failures&&mic.input_retry.retry_at==(now_ms+delay_ms)*1000000ULL,"packet stalls bypassed bounded acquisition backoff");
+    require(mic.binding.state=="disconnected"&&mic.binding.reason=="device_disconnected","packet timeout became a PCM format error");
+    const auto deadline=GetTickCount64()+5000;
+    while(mic.retirement&&GetTickCount64()<deadline){mic.poll_retirement();Sleep(1);}
+    require(!mic.retirement,"stalled input cleanup did not complete before its next attempt");
+    pc.append(signal.data(),480,200000000+failures*100000ULL,failures*480ULL,0,200000000+failures*100000ULL);
+    require(pc.binding.state=="connected"&&!pc.input_retry.failures,"microphone retry affected PC audio");
+    now_ms+=delay_ms+3000;
+  }
+  mic.close();pc.close();mic.raw->finish();pc.raw->finish();commits->wait();
+  require(mic.raw->stored_frames()==6*320&&pc.raw->stored_frames()==7*160,"stalled-input retries lost accepted microphone or PC audio");
+  const auto remaining=pending->snapshot();require(!remaining.frames[0]&&!remaining.frames[1]&&!remaining.jobs&&!remaining.bytes,"packet-stall retries leaked recording credits");
+}
 int main(){
   try {
     source_fault_preserves_both_recording_lanes();
     bluetooth_stop_wait_cannot_block_pc_audio_or_status();
+    stalled_microphone_retries_keep_backoff_and_accepted_audio();
     product::MicrophoneFlow flow(100);
     require(!flow.expired(3099)&&flow.expired(3100)&&!flow.received,"microphone first-packet deadline changed");
     flow.packet(3000);

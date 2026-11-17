@@ -177,6 +177,13 @@ class Lane {
   PreparationSchedule preparation_schedule;
   MonCaptureInputRetry input_retry{};
   unsigned input_fault_reports=0;
+  void acquisition_failed(const char* reason,bool unavailable=false,std::uint64_t now_ms=GetTickCount64()){
+    // A Bluetooth stream can deliver a few valid (even silent) packets and
+    // then stall. Reopening it every second repeatedly changes its profile.
+    // Only sustained PCM reception in append(), not Start/adopt, clears retry.
+    mon_capture_input_fault(&input_retry,now_ms*1000000ULL);
+    detach(reason,unavailable);
+  }
   void input_fault(){
     mon_capture_input_fault(&input_retry,GetTickCount64()*1000000ULL);
     if(input_fault_reports<16){++input_fault_reports;std::cerr<<"mon_capture_input_fault: lane="<<(channels==1?"microphone":"system")<<" attempt="<<input_retry.failures<<std::endl;}

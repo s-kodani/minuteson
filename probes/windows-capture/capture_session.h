@@ -59,13 +59,12 @@ struct CaptureSession {
         // Expiry wins over a result first observed after the deadline. Such a
         // result is never allowed to restart a timed-out or stopped input.
         if(lane.preparation_schedule.timed_out(now)){
-          if(lane.input_retry.failures)mon_capture_input_fault(&lane.input_retry,now*1000000ULL);
-          lane.cancel_preparation();lane.preparation_schedule.initial_resolved=true;lane.binding.lost("acquisition_timeout",true);
+          lane.preparation_schedule.initial_resolved=true;lane.acquisition_failed("acquisition_timeout",true,now);
         }
         if(!lane.preparation_schedule.cancelled){
           if(!microphone&&s.pid){
             try{if(process_identity(s.pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");}
-            catch(...){lane.cancel_preparation();lane.binding.lost("application_unavailable",true);return;}
+            catch(...){lane.acquisition_failed("application_unavailable",true,now);return;}
           }
           if(auto ready=lane.preparation->take()){
             if(microphone){
@@ -85,8 +84,8 @@ struct CaptureSession {
           if(error&&!lane.preparation_schedule.cancelled){
             try{std::rethrow_exception(error);}
             catch(const InputDataFault&){if(s.test)throw;lane.input_fault();}
-            catch(const InputFailure& failure){if(lane.input_retry.failures)mon_capture_input_fault(&lane.input_retry,now*1000000ULL);lane.binding.lost(failure.result==E_ACCESSDENIED?"permission_unavailable":microphone?"device_disconnected":s.pid?"application_unavailable":"restart_failed",failure.result==E_ACCESSDENIED||(!microphone&&s.pid));}
-            catch(...){if(lane.input_retry.failures)mon_capture_input_fault(&lane.input_retry,now*1000000ULL);lane.binding.lost(microphone?"device_disconnected":s.pid?"application_unavailable":"restart_failed",!microphone&&s.pid);}
+            catch(const InputFailure& failure){lane.acquisition_failed(failure.result==E_ACCESSDENIED?"permission_unavailable":microphone?"device_disconnected":s.pid?"application_unavailable":"restart_failed",failure.result==E_ACCESSDENIED||(!microphone&&s.pid),now);}
+            catch(...){lane.acquisition_failed(microphone?"device_disconnected":s.pid?"application_unavailable":"restart_failed",!microphone&&s.pid,now);}
           }
           // Includes cleanup of a timed-out stream; never overlap activations.
           lane.binding.next_attempt=lane.preparation_schedule.retry_at;
@@ -174,7 +173,7 @@ struct CaptureSession {
           selection_schedule.begin(selection_now);
           selection_preparation=std::make_unique<SelectionPreparation>([uid=s.uid,pid=s.pid,identity](auto){return current_microphone_choice(uid,pid,identity);});
         }
-        for(auto lane:{&mic,&system})if(lane->started){try{lane->pump();}catch(const InputDataFault&){if(s.test)throw;lane->input_fault();}catch(const InputFailure& error){if(lane->input_retry.failures)mon_capture_input_fault(&lane->input_retry,GetTickCount64()*1000000ULL);lane->detach(error.result==E_ACCESSDENIED?"permission_unavailable":lane==&mic?"device_disconnected":"stream_stopped");}}
+        for(auto lane:{&mic,&system})if(lane->started){try{lane->pump();}catch(const InputDataFault&){if(s.test)throw;lane->input_fault();}catch(const InputFailure& error){lane->acquisition_failed(error.result==E_ACCESSDENIED?"permission_unavailable":lane==&mic?"device_disconnected":"stream_stopped");}}
         reconnect(mic,true);reconnect(system,false);
         if(s.test&&!start&&mic.preparation_schedule.initial_resolved&&system.preparation_schedule.initial_resolved){
           start=qpc();mic.holding_for_window=system.holding_for_window=false;
