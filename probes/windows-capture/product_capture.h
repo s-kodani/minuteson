@@ -94,6 +94,7 @@ Json microphones(){
   return Json{{"schemaVersion",1},{"microphonePermission","unknown"},{"devices",normalized_catalog(devices,false)}};
 }
 #include "input_binding.h"
+#include "endpoint_changes.h"
 #include "raw_segments.h"
 #include "async_capture.h"
 struct CaptureApartment {
@@ -128,8 +129,10 @@ Json microphone_selection_status(const std::string& owner,std::uint64_t revision
 }
 PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selected_pid,const Json& identity,NativePreparation::Cancellation cancelled){
   PreparedInput result;
+  std::shared_ptr<EndpointLifetime> lifetime;
   auto current=[&]{
     if(cancelled())throw InputFailure(E_ABORT,"obsolete WASAPI preparation");
+    if(lifetime)lifetime->require_current();
     if(!microphone&&selected_pid&&process_identity(selected_pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");
   };
   current();
@@ -140,6 +143,8 @@ PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selecte
   if(microphone){
     result.choice=current_microphone_choice(uid,selected_pid,identity);
     current();auto e=enumerator();ComPtr<IMMDevice> device;
+    lifetime=std::make_shared<EndpointLifetime>(e,wide(result.choice.uid));
+    current();
     acquisition(e->GetDevice(wide(result.choice.uid).c_str(),&device),"get selected microphone");
     acquisition(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(result.client.GetAddressOf())),"activate WASAPI microphone");
   }else{
@@ -157,7 +162,7 @@ PreparedInput prepare_input(bool microphone,const std::string& uid,DWORD selecte
   const UINT32 channels=microphone?1:2;
   WAVEFORMATEX format={};format.wFormatTag=WAVE_FORMAT_IEEE_FLOAT;format.nChannels=WORD(channels);format.nSamplesPerSec=48000;format.wBitsPerSample=32;format.nBlockAlign=WORD(channels*4);format.nAvgBytesPerSec=48000*format.nBlockAlign;
   acquisition(result.client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY|(microphone?0:AUDCLNT_STREAMFLAGS_LOOPBACK),5000000,0,&format,nullptr),"initialize 48 kHz floating-point WASAPI");
-  current();result.reader=std::make_unique<AsyncCapture>(std::move(result.client),channels,microphone,result.choice.uid);
+  current();result.reader=std::make_unique<AsyncCapture>(std::move(result.client),channels,microphone,result.choice.uid,lifetime);
   current();
   return result;
 }
