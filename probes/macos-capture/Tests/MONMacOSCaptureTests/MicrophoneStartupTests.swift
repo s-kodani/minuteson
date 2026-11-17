@@ -702,6 +702,12 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "unavailable")
     XCTAssertFalse(first.hasTap)
     recorder.maintain()
+    XCTAssertEqual(factory.calls, 1)
+    control.advance(999)
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 1)
+    control.advance(1)
+    recorder.maintain()
     control.settle(recorder)
     try second.emit(host: 1_000_000_000)
     XCTAssertEqual(recorder.snapshot().frames, 480)
@@ -750,6 +756,69 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(recorder.snapshot().frames, 480)
     XCTAssertEqual(conditions.requests, 1)
     XCTAssertEqual(factory.calls, 1)
+  }
+
+  func testNativeFailureAndShortSilentRecoveriesBackOffUntilThreeSecondsOfHealthyPCM()
+    async throws
+  {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engines = (0..<9).map { _ in SilentMicrophoneEngine() }
+    engines[0].onStart = { _, _ in throw ProbeError.capture("synthetic unavailable input") }
+    let factory = StartupFactory(engines)
+    let control = StartupControlClock()
+    let time = StartupClock()
+    let recorder = recorder(
+      dir, engines[0], clock: try time.domain(), factory: factory, control: control)
+    defer { recorder.stop() }
+    await expectFailure(recorder, contains: "synthetic unavailable input")
+    var host: UInt64 = 1_000_000_000
+    for (index, delay) in [1000, 2000, 4000, 8000, 16000, 30000, 30000].enumerated() {
+      control.advance(delay - 1)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, index + 1)
+      control.advance(1)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, index + 2)
+      control.settle(recorder)
+      let engine = engines[index + 1]
+      let silence = try SilentMicrophoneEngine.pcm(format: engine.inputFormat)
+      silence.floatChannelData![0].initialize(repeating: 0, count: Int(silence.frameLength))
+      time.set(Int64(host))
+      engine.savedTap()?(silence, AVAudioTime(hostTime: host, sampleTime: 0, atRate: 48000))
+      XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+      if index < 6 {
+        host += 4_000_000_000
+        control.advance(3000)
+        recorder.maintain()
+        XCTAssertEqual(factory.calls, index + 2, "a short recovery must not erase backoff")
+        XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "unavailable")
+      }
+    }
+    let stable = engines[7]
+    for index in 0..<30 {
+      control.advance(100)
+      let packetHost = host + 10_000_000 + UInt64(index) * 100_000_000
+      time.set(Int64(packetHost))
+      try stable.emit(frames: 4800, sampleTime: 480 + Int64(index) * 4800, host: packetHost)
+      recorder.maintain()
+    }
+    let accepted = recorder.snapshot().frames
+    XCTAssertEqual(accepted, 7 * 480 + 30 * 4800)
+    control.advance(3000)
+    recorder.maintain()
+    control.advance(999)
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 8)
+    control.advance(1)
+    recorder.maintain()
+    XCTAssertEqual(
+      factory.calls, 9, "three seconds of real PCM resets the next delay to one second")
+    XCTAssertEqual(recorder.snapshot().frames, accepted)
+    XCTAssertNil(recorder.snapshot().captureFailure)
+    recorder.stop()
+    XCTAssertEqual(
+      try AVAudioFile(forReading: dir.appendingPathComponent("microphone.caf")).length, accepted)
   }
 
   func testTimedOutSynchronousNativeStartCannotMintClosureOrStopEngineInParallel() async throws {
@@ -1643,12 +1712,15 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
       XCTAssertEqual(factory.calls, 1)
       control.advance(1)
       recorder.maintain()
-      XCTAssertEqual(factory.calls, 2)
+      XCTAssertEqual(factory.calls, 1)
       XCTAssertFalse(old.isRunning)
       XCTAssertEqual(old.removalCount, 1)
       XCTAssertEqual(recorder.snapshot().microphoneFlowTimeouts, 1)
-      XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "reconnecting")
+      XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "unavailable")
       XCTAssertNil(recorder.snapshot().captureFailureDetail)
+      control.advance(1000)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 2)
       control.settle(recorder)
       let frames = recorder.snapshot().frames
       oldPCM(
@@ -1722,11 +1794,19 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     let retired = try XCTUnwrap(first.savedTap())
     control.advance(3000)
     recorder.maintain()
+    control.advance(1000)
+    recorder.maintain()
     control.settle(recorder)
     control.advance(2999)
     retired(
       try SilentMicrophoneEngine.pcm(format: first.inputFormat),
       AVAudioTime(hostTime: 1_000_000_000, sampleTime: 480, atRate: 48000))
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 2)
+    control.advance(1)
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 2)
+    control.advance(1999)
     recorder.maintain()
     XCTAssertEqual(factory.calls, 2)
     control.advance(1)

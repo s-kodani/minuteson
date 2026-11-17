@@ -83,7 +83,10 @@ struct CaptureInputRetry {
     }
   }
   mutating func failedAttempt(at now: Int64) {
-    if recovering { mon_capture_input_fault(&value, UInt64(max(0, now))) }
+    if recovering { acquisitionFailed(at: now) }
+  }
+  mutating func acquisitionFailed(at now: Int64) {
+    mon_capture_input_fault(&value, UInt64(max(0, now)))
   }
   mutating func valid(at now: Int64) {
     mon_capture_input_valid(&value, UInt64(max(0, now)))

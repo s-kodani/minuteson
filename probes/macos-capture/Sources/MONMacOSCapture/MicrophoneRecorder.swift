@@ -164,6 +164,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
       }
       try configure(selected)
     } catch {
+      lock.withLock {
+        if clock != nil, testWindow == nil, initialNativePending, !stopped, mayContinue() {
+          inputRetry.acquisitionFailed(at: retryNow())
+        }
+      }
       reportPreparationFailure(error, stage: "initial")
       suspend("restart_failed", unavailable: true)
       if clock == nil || testWindow != nil || !mayContinue() {
@@ -893,7 +898,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
         controlNow() >= flow.deadline
       else { return false }
       stats.microphoneFlowTimeouts = (stats.microphoneFlowTimeouts ?? 0) + 1
-      inputRetry.failedAttempt(at: retryNow())
+      inputRetry.acquisitionFailed(at: retryNow())
       retireBinding("engine_changed", unavailable: true)
       return true
     }
@@ -909,11 +914,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
         return
       } catch RebindError.formatChanged {
         reportPreparationFailure(RebindError.formatChanged, stage: "stabilization")
-        lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
+        lock.withLock { inputRetry.acquisitionFailed(at: retryNow()) }
         suspend("format_changed", unavailable: true)
       } catch {
         reportPreparationFailure(error, stage: "stabilization")
-        lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
+        lock.withLock { inputRetry.acquisitionFailed(at: retryNow()) }
         suspend("restart_failed", unavailable: true)
       }
       return
@@ -974,11 +979,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
     lastRecoveryAttempt = now
     do { try configure(selected) } catch RebindError.formatChanged {
       reportPreparationFailure(RebindError.formatChanged, stage: "recovery")
-      lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
+      lock.withLock { inputRetry.acquisitionFailed(at: retryNow()) }
       suspend("format_changed", unavailable: true)
     } catch {
       reportPreparationFailure(error, stage: "recovery")
-      lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
+      lock.withLock { inputRetry.acquisitionFailed(at: retryNow()) }
       suspend("restart_failed", unavailable: true)
     }
   }
