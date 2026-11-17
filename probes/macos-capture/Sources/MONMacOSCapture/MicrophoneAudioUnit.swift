@@ -152,9 +152,18 @@ final class NativeMicrophoneAudioUnitAPI: MicrophoneAudioUnitAPI, @unchecked Sen
     _ callback: AudioObjectPropertyListenerProc, _ context: UnsafeMutableRawPointer
   ) throws {
     var address = address
-    try check(
-      AudioObjectRemovePropertyListener(device, &address, callback, context),
-      "remove device observation")
+    try Self.requireDeviceListenerRemoval(
+      AudioObjectRemovePropertyListener(device, &address, callback, context))
+  }
+  static func requireDeviceListenerRemoval(_ status: OSStatus) throws {
+    // Disconnecting a Bluetooth endpoint can destroy its HAL object before
+    // its listener is removed. That watch has already disappeared; it does
+    // not make the separately owned, stopped AudioUnit impossible to close.
+    // Only these two object-lifetime statuses are idempotent completion.
+    guard status != noErr, status != kAudioHardwareBadDeviceError,
+      status != kAudioHardwareBadObjectError
+    else { return }
+    throw ProbeError.capture("microphone AUHAL remove device observation failed: \(status)")
   }
   func initialize(_ unit: AudioUnit) throws { try check(AudioUnitInitialize(unit), "initialize") }
   func start(_ unit: AudioUnit) throws { try check(AudioOutputUnitStart(unit), "start") }

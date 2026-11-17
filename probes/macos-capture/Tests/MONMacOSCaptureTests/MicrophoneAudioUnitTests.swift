@@ -1,6 +1,7 @@
 import AVFoundation
 import AudioToolbox
 import CoreAudio
+import Darwin
 import Foundation
 import XCTest
 
@@ -44,6 +45,7 @@ private final class UnitAPIFake: MicrophoneAudioUnitAPI, @unchecked Sendable {
   var corruptChannels = false
   var failStop = false
   var failCallbackInstall = false
+  var deviceRemovalStatus: OSStatus = noErr
   var enlargedMaximumAtInitialize: UInt32?
   private var renderCalls = 0
   var calls: [String] { lock.withLock { events } }
@@ -166,6 +168,7 @@ private final class UnitAPIFake: MicrophoneAudioUnitAPI, @unchecked Sendable {
     _ callback: AudioObjectPropertyListenerProc, _ context: UnsafeMutableRawPointer
   ) throws {
     control("removeDeviceListener")
+    try NativeMicrophoneAudioUnitAPI.requireDeviceListenerRemoval(deviceRemovalStatus)
     lock.withLock {
       deviceListeners.removeAll { $0.0.mSelector == address.mSelector && $0.2 == context }
     }
@@ -232,7 +235,7 @@ private final class UnitAPIFake: MicrophoneAudioUnitAPI, @unchecked Sendable {
     _ frames: UInt32 = 160, host: UInt64 = 12345, sample: Float64 = 320,
     flags: AudioTimeStampFlags = [.hostTimeValid, .sampleTimeValid]
   ) -> OSStatus {
-    let callback = lock.withLock { callback }
+    let callback: AURenderCallbackStruct? = lock.withLock { self.callback }
     guard let proc = callback?.inputProc, let context = callback?.inputProcRefCon else {
       return noErr
     }
@@ -250,6 +253,55 @@ private struct SavedUnitNotification: @unchecked Sendable {
   let context: UnsafeMutableRawPointer
   let unit: AudioUnit
   func invoke() { callback(context, unit, property, kAudioUnitScope_Input, 1) }
+}
+private final class UnitRecoveryEnvironment: @unchecked Sendable {
+  private let lock = NSLock()
+  private var host: Int64 = 1_000_000_000
+  private var control = ContinuousClock.now
+  private var switched = false
+  func switchDevice() { lock.withLock { switched = true } }
+  func setHost(_ value: Int64) { lock.withLock { host = value } }
+  func controlNow() -> ContinuousClock.Instant { lock.withLock { control } }
+  func advance() { lock.withLock { control = control.advanced(by: .milliseconds(100)) } }
+  func settle(_ recorder: MicrophoneRecorder) {
+    for _ in 0..<3 {
+      advance()
+      recorder.maintain()
+    }
+  }
+  func clockRead() -> CaptureClockReading {
+    lock.withLock {
+      CaptureClockReading(
+        hostBeforeNs: host, continuousNs: host + 510,
+        utcMs: 1_700_000_000_000, hostAfterNs: host + 20)
+    }
+  }
+  func devices() -> CaptureInputDevices {
+    let switched = lock.withLock { self.switched }
+    return CaptureInputDevices(
+      microphonePermission: "authorized",
+      devices: [
+        CaptureInputDevice(
+          uid: switched ? "builtin:input" : "powerconf:input",
+          name: switched ? "Built-in" : "PowerConf", isDefault: true,
+          objectID: switched ? 202 : 101)
+      ])
+  }
+}
+private final class UnitRecoveryFactory: @unchecked Sendable {
+  private let lock = NSLock()
+  private let units: [UnitAPIFake]
+  private var count = 0
+  init(_ units: [UnitAPIFake]) { self.units = units }
+  func make() throws -> any MicrophoneCaptureEngine {
+    try lock.withLock {
+      guard count < units.count else { throw ProbeError.capture("unexpected replacement unit") }
+      let unit = units[count]
+      count += 1
+      return unit.makeEngine()
+    }
+  }
+  var calls: Int { lock.withLock { count } }
 }
 private final class UnitDelivery: @unchecked Sendable {
   private let lock = NSLock()
@@ -493,6 +545,99 @@ final class MicrophoneAudioUnitTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(api.calls.filter { $0 == "stop" }.count, 2)
     XCTAssertEqual(api.calls.filter { $0 == "dispose" }.count, 1)
     XCTAssertTrue(api.controlsStayedOnOwner)
+  }
+  func testGoneDeviceObservationStillDrainsAndDisposesNativeUnit() throws {
+    for status in [kAudioHardwareBadDeviceError, kAudioHardwareBadObjectError] {
+      let api = UnitAPIFake()
+      let delivery = UnitDelivery()
+      let engine = try started(api, delivery)
+      let oldCallback = try XCTUnwrap(api.savedInputCallback())
+      let oldNotification = try XCTUnwrap(api.savedUnitNotification())
+      api.deviceRemovalStatus = status
+      api.setAlive(false)
+      try engine.stop()
+      XCTAssertEqual(api.calls.filter { $0 == "stop" }.count, 1)
+      XCTAssertEqual(api.calls.filter { $0 == "uninitialize" }.count, 1)
+      XCTAssertEqual(api.calls.filter { $0 == "dispose" }.count, 1)
+      XCTAssertTrue(api.controlsStayedOnOwner)
+      XCTAssertTrue(api.callbackRemoved)
+      XCTAssertEqual(api.replay(oldCallback), noErr)
+      oldNotification()
+      XCTAssertEqual(api.renders, 0)
+      XCTAssertEqual(delivery.count, 0)
+    }
+  }
+  func testUnknownDeviceObservationRemovalErrorStillPreventsFalseClosure() throws {
+    let api = UnitAPIFake()
+    let engine = try started(api)
+    api.deviceRemovalStatus = kAudioHardwareIllegalOperationError
+    XCTAssertThrowsError(try engine.stop()) {
+      XCTAssertTrue(String(describing: $0).contains("remove device observation failed"))
+    }
+    XCTAssertFalse(api.calls.contains("uninitialize"))
+    XCTAssertFalse(api.calls.contains("dispose"))
+    api.deviceRemovalStatus = noErr
+    try engine.stop()
+    XCTAssertEqual(api.calls.filter { $0 == "stop" }.count, 1)
+    XCTAssertEqual(api.calls.filter { $0 == "dispose" }.count, 1)
+  }
+  func testGoneDeviceObservationAllowsReplacementAndPreservesSavedMicrophonePCM() async throws {
+    for status in [kAudioHardwareBadDeviceError, kAudioHardwareBadObjectError] {
+      let created = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "mon-unit-device-retirement-\(UUID().uuidString)")
+      try FileManager.default.createDirectory(at: created, withIntermediateDirectories: false)
+      defer { try? FileManager.default.removeItem(at: created) }
+      let canonical = try XCTUnwrap(realpath(created.path, nil))
+      defer { free(canonical) }
+      let directory = URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
+      let environment = UnitRecoveryEnvironment()
+      let old = UnitAPIFake()
+      let next = UnitAPIFake()
+      next.setUID("builtin:input")
+      let factory = UnitRecoveryFactory([old, next])
+      let commits = RawSegmentCommitWorker()
+      let raw = try RawRecordingSegments(
+        output: directory, owner: "735027d4-a03e-43d3-830a-21e767dfaf88",
+        lane: "microphone", commits: commits)
+      let clock = try CaptureClockDomain(
+        units: MachTimeUnits(numerator: 1, denominator: 1), read: environment.clockRead)
+      let recorder = MicrophoneRecorder(
+        outputURL: directory.appendingPathComponent("microphone.caf"),
+        clock: clock, rawSegments: raw, controlNow: environment.controlNow,
+        makeEngine: factory.make, devices: environment.devices, permission: { .authorized })
+      defer { recorder.stop() }
+      try await recorder.start()
+      environment.settle(recorder)
+      XCTAssertEqual(old.emit(160, host: 1_000_000_000, sample: 0), noErr)
+      try raw.drainAcceptedPCM()
+      let oldCallback = try XCTUnwrap(old.savedInputCallback())
+      old.deviceRemovalStatus = status
+      old.setAlive(false)
+      environment.switchDevice()
+      environment.advance()
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 2)
+      XCTAssertEqual(old.calls.filter { $0 == "dispose" }.count, 1)
+      XCTAssertNil(recorder.snapshot().captureFailure)
+      environment.settle(recorder)
+      environment.setHost(1_020_000_000)
+      XCTAssertEqual(next.emit(160, host: 1_020_000_000, sample: 0), noErr)
+      XCTAssertEqual(old.replay(oldCallback), noErr)
+      XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+      XCTAssertEqual(recorder.deviceUID, "builtin:input")
+      environment.setHost(1_040_000_000)
+      recorder.stop()
+      XCTAssertNotNil(recorder.captureClosure)
+      XCTAssertNil(recorder.snapshot().captureFailure)
+      XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+      XCTAssertEqual(recorder.snapshot().frames, 320)
+      XCTAssertNil(raw.snapshot().failure)
+      XCTAssertEqual(commits.pending(lane: "microphone").nanoseconds, 0)
+      try raw.verifyClosed(expected: recorder.snapshot())
+      XCTAssertEqual(next.calls.filter { $0 == "dispose" }.count, 1)
+      XCTAssertTrue(old.controlsStayedOnOwner)
+      XCTAssertTrue(next.controlsStayedOnOwner)
+    }
   }
   func testRejectedCallbackInstallationCleansPartialNativeOwnership() throws {
     let api = UnitAPIFake()
