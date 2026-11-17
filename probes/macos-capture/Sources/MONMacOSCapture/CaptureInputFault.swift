@@ -60,6 +60,7 @@ enum CaptureInputFault: String, Error, Sendable {
 }
 
 struct CaptureInputRetry {
+  private static let diagnostics = DispatchQueue(label: "app.mon.capture.input-fault-log")
   private var value = MonCaptureInputRetry()
   private var reported = 0
   var recovering: Bool { value.failures > 0 }
@@ -69,10 +70,13 @@ struct CaptureInputRetry {
     // Repeated bad callbacks never create unbounded log traffic. State/history
     // still reports every real interruption and recovery through its bounded journal.
     if reported < 16 {
-      FileHandle.standardError.write(
-        Data(
-          "mon_capture_input_fault: input=\(input) kind=\(fault.rawValue) atNs=\(now) attempt=\(value.failures)\n"
-            .utf8))
+      let attempt = value.failures
+      Self.diagnostics.async {
+        FileHandle.standardError.write(
+          Data(
+            "mon_capture_input_fault: input=\(input) kind=\(fault.rawValue) atNs=\(now) attempt=\(attempt)\n"
+              .utf8))
+      }
       reported += 1
     }
   }
