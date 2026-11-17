@@ -81,11 +81,13 @@ enum CaptureSession {
       options.publishesInputStatus
       ? try RawRecordingSegments(
         output: options.output, owner: options.inputLevelOwner!, lane: "microphone",
+        allowsClockRebasing: options.recoversCaptureClock,
         commits: segmentCommits) : nil
     let rawSystem =
       options.publishesInputStatus
       ? try RawRecordingSegments(
         output: options.output, owner: options.inputLevelOwner!, lane: "system",
+        allowsClockRebasing: options.recoversCaptureClock,
         commits: segmentCommits) : nil
     let systemStopRequest = options.output.appendingPathComponent("stop.request")
     let systemParentPID = options.parentPID
@@ -266,9 +268,13 @@ enum CaptureSession {
           try systemStats.requireWritable()
           if microphone.microphoneRecovery != manifest.microphone.microphoneRecovery
             || systemStats.systemRecovery != manifest.system.systemRecovery
+            || (microphone.clockAlignment != nil) != (manifest.microphone.clockAlignment != nil)
+            || (systemStats.clockAlignment != nil) != (manifest.system.clockAlignment != nil)
           {
             manifest.microphone = microphone
             manifest.system = systemStats
+            manifest.timingEstimated =
+              microphone.clockAlignment != nil || systemStats.clockAlignment != nil ? true : nil
             try write(manifest, to: manifestURL)
           }
           if let owner = options.inputLevelOwner, levelRevision < 9_007_199_254_740_991 {
@@ -345,11 +351,15 @@ enum CaptureSession {
           throw ProbeError.capture("unreceived input has an unexpected CAF payload")
         }
       }
-      if let rawMic { try rawMic.verifyClosed(expected: micStats) } else if micStats.frames > 0 {
+      if let rawMic {
+        try rawMic.verifyClosed(expected: micStats)
+      } else if micStats.frames > 0 {
         try verifyRecordedCAF(
           options.output.appendingPathComponent("microphone.caf"), expected: micStats)
       }
-      if let rawSystem { try rawSystem.verifyClosed(expected: systemStats) } else if systemStats.frames > 0 {
+      if let rawSystem {
+        try rawSystem.verifyClosed(expected: systemStats)
+      } else if systemStats.frames > 0 {
         try verifyRecordedCAF(
           options.output.appendingPathComponent("system.caf"), expected: systemStats)
       }

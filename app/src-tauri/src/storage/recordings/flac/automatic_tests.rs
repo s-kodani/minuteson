@@ -63,6 +63,89 @@ fn automatic_save_recovers_failed_and_interrupted_sessions_without_duplicate_row
 }
 
 #[test]
+fn automatically_recovered_prefix_can_publish_analysis_without_claiming_normal_stop() {
+    let f = Fixture::new(2, 2000, true);
+    fail_manifest(&f);
+    f.storage.interrupt_recording(&f.session.id).unwrap();
+    f.storage
+        .finalize_available_recording(&f.session.id, &|| false)
+        .unwrap();
+    let plan = f
+        .storage
+        .verify_canonical_audio(&f.session.meeting_id, &|| false)
+        .unwrap();
+    let input = crate::storage::AnalysisInput {
+        audio_manifest_hash: plan.manifest_hash,
+        profile_snapshot: json!({"engine":"synthetic-transcription"}),
+        config: json!({}),
+        speakers: vec![],
+        segments: vec![],
+        utterances: vec![crate::storage::UtteranceInput {
+            track_id: plan.tracks[0].id.clone(),
+            start_us: 0,
+            end_us: 500_000,
+            text: "復旧した音声の文字起こし".into(),
+            speaker_keys: vec![],
+            confidence: None,
+        }],
+    };
+    let mut wrong_hash = input.clone();
+    wrong_hash.audio_manifest_hash = "f".repeat(64);
+    assert!(f
+        .storage
+        .create_analysis_candidate(&f.session.meeting_id, wrong_hash)
+        .is_err());
+    for (change, restore) in [
+        ("state='failed'", "state='interrupted'"),
+        ("last_committed_us=0", "last_committed_us=duration_us"),
+        ("ended_at_utc_ms=1", "ended_at_utc_ms=NULL"),
+    ] {
+        f.storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(&format!("UPDATE recording_sessions SET {change}"), [])
+            .unwrap();
+        assert!(f
+            .storage
+            .create_analysis_candidate(&f.session.meeting_id, input.clone())
+            .is_err());
+        f.storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(&format!("UPDATE recording_sessions SET {restore}"), [])
+            .unwrap();
+    }
+    let candidate = f
+        .storage
+        .create_analysis_candidate(&f.session.meeting_id, input)
+        .unwrap();
+    let meeting = f
+        .storage
+        .get_meeting(&f.session.meeting_id)
+        .unwrap()
+        .unwrap();
+    f.storage
+        .commit_analysis_candidate(&meeting.id, &candidate, meeting.lock_version, false)
+        .unwrap();
+    let view = f
+        .storage
+        .load_current_analysis(&meeting.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        view.utterances[0].effective_text,
+        "復旧した音声の文字起こし"
+    );
+    let session = load_session(&f.storage.connection.lock().unwrap(), &f.session.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.state, "interrupted");
+    assert_eq!(session.ended_at_utc_ms, None);
+}
+
+#[test]
 fn automatic_save_keeps_valid_lane_and_never_calls_corrupt_audio_empty() {
     for corrupt_both in [false, true] {
         let f = Fixture::new(1, 2000, false);

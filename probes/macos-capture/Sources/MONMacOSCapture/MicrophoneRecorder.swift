@@ -27,6 +27,12 @@ final class MicrophoneRecorder: @unchecked Sendable {
   // A stable engine may admit its first real PCM while still reconnecting.
   // Connection/recovery is published only after that PCM has been saved.
   private var normalAdmission: MicrophoneRecovery.Binding?
+  private struct PCMFlow {
+    let token: MicrophoneRecovery.Binding
+    var deadline: ContinuousClock.Instant
+  }
+  private var pcmFlow: PCMFlow?
+  static let pcmTimeout: Duration = .seconds(3)
   private let outputURL: URL
   private let lock = NSLock()
   private var file: AVAudioFile?
@@ -169,6 +175,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       selectedDeviceID = nil
       normalPreparation = nil
       normalAdmission = nil
+      pcmFlow = nil
       stats.inputLevel.invalidate()
       return !initialNativePending
     }
@@ -297,7 +304,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
         self?.stats.inputLevel.invalidate()
       }
     }
-    engine.installTap(format: format) { [weak self, weak engine] buffer, when in
+    try engine.installTap(format: format) { [weak self, weak engine] buffer, when in
       guard let self, let engine else { return }
       let receivedAt = self.levelsEnabled ? PCMInputLevel.nowNanoseconds() : nil
       let revision: UInt64? = self.lock.withLock {
@@ -381,6 +388,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
             try self.recovery?.activate(token)
             self.normalAdmission = nil
           }
+          self.receivedPCM(token)
           return
         }
         guard let file = self.file else {
@@ -437,6 +445,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
           try self.recovery?.activate(token)
           self.normalAdmission = nil
         }
+        self.receivedPCM(token)
       } catch {
         self.stats.appendFailures += 1
         self.stats.retainCaptureFailure(error)
@@ -511,6 +520,14 @@ final class MicrophoneRecorder: @unchecked Sendable {
       || (normalAdmission == token && recovery?.owns(token) == true)
   }
 
+  // Called under the callback lock, after valid PCM has been accepted. Silent
+  // samples count; engine flags, notifications and retired callbacks do not.
+  private func receivedPCM(_ token: MicrophoneRecovery.Binding) {
+    if pcmFlow?.token == token {
+      pcmFlow?.deadline = controlNow().advanced(by: Self.pcmTimeout)
+    }
+  }
+
   /// Serialized control-loop proofs, not sleeps or engine control on Apple's
   /// notification/audio queue. Delayed startup notifications keep this same
   /// engine preparing instead of repeatedly reporting a false recovery.
@@ -569,6 +586,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
       if pending.stableProofs >= 3 {
         normalPreparation = nil
         normalAdmission = pending.token
+        pcmFlow = PCMFlow(
+          token: pending.token, deadline: now.advanced(by: Self.pcmTimeout))
       } else {
         normalPreparation = pending
       }
@@ -671,18 +690,25 @@ final class MicrophoneRecorder: @unchecked Sendable {
 
   private func suspend(_ reason: String? = nil, unavailable: Bool = false) {
     lock.withLock {
-      if let reason {
-        recovery?.interrupt(reason, unavailable: unavailable)
-      } else {
-        recovery?.interruptForRetry()
-      }
-      selectedDeviceID = nil
-      normalPreparation = nil
-      normalAdmission = nil
-      stats.inputLevel.invalidate()
+      retireBinding(reason, unavailable: unavailable)
     }
     releaseEngine()
     // The current CAF remains open. Recreating it would overwrite prior PCM.
+  }
+
+  // Caller holds the callback lock. Invalidation and the last-PCM timeout
+  // decision must be atomic, so a newly admitted packet cannot lose this race.
+  private func retireBinding(_ reason: String?, unavailable: Bool) {
+    if let reason {
+      recovery?.interrupt(reason, unavailable: unavailable)
+    } else {
+      recovery?.interruptForRetry()
+    }
+    selectedDeviceID = nil
+    normalPreparation = nil
+    normalAdmission = nil
+    pcmFlow = nil
+    stats.inputLevel.invalidate()
   }
 
   func suspendForClockRecovery(_ request: CaptureClockRecoveryRequest) throws
@@ -791,6 +817,18 @@ final class MicrophoneRecorder: @unchecked Sendable {
       return
     }
     let selected = matches[0]
+    let flowExpired = lock.withLock {
+      guard let flow = pcmFlow, recovery?.owns(flow.token) == true,
+        controlNow() >= flow.deadline
+      else { return false }
+      stats.microphoneFlowTimeouts = (stats.microphoneFlowTimeouts ?? 0) + 1
+      retireBinding("engine_changed", unavailable: true)
+      return true
+    }
+    if flowExpired {
+      releaseEngine()
+      lastRecoveryAttempt = nil
+    }
     if lock.withLock({ normalPreparation != nil && selectedDeviceID == selected.objectID }) {
       do { try maintainNormalPreparation() } catch RebindError.formatChanged {
         suspend("format_changed", unavailable: true)
@@ -842,6 +880,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       selectedDeviceID = nil
       normalPreparation = nil
       normalAdmission = nil
+      pcmFlow = nil
       stats.inputLevel.invalidate()
       if initialNativePending {
         stats.appendFailures += 1
