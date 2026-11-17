@@ -492,29 +492,11 @@ impl Storage {
             }
             super::jobs::verify_latest_checkpoint(&transaction, job_id)?;
         }
-        let source_type: Option<String> = transaction
-            .query_row(
-                "SELECT source_type FROM meetings WHERE id=?1",
-                params![meeting_id],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        let source: Option<(String, String)> = match source_type.as_deref() {
-            Some("recording") => transaction.query_row(
-                "SELECT m.lifecycle,r.audio_manifest_hash FROM meetings m JOIN recording_sessions r ON r.meeting_id=m.id WHERE m.id=?1 AND r.state='saved'",
-                params![meeting_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            ).optional().map_err(|e| e.to_string())?,
-            Some("audio_import") => transaction.query_row(
-                "SELECT m.lifecycle,p.manifest_hash FROM meetings m JOIN audio_imports i ON i.meeting_id=m.id JOIN audio_import_commits p ON p.import_id=i.id AND p.meeting_id=m.id WHERE m.id=?1 AND i.state='ready'",
-                params![meeting_id], |row| Ok((row.get(0)?, row.get(1)?)),
-            ).optional().map_err(|e| e.to_string())?,
-            _ => None,
-        };
-        if source.as_ref().is_none_or(|(lifecycle, hash)| {
-            !matches!(lifecycle.as_str(), "recorded" | "imported")
-                || hash != &input.audio_manifest_hash
-        }) {
+        // Use the same committed-audio gate as job admission. A recovered
+        // prefix remains interrupted (its actual ending is unknown), but its
+        // verified canonical WAV can still produce an analysis candidate.
+        let source = super::transcription::read_audio_plan(&transaction, meeting_id)?;
+        if source.manifest_hash != input.audio_manifest_hash {
             return Err("確定済み音声と解析入力が一致しません".into());
         }
         let tracks = {

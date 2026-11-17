@@ -128,6 +128,9 @@ final class RawRecordingSegments: @unchecked Sendable {
   private var converterEpoch: UInt64?
   private var sourceEnd: Int64?
   private var sourceCaptureEnd: Int64?
+  private var compactCaptureEnd: Int64?
+  private let allowsClockRebasing: Bool
+  private var alignment = CapturePCMAlignment()
   private var plannedPrefix = CaptureRawPrefix()
   private var converterInputFrames: Int64 = 0
   private var converterOutputBase: Int64 = 0
@@ -145,6 +148,7 @@ final class RawRecordingSegments: @unchecked Sendable {
       result.channels = compactStats.channels
       result.timing = compactStats.timing
       result.clockSegments = nil
+      result.clockAlignment = compactStats.clockAlignment
       result.rawSegments = RawSegmentStatus(
         ownerId: owner, lane: lane, sealedSegments: sealedCount,
         sealedFrames: sealedFrames, lastEntrySHA256: previousHash, producerClosed: closed,
@@ -158,6 +162,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     beforeAppend: @escaping @Sendable () -> Void = {}, storageIO: StorageIO = StorageIO(),
     tipStorageIO: InputEventJournalFile.StorageIO = InputEventJournalFile.StorageIO(),
     maximumTotalClockSegments: Int = CapturedClockMap.maximumTrackSegments,
+    allowsClockRebasing: Bool = false,
     commits: RawSegmentCommitWorker = RawSegmentCommitWorker()
   ) throws {
     guard InputLevelReport.validOwner(owner), ["microphone", "system"].contains(lane),
@@ -170,6 +175,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     self.beforeAppend = beforeAppend
     self.storageIO = storageIO
     self.maximumTotalClockSegments = maximumTotalClockSegments
+    self.allowsClockRebasing = allowsClockRebasing
     self.commits = commits
     directory = try InputEventJournalFile.pin(output)
     do {
@@ -238,7 +244,8 @@ final class RawRecordingSegments: @unchecked Sendable {
       guard accepting, failure == nil, admissionFailure == nil else {
         throw ProbeError.capture("raw segment writer is closed or failed")
       }
-      guard CaptureCore.permitsPending(
+      guard
+        CaptureCore.permitsPending(
           bytes: pendingBytes, nanoseconds: pendingNanoseconds,
           packets: pendingPackets, nextBytes: bytes, nextNanoseconds: duration)
       else {
@@ -322,7 +329,8 @@ final class RawRecordingSegments: @unchecked Sendable {
   }
 
   private func requireHealthy(allowAdmissionFailure: Bool = false) throws {
-    if let failure = lock.withLock({ failure ?? (allowAdmissionFailure ? nil : admissionFailure) }) {
+    if let failure = lock.withLock({ failure ?? (allowAdmissionFailure ? nil : admissionFailure) })
+    {
       throw ProbeError.capture(CaptureFailureGuide.message(failure))
     }
   }
@@ -403,13 +411,20 @@ final class RawRecordingSegments: @unchecked Sendable {
   }
 
   private func appendSource(_ payload: Payload) throws {
-    guard case .timestamp(let start) = payload.observation else {
+    guard case .timestamp(let observedStart) = payload.observation else {
       throw ProbeError.capture("missing compact capture clock")
     }
     let rate = UInt32(payload.buffer.format.sampleRate)
     let channels = payload.buffer.format.channelCount
     let frames = Int64(payload.buffer.frameLength)
-    let end = start + frames * 1_000_000_000 / Int64(rate)
+    let duration = frames * 1_000_000_000 / Int64(rate)
+    let start =
+      try allowsClockRebasing
+      ? alignment.projectedStart(observedStart, sourceEpoch: payload.sourceEpoch) : observedStart
+    let (nominalEnd, overflow) = start.addingReportingOverflow(duration)
+    guard !overflow, converterEpoch.map({ payload.sourceEpoch >= $0 }) ?? true else {
+      throw ProbeError.capture("source PCM clock overflow or retired binding")
+    }
     let epochChanged = converterEpoch != nil && converterEpoch != payload.sourceEpoch
     if !epochChanged, converter != nil,
       converter?.rate != rate || converter?.channels != channels
@@ -439,20 +454,27 @@ final class RawRecordingSegments: @unchecked Sendable {
       converterInputFrames = 0
       converterOutputBase = lock.withLock { compactStats.frames }
     }
+    let mapped =
+      try allowsClockRebasing
+      ? alignment.map(
+        start: observedStart, duration: duration, frames: frames, sourceEpoch: payload.sourceEpoch,
+        emittedThrough: compactCaptureEnd) : (start: start, end: nominalEnd)
     converterInputFrames += frames
     let target = (converterInputFrames * 16_000 + Int64(rate) - 1) / Int64(rate)
-    sourceCredits.append(SourceCredit(
-      frameEnd: converterOutputBase + target, nanoseconds: payload.durationNanoseconds))
+    sourceCredits.append(
+      SourceCredit(
+        frameEnd: converterOutputBase + target, nanoseconds: payload.durationNanoseconds))
     converterEpoch = payload.sourceEpoch
     sourceEnd = payload.sourceFrame.map { $0 + frames }
-    sourceCaptureEnd = end
+    sourceCaptureEnd = mapped.end
     let samples = try VoicePCM.interleaved(payload.buffer)
     guard samples.allSatisfy({ abs($0) <= 16 }) else {
       throw ProbeError.capture("invalid captured PCM amplitude")
     }
-    try converter?.push(samples, start: start, end: end) { [self] pcm, start, end in
+    try converter?.push(samples, start: mapped.start, end: mapped.end) { [self] pcm, start, end in
       try appendCompact(pcm, start: start, end: end)
     }
+    lock.withLock { compactStats.clockAlignment = alignment.diagnostics }
   }
 
   private func appendCompact(_ pcm: [Int16], start: Int64, end: Int64) throws {
@@ -492,6 +514,7 @@ final class RawRecordingSegments: @unchecked Sendable {
         sourceEpoch: outputEpoch, captureEndNanoseconds: end)
       compactStats.frames += frames
     }
+    compactCaptureEnd = end
     let savedFrames = lock.withLock { compactStats.frames }
     while let first = sourceCredits.first, first.frameEnd <= savedFrames {
       active.acquiredNanoseconds += first.nanoseconds
@@ -507,13 +530,14 @@ final class RawRecordingSegments: @unchecked Sendable {
     let sequence = plannedPrefix.segments + 1
     let name = String(format: "raw-%@-%08d.caf", lane, sequence)
     let audioSHA256 = Self.hex(SHA256.hash(data: segment.pcm))
-    let entry = try Self.encode(Entry(
-      ownerId: owner, lane: lane, sequence: sequence, audioName: name,
-      sourceFrameStart: plannedPrefix.frames, frames: segment.frames, sampleRate: 16000,
-      channels: 1, captureOriginNanoseconds: segment.origin, clockSegments: maps,
-      clockNanoseconds: segment.timing.finalizedEndpoints(),
-      audioBytes: Int64(segment.pcm.count), audioSHA256: audioSHA256,
-      previousEntrySHA256: plannedPrefix.hash))
+    let entry = try Self.encode(
+      Entry(
+        ownerId: owner, lane: lane, sequence: sequence, audioName: name,
+        sourceFrameStart: plannedPrefix.frames, frames: segment.frames, sampleRate: 16000,
+        channels: 1, captureOriginNanoseconds: segment.origin, clockSegments: maps,
+        clockNanoseconds: segment.timing.finalizedEndpoints(),
+        audioBytes: Int64(segment.pcm.count), audioSHA256: audioSHA256,
+        previousEntrySHA256: plannedPrefix.hash))
     // Admission is a pure bounded plan. The durable worker must never discover
     // an over-capacity receipt only after writing its audio.
     let plan = try plannedPrefix.prepare(entry)
@@ -541,10 +565,12 @@ final class RawRecordingSegments: @unchecked Sendable {
   }
 
   private func commit(_ segment: SegmentJob) throws {
-    guard lock.withLock({
-      sealedCount + 1 == segment.sequence && sealedFrames == segment.frameStart
-        && previousHash == segment.priorHash
-    }) else { throw ProbeError.capture("raw segment commit order changed") }
+    guard
+      lock.withLock({
+        sealedCount + 1 == segment.sequence && sealedFrames == segment.frameStart
+          && previousHash == segment.priorHash
+      })
+    else { throw ProbeError.capture("raw segment commit order changed") }
     let name = String(format: "raw-%@-%08d.caf", lane, segment.sequence)
     let audio = try create(name)
     defer { close(audio) }

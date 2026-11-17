@@ -91,6 +91,136 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
   private let owner = "735027d4-a03e-43d3-830a-21e767dfaf88"
   private let origin: Int64 = 9_000_000_000_000
 
+  func testRebasedOwnedLanesRetainEveryPCMFrameAndReportEstimatedTiming() throws {
+    for rate in [8000, 48000] {
+      for lane in ["microphone", "system"] {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let raw = try RawRecordingSegments(
+          output: root, owner: owner, lane: lane, allowsClockRebasing: true)
+        let pcm = try buffer(frames: UInt32(rate / 4), rate: Double(rate))
+        for index in 0..<40 {
+          let observedIndex = index < 20 ? index : index - 18
+          try raw.enqueue(
+            pcm, observation: .timestamp(origin + Int64(observedIndex) * 250_000_000),
+            sourceFrame: nil, sourceEpoch: 1)
+        }
+        try raw.finish()
+        var stats = raw.applyingSavedAudio(to: TrackStats(callbackCount: 40))
+        try raw.verifyClosed(expected: stats)
+        XCTAssertEqual(stats.frames, 160_000)
+        XCTAssertTrue(raw.snapshot().producerClosed)
+        XCTAssertNil(raw.snapshot().failure)
+        XCTAssertEqual(stats.clockAlignment?.clockAdjustments, 1)
+        XCTAssertEqual(stats.clockAlignment?.retimedPackets, 20)
+        XCTAssertEqual(stats.clockAlignment?.correctionNanoseconds, 4_500_000_000)
+        try stats.finishClock(originNanoseconds: origin)
+        XCTAssertEqual(stats.clockSegments?.last?.timelineEndUs, 10_000_000)
+        var saved: Int64 = 0
+        for sequence in 1...raw.snapshot().sealedSegments {
+          let path = root.appendingPathComponent(String(format: "raw-%@-%08d.caf", lane, sequence))
+          let file = try AVAudioFile(forReading: path)
+          let decoded = try XCTUnwrap(
+            AVAudioPCMBuffer(
+              pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+          try file.read(into: decoded)
+          saved += Int64(decoded.frameLength)
+          XCTAssertTrue(
+            (0..<Int(decoded.frameLength)).allSatisfy {
+              abs(decoded.floatChannelData![0][$0] + 0.125) < 0.001
+            })
+        }
+        XCTAssertEqual(saved, 160_000)
+      }
+    }
+  }
+
+  func testClockRebasingDoesNotHideInvalidPCMRetiredBindingsOrCounterResets() throws {
+    for fault in ["counter", "epoch", "nonfinite", "strict"] {
+      let root = try directory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let raw = try RawRecordingSegments(
+        output: root, owner: owner, lane: "system", allowsClockRebasing: fault != "strict")
+      let pcm = try buffer()
+      for index in 0..<17 {
+        try raw.enqueue(
+          pcm, observation: .timestamp(origin + Int64(index) * 250_000_000),
+          sourceFrame: Int64(index * 2000), sourceEpoch: 1)
+      }
+      try raw.drainAcceptedPCM()
+      let prefix = raw.snapshot().sealedFrames
+      XCTAssertGreaterThan(prefix, 0)
+      if fault == "nonfinite" { pcm.floatChannelData![0][0] = .nan }
+      try raw.enqueue(
+        pcm, observation: .timestamp(origin + (fault == "strict" ? 500_000_000 : 4_250_000_000)),
+        sourceFrame: fault == "counter" ? 0 : 34_000, sourceEpoch: fault == "epoch" ? 0 : 1)
+      XCTAssertThrowsError(try raw.finish(), fault)
+      XCTAssertNotNil(raw.snapshot().failure, fault)
+      XCTAssertEqual(raw.snapshot().sealedFrames, prefix, fault)
+      XCTAssertFalse(raw.snapshot().producerClosed, fault)
+    }
+  }
+
+  func testEstimatedTimelineRequiresBothClosuresAndCoversPreservedAudioPastNativeStop() throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let microphone = try RawRecordingSegments(
+      output: root, owner: owner, lane: "microphone", allowsClockRebasing: true)
+    let system = try RawRecordingSegments(
+      output: root, owner: owner, lane: "system", allowsClockRebasing: true)
+    for index in 0..<8 {
+      let observedIndex = index < 4 ? index : index - 3
+      try system.enqueue(
+        buffer(), observation: .timestamp(origin + Int64(observedIndex) * 250_000_000),
+        sourceFrame: nil, sourceEpoch: 1)
+      if index < 4 {
+        try microphone.enqueue(
+          buffer(), observation: .timestamp(origin + Int64(index) * 250_000_000),
+          sourceFrame: nil, sourceEpoch: 1)
+      }
+    }
+    try microphone.finish()
+    try system.finish()
+    func reading(_ time: Int64) -> CaptureClockReading {
+      CaptureClockReading(
+        hostBeforeNs: time, continuousNs: time + 10,
+        utcMs: 1_700_000_000_000, hostAfterNs: time + 20)
+    }
+    let time = ReadingBox(reading(origin - 100))
+    let clock = try CaptureClockDomain(
+      units: MachTimeUnits(numerator: 1, denominator: 1), read: time.read)
+    time.set(reading(origin + 1_500_000_000))
+    let micClosed = try clock.close(.microphone)
+    let pcClosed = try clock.close(.system)
+    let original = Manifest(
+      schemaVersion: 4, scenario: "synthetic-rebased-stop", captureMode: "system",
+      backend: "coreaudio",
+      targetPID: nil, targetPIDs: [], startedAtUTC: "synthetic", requestedDurationSeconds: nil,
+      osVersion: "synthetic", architecture: "arm64", state: "saved",
+      microphone: microphone.applyingSavedAudio(to: TrackStats(callbackCount: 4)),
+      system: system.applyingSavedAudio(to: TrackStats(callbackCount: 8)), errors: [],
+      recordingOwnerId: owner)
+    var saved = original
+    try saved.finalizeStoppedClock(clock, microphoneClosure: micClosed, systemClosure: pcClosed)
+    XCTAssertEqual(saved.timingEstimated, true)
+    XCTAssertEqual(saved.system.frames, 32_000)
+    XCTAssertEqual(saved.system.clockSegments?.last?.timelineEndUs, 2_000_000)
+    XCTAssertEqual(saved.captureEnd?.endUs, 2_000_000)
+    XCTAssertEqual(saved.observedCaptureEnd?.endUs, 1_500_000)
+    XCTAssertGreaterThanOrEqual(saved.captureClock!.uncertaintyNs, 2_001_000_000)
+    let json = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: saved.encodedData()) as? [String: Any])
+    XCTAssertEqual(json["timingEstimated"] as? Bool, true)
+    var missingProof = original
+    XCTAssertThrowsError(
+      try missingProof.finalizeStoppedClock(clock, microphoneClosure: nil, systemClosure: pcClosed))
+    var unmarked = original
+    unmarked.system.clockAlignment = nil
+    XCTAssertThrowsError(
+      try unmarked.finalizeStoppedClock(
+        clock, microphoneClosure: micClosed, systemClosure: pcClosed))
+  }
+
   private func directory() throws -> URL {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(
@@ -370,7 +500,8 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(writer.stats.frames, 68_000)
     XCTAssertEqual(writer.stats.rawSegments?.sealedFrames, 68_000)
     XCTAssertEqual(writer.stats.rawSegments?.producerClosed, true)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("system.caf").path))
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: root.appendingPathComponent("system.caf").path))
     try raw.verifyClosed(expected: writer.stats)
     try verifyAudio(
       root.appendingPathComponent("raw-system-00000001.caf"), frames: 192_000, rate: 48000)
@@ -386,13 +517,15 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let commits = RawSegmentCommitWorker()
     let writer = try RawRecordingSegments(
       output: root, owner: owner, lane: "microphone",
-      storageIO: .init(write: { data, fd in
-        log.audio(data)
-        try native.write(data, fd)
-      }, synchronize: native.synchronize), commits: commits)
+      storageIO: .init(
+        write: { data, fd in
+          log.audio(data)
+          try native.write(data, fd)
+        }, synchronize: native.synchronize), commits: commits)
     try append(writer)
     XCTAssertEqual(log.audioWrites, [128_068])
-    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("microphone.caf").path))
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: root.appendingPathComponent("microphone.caf").path))
     try writer.finish()
     XCTAssertEqual(log.audioWrites, [128_068, 8_068])
     XCTAssertEqual(commits.pending(lane: "microphone").nanoseconds, 0)
@@ -412,20 +545,25 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let commits = RawSegmentCommitWorker()
     let writer = try RawRecordingSegments(
       output: root, owner: owner, lane: "microphone",
-      storageIO: .init(write: native.write, synchronize: { fd in
-        gate.holdOnce()
-        try native.synchronize(fd)
-      }), commits: commits)
+      storageIO: .init(
+        write: native.write,
+        synchronize: { fd in
+          gate.holdOnce()
+          try native.synchronize(fd)
+        }), commits: commits)
     let quarter = try buffer()
     for index in 0..<400 {
-      try writer.enqueue(quarter,
-        observation: .timestamp(origin + Int64(index) * 250_000_000), sourceFrame: Int64(index) * 2000)
+      try writer.enqueue(
+        quarter,
+        observation: .timestamp(origin + Int64(index) * 250_000_000),
+        sourceFrame: Int64(index) * 2000)
       try writer.drainNormalization()
       if index == 16 { XCTAssertEqual(gate.entered.wait(timeout: .now() + 2), .success) }
     }
     XCTAssertEqual(writer.snapshot().sealedFrames, 0)
     XCTAssertEqual(commits.pending(lane: "microphone").nanoseconds, 100_000_000_000)
-    XCTAssertLessThanOrEqual(commits.pending(lane: "microphone").bytes,
+    XCTAssertLessThanOrEqual(
+      commits.pending(lane: "microphone").bytes,
       25 * RawSegmentCommitWorker.segmentReserveBytes)
     XCTAssertNil(writer.snapshot().failure)
     gate.released.signal()
@@ -434,7 +572,9 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(commits.pending(lane: "microphone").nanoseconds, 0)
     try writer.verifyClosed(expected: writer.applyingSavedAudio(to: TrackStats()))
     for index in 1...25 {
-      try verifyAudio(root.appendingPathComponent(String(format: "raw-microphone-%08d.caf", index)), frames: 32_000)
+      try verifyAudio(
+        root.appendingPathComponent(String(format: "raw-microphone-%08d.caf", index)),
+        frames: 32_000)
     }
   }
 
@@ -447,20 +587,26 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let commits = RawSegmentCommitWorker()
     let writer = try RawRecordingSegments(
       output: root, owner: owner, lane: "microphone",
-      storageIO: .init(write: native.write, synchronize: { fd in
-        gate.holdOnce()
-        try native.synchronize(fd)
-      }), commits: commits)
+      storageIO: .init(
+        write: native.write,
+        synchronize: { fd in
+          gate.holdOnce()
+          try native.synchronize(fd)
+        }), commits: commits)
     let quarter = try buffer()
     for index in 0..<480 {
-      try writer.enqueue(quarter,
-        observation: .timestamp(origin + Int64(index) * 250_000_000), sourceFrame: Int64(index) * 2000)
+      try writer.enqueue(
+        quarter,
+        observation: .timestamp(origin + Int64(index) * 250_000_000),
+        sourceFrame: Int64(index) * 2000)
       try writer.drainNormalization()
       if index == 16 { XCTAssertEqual(gate.entered.wait(timeout: .now() + 2), .success) }
     }
     XCTAssertEqual(commits.pending(lane: "microphone").nanoseconds, 120_000_000_000)
-    XCTAssertThrowsError(try writer.enqueue(buffer(frames: 1),
-      observation: .timestamp(origin + 120_000_000_000), sourceFrame: 960_000))
+    XCTAssertThrowsError(
+      try writer.enqueue(
+        buffer(frames: 1),
+        observation: .timestamp(origin + 120_000_000_000), sourceFrame: 960_000))
     XCTAssertEqual(writer.snapshot().sealedFrames, 0)
     XCTAssertFalse(writer.snapshot().producerClosed)
     gate.released.signal()
@@ -473,13 +619,17 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(commits.pending(lane: "microphone").bytes, 0)
     XCTAssertEqual(commits.pending(lane: "microphone").jobs, 0)
     for index in 1...30 {
-      try verifyAudio(root.appendingPathComponent(String(format: "raw-microphone-%08d.caf", index)), frames: 32_000)
+      try verifyAudio(
+        root.appendingPathComponent(String(format: "raw-microphone-%08d.caf", index)),
+        frames: 32_000)
     }
     let rescued = try Data(contentsOf: root.appendingPathComponent("raw-microphone.json"))
     XCTAssertEqual(try value(root)["producerClosed"] as? Bool, false)
     XCTAssertThrowsError(try writer.finish())
-    XCTAssertThrowsError(try writer.verifyClosed(expected: writer.applyingSavedAudio(to: TrackStats())))
-    XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("raw-microphone.json")), rescued)
+    XCTAssertThrowsError(
+      try writer.verifyClosed(expected: writer.applyingSavedAudio(to: TrackStats())))
+    XCTAssertEqual(
+      try Data(contentsOf: root.appendingPathComponent("raw-microphone.json")), rescued)
   }
 
   func testSessionCommitWorkerAlternatesReadyLanesAndPreservesPerLaneOrder() throws {
@@ -489,13 +639,16 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let log = RawCommitLog()
     try worker.beginSegment()
     worker.submit(lane: "microphone", bytes: RawSegmentCommitWorker.segmentReserveBytes) {
-      gate.holdOnce(); log.turn("microphone-1")
+      gate.holdOnce()
+      log.turn("microphone-1")
     }
     XCTAssertEqual(gate.entered.wait(timeout: .now() + 2), .success)
     for value in ["microphone-2", "microphone-3", "system-1"] {
       let lane = value.hasPrefix("system") ? "system" : "microphone"
       try worker.beginSegment()
-      worker.submit(lane: lane, bytes: RawSegmentCommitWorker.segmentReserveBytes) { log.turn(value) }
+      worker.submit(lane: lane, bytes: RawSegmentCommitWorker.segmentReserveBytes) {
+        log.turn(value)
+      }
     }
     gate.released.signal()
     worker.drain(lane: "microphone")
@@ -563,13 +716,16 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let commits = RawSegmentCommitWorker()
     let writer = try RawRecordingSegments(
       output: root, owner: owner, lane: "microphone",
-      storageIO: .init(write: native.write, synchronize: { descriptor in
-        gate.holdOnce()
-        try native.synchronize(descriptor)
-      }), maximumTotalClockSegments: 2, commits: commits)
+      storageIO: .init(
+        write: native.write,
+        synchronize: { descriptor in
+          gate.holdOnce()
+          try native.synchronize(descriptor)
+        }), maximumTotalClockSegments: 2, commits: commits)
     let quarter = try buffer()
     for index in 0..<33 {
-      try writer.enqueue(quarter,
+      try writer.enqueue(
+        quarter,
         observation: .timestamp(origin + Int64(index) * 250_000_000),
         sourceFrame: Int64(index) * 2000)
       try writer.drainNormalization()
@@ -579,10 +735,12 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     // durable commit is held and a third segment is only being assembled.
     XCTAssertEqual(commits.pending(lane: "microphone").jobs, 3)
     XCTAssertEqual(writer.snapshot().sealedFrames, 0)
-    try writer.enqueue(quarter,
+    try writer.enqueue(
+      quarter,
       observation: .timestamp(origin + 9_250_000_000), sourceFrame: 0, sourceEpoch: 1)
     try writer.drainNormalization()
-    try writer.enqueue(quarter,
+    try writer.enqueue(
+      quarter,
       observation: .timestamp(origin + 10_250_000_000), sourceFrame: 0, sourceEpoch: 2)
     XCTAssertThrowsError(try writer.drainNormalization())
     gate.released.signal()
@@ -593,12 +751,16 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     XCTAssertFalse(writer.snapshot().producerClosed)
     XCTAssertEqual(try value(root)["producerClosed"] as? Bool, false)
     for index in 1...2 {
-      try verifyAudio(root.appendingPathComponent(String(format: "raw-microphone-%08d.caf", index)), frames: 32_000)
+      try verifyAudio(
+        root.appendingPathComponent(String(format: "raw-microphone-%08d.caf", index)),
+        frames: 32_000)
     }
     // An invalid, unsaved normalizer tail remains unknown. It is never padded,
     // advertised or used to turn the failed producer into a closed recording.
-    XCTAssertFalse(FileManager.default.fileExists(atPath:
-      root.appendingPathComponent("raw-microphone-00000003.json").path))
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath:
+          root.appendingPathComponent("raw-microphone-00000003.json").path))
   }
 
   func testStorageFullQuotaAndSyncFailureKeepConfirmedPrefixAndRejectFurtherWrites() throws {
@@ -870,8 +1032,18 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
   }
 
   func testNativePrefixFixtureExportsBoundManifestForRustWithoutCaptureDevices() async throws {
+    try await nativePrefixFixture(
+      rebased: ProcessInfo.processInfo.environment["MON_RAW_SEGMENT_FIXTURE_REBASE"] == "1",
+      exports: true)
+  }
+
+  func testRebasedNativePrefixFixtureKeepsManifestAndRawReceiptsCompatible() async throws {
+    try await nativePrefixFixture(rebased: true, exports: false)
+  }
+
+  private func nativePrefixFixture(rebased: Bool, exports: Bool) async throws {
     let environment = ProcessInfo.processInfo.environment
-    let external = environment["MON_RAW_SEGMENT_FIXTURE_DIR"]
+    let external = exports ? environment["MON_RAW_SEGMENT_FIXTURE_DIR"] : nil
     let root = try external.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? directory()
     defer { if external == nil { try? FileManager.default.removeItem(at: root) } }
     let recordingOwner = environment["MON_RAW_SEGMENT_FIXTURE_OWNER"] ?? owner
@@ -889,7 +1061,8 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     let fixture = CaptureClockFixtureTests()
     var tracks: [TrackStats] = []
     for lane in ["microphone", "system"] {
-      let raw = try RawRecordingSegments(output: root, owner: recordingOwner, lane: lane)
+      let raw = try RawRecordingSegments(
+        output: root, owner: recordingOwner, lane: lane, allowsClockRebasing: rebased)
       let writer = SystemPCMWriter(
         outputURL: root.appendingPathComponent("\(lane).caf"), rawSegments: raw)
       for index in 0..<(dense ? 2048 : 17) {
@@ -899,7 +1072,9 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
         try writer.append(
           sample,
           observation: clock.observe(
-            hostTicks: UInt64(origin + Int64(index) * (dense ? 20_000_000 : 250_000_000))),
+            hostTicks: UInt64(
+              origin + Int64(index) * (dense ? 20_000_000 : 250_000_000)
+                - (rebased && index >= 8 ? (dense ? 100_000_000 : 500_000_000) : 0))),
           sourceEpoch: 0, levelsEnabled: false, receivedAt: nil)
         try raw.drainAcceptedPCM()
       }
@@ -917,6 +1092,7 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
       clock, microphoneClosure: micClosure, systemClosure: systemClosure)
     try manifest.encodedData().write(to: root.appendingPathComponent("manifest.json"))
     XCTAssertEqual(manifest.schemaVersion, 4)
+    XCTAssertEqual(manifest.timingEstimated, rebased ? true : nil)
     XCTAssertEqual(manifest.microphone.rawSegments?.sealedFrames, dense ? 327_680 : 68_000)
     XCTAssertNotNil(manifest.microphone.rawSegments?.lastEntrySHA256)
     if dense {

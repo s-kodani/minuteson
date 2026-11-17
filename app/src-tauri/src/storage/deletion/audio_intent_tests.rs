@@ -93,6 +93,7 @@ fn native_raw_audio_requires_distinct_unregistered_consent_and_blocks_changed_re
 fn audio_consent_is_atomic_typed_and_preserves_all_documents_audio_and_original_review_hash() {
     let f = Fixture::new();
     f.documents();
+    let original_audio = std::fs::read(&f.path).unwrap();
     let census = f.census();
     let snapshot = census.snapshot();
     let original_hash = census.hash().unwrap();
@@ -150,7 +151,7 @@ fn audio_consent_is_atomic_typed_and_preserves_all_documents_audio_and_original_
         .verify_current(&f.storage, &owner, &crate::test_support::never_cancelled)
         .unwrap();
     assert!(f.storage.data_write_blocked());
-    assert_eq!(std::fs::read(&f.path).unwrap(), b"PRIVATE AUDIO BODY");
+    assert_eq!(std::fs::read(&f.path).unwrap(), original_audio);
     assert_eq!(
         f.storage
             .get_minutes_markdown(&f.meeting)

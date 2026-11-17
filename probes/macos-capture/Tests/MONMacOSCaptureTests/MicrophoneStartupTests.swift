@@ -2,6 +2,7 @@ import AVFoundation
 import CoreAudio
 import Darwin
 import Foundation
+import MONAudioEngineBridge
 import XCTest
 
 @testable import MONMacOSCapture
@@ -101,6 +102,7 @@ private final class SilentMicrophoneEngine: MicrophoneCaptureEngine, @unchecked 
   private var starts = 0, stops = 0, removals = 0, verifies = 0
   private var inNotification = false, controlInNotification = false
   var onPrepare: (@Sendable (SilentMicrophoneEngine) -> Void)?
+  var onInstall: (@Sendable () throws -> Void)?
   var onStart: (@Sendable (SilentMicrophoneEngine, Int) throws -> Void)?
   var onVerify: (@Sendable (SilentMicrophoneEngine, Int) -> Void)?
   var inputFormat: AVAudioFormat { lock.withLock { format } }
@@ -146,7 +148,10 @@ private final class SilentMicrophoneEngine: MicrophoneCaptureEngine, @unchecked 
   }
   func installTap(
     format: AVAudioFormat, handler: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
-  ) { lock.withLock { tap = handler } }
+  ) throws {
+    try onInstall?()
+    lock.withLock { tap = handler }
+  }
   func savedTap() -> (@Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void)? {
     lock.withLock { tap }
   }
@@ -214,6 +219,17 @@ private final class SilentMicrophoneEngine: MicrophoneCaptureEngine, @unchecked 
 }
 
 final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
+  func testDetachedNativeTapExceptionReturnsAnErrorWithoutUnwindingSwift() throws {
+    // A detached mixer has no engine. This exercises AVFAudio's real exception
+    // path without opening a hardware input or asking for OS permission.
+    let error = try XCTUnwrap(
+      MONInstallAudioTap(
+        AVAudioMixerNode(), AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!,
+        { _, _ in XCTFail("a rejected tap must never deliver PCM") }))
+    XCTAssertEqual((error as NSError).domain, "jp.mon.capture.audio-engine")
+    XCTAssertTrue(error.localizedDescription.contains("microphone tap installation failed"))
+  }
+
   private static func devices() -> CaptureInputDevices {
     CaptureInputDevices(
       microphonePermission: "authorized",
@@ -332,9 +348,11 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     XCTAssertNil(raw.snapshot().failure)
     XCTAssertEqual(raw.snapshot().sealedFrames, recorded)
     XCTAssertEqual(commits.pending(lane: "microphone").nanoseconds, 0)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("microphone.caf").path))
+    XCTAssertFalse(
+      FileManager.default.fileExists(atPath: dir.appendingPathComponent("microphone.caf").path))
     try raw.verifyClosed(expected: recorder.snapshot())
-    let file = try AVAudioFile(forReading: dir.appendingPathComponent("raw-microphone-00000001.caf"))
+    let file = try AVAudioFile(
+      forReading: dir.appendingPathComponent("raw-microphone-00000001.caf"))
     XCTAssertEqual(file.length, recorded)
     let saved = try XCTUnwrap(
       AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(recorded))
@@ -345,7 +363,9 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
   }
 
   @MainActor
-  func testSessionStopsBothAcquisitionsBeforeMicrophoneDiskFlushIncludingSystemFailure() async throws {
+  func testSessionStopsBothAcquisitionsBeforeMicrophoneDiskFlushIncludingSystemFailure()
+    async throws
+  {
     for failSystemStop in [false, true] {
       let created = try directory()
       defer { try? FileManager.default.removeItem(at: created) }
@@ -357,12 +377,14 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
       let native = RawRecordingSegments.StorageIO()
       let raw = try RawRecordingSegments(
         output: dir, owner: UUID().uuidString.lowercased(), lane: "microphone",
-        storageIO: .init(write: native.write, synchronize: { descriptor in
-          // Simulate two minutes spent in durable IO without sleeping. Native
-          // closure receipts must already be frozen before this callback runs.
-          time.set(121_100_000_000)
-          try native.synchronize(descriptor)
-        }))
+        storageIO: .init(
+          write: native.write,
+          synchronize: { descriptor in
+            // Simulate two minutes spent in durable IO without sleeping. Native
+            // closure receipts must already be frozen before this callback runs.
+            time.set(121_100_000_000)
+            try native.synchronize(descriptor)
+          }))
       let engine = SilentMicrophoneEngine()
       let control = StartupControlClock()
       let microphone = MicrophoneRecorder(
@@ -397,7 +419,9 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
       XCTAssertEqual(raw.snapshot().sealedFrames, 160)
       XCTAssertEqual(time.read().continuousNs, 121_100_000_510)
       let inspectionSystem: CaptureClosure
-      if let systemClosure { inspectionSystem = systemClosure } else {
+      if let systemClosure {
+        inspectionSystem = systemClosure
+      } else {
         inspectionSystem = try clock.close(.system)
       }
       let (_, end) = try clock.ending(
@@ -1332,6 +1356,166 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(stats.frames, 960)
     XCTAssertEqual(stats.inputEventHistory?.events.map(\.kind), ["interrupted", "recovered"])
     XCTAssertTrue(stats.inputEventHistory!.matches(stats.microphoneRecovery!))
+  }
+
+  func testRebindTapFailureRetainsSavedPCMAndRetriesWithoutEndingRecording() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let old = SilentMicrophoneEngine()
+    let rejected = SilentMicrophoneEngine()
+    let current = SilentMicrophoneEngine()
+    rejected.onInstall = {
+      throw NSError(domain: "jp.mon.capture.audio-engine", code: 1)
+    }
+    let control = StartupControlClock()
+    let time = StartupClock()
+    let factory = StartupFactory([old, rejected, current])
+    let recorder = recorder(dir, old, clock: try time.domain(), factory: factory, control: control)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.settle(recorder)
+    try old.emit(host: 1_000_000_000)
+    old.notify(stopped: true)
+    recorder.maintain()
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "unavailable")
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.reason, "restart_failed")
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertNil(recorder.snapshot().captureFailureDetail)
+    XCTAssertFalse(rejected.hasObserver)
+    XCTAssertFalse(rejected.hasTap)
+    XCTAssertEqual(rejected.startCount, 0)
+    for _ in 0..<5 { recorder.maintain() }
+    XCTAssertEqual(factory.calls, 2)
+    control.advance(1000)
+    time.set(1_030_000_000)
+    recorder.maintain()
+    control.settle(recorder)
+    try current.emit(host: 1_030_000_000)
+    XCTAssertEqual(factory.calls, 3)
+    XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+    XCTAssertEqual(recorder.snapshot().frames, 960)
+    time.set(1_050_000_000)
+    recorder.stop()
+    let file = try AVAudioFile(forReading: dir.appendingPathComponent("microphone.caf"))
+    XCTAssertEqual(file.length, 960)
+    XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+  }
+
+  func testMissingFirstOrSubsequentPCMReacquiresOnlyExpiredBindingAndKeepsSavedAudio()
+    async throws
+  {
+    for receivedFirst in [false, true] {
+      let dir = try directory()
+      defer { try? FileManager.default.removeItem(at: dir) }
+      let old = SilentMicrophoneEngine()
+      let current = SilentMicrophoneEngine()
+      let control = StartupControlClock()
+      let time = StartupClock()
+      let factory = StartupFactory([old, current])
+      let recorder = recorder(
+        dir, old, clock: try time.domain(), factory: factory, control: control)
+      defer { recorder.stop() }
+      try await recorder.start()
+      control.settle(recorder)
+      if receivedFirst { try old.emit(host: 1_000_000_000) }
+      let oldPCM = try XCTUnwrap(old.savedTap())
+      control.advance(2999)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 1)
+      control.advance(1)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 2)
+      XCTAssertFalse(old.isRunning)
+      XCTAssertEqual(old.removalCount, 1)
+      XCTAssertEqual(recorder.snapshot().microphoneFlowTimeouts, 1)
+      XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "reconnecting")
+      XCTAssertNil(recorder.snapshot().captureFailureDetail)
+      control.settle(recorder)
+      let frames = recorder.snapshot().frames
+      oldPCM(
+        try SilentMicrophoneEngine.pcm(format: old.inputFormat),
+        AVAudioTime(hostTime: 1_000_000_000, sampleTime: 480, atRate: 48000))
+      XCTAssertEqual(recorder.snapshot().frames, frames)
+      time.set(4_500_000_000)
+      try current.emit(host: 4_500_000_000)
+      XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+      XCTAssertEqual(recorder.snapshot().frames, receivedFirst ? 960 : 480)
+      XCTAssertEqual(
+        recorder.snapshot().inputEventHistory?.events.map(\.kind), ["interrupted", "recovered"])
+      time.set(4_600_000_000)
+      recorder.stop()
+      let file = try AVAudioFile(forReading: dir.appendingPathComponent("microphone.caf"))
+      XCTAssertEqual(file.length, receivedFirst ? 960 : 480)
+      XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+    }
+  }
+
+  func testSilentPCMRefreshesFlowDeadlineAndStopCannotReacquire() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let engine = SilentMicrophoneEngine()
+    let control = StartupControlClock()
+    let time = StartupClock()
+    let factory = StartupFactory([engine])
+    let recorder = recorder(
+      dir, engine, clock: try time.domain(), factory: factory, control: control)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.settle(recorder)
+    let callback = try XCTUnwrap(engine.savedTap())
+    let silence = try SilentMicrophoneEngine.pcm(format: engine.inputFormat)
+    silence.floatChannelData![0].initialize(repeating: 0, count: Int(silence.frameLength))
+    for index in 0..<5 {
+      let host = Int64(1_000_000_000 + index * 2_000_000_000)
+      time.set(host)
+      callback(
+        silence, AVAudioTime(hostTime: UInt64(host), sampleTime: Int64(index * 480), atRate: 48000))
+      control.advance(2000)
+      recorder.maintain()
+    }
+    XCTAssertEqual(factory.calls, 1)
+    XCTAssertNil(recorder.snapshot().microphoneFlowTimeouts)
+    XCTAssertEqual(recorder.snapshot().frames, 2400)
+    time.set(11_000_000_000)
+    recorder.stop()
+    control.advance(10000)
+    callback(silence, AVAudioTime(hostTime: 11_000_000_000))
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 1)
+    XCTAssertEqual(recorder.snapshot().frames, 2400)
+  }
+
+  func testRetiredPCMDoesNotExtendReplacementDeadlineOrAnnounceRepeatedRecoveries() async throws {
+    let dir = try directory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let first = SilentMicrophoneEngine()
+    let second = SilentMicrophoneEngine()
+    let third = SilentMicrophoneEngine()
+    let control = StartupControlClock()
+    let time = StartupClock()
+    let factory = StartupFactory([first, second, third])
+    let recorder = recorder(
+      dir, first, clock: try time.domain(), factory: factory, control: control)
+    defer { recorder.stop() }
+    try await recorder.start()
+    control.settle(recorder)
+    try first.emit(host: 1_000_000_000)
+    let retired = try XCTUnwrap(first.savedTap())
+    control.advance(3000)
+    recorder.maintain()
+    control.settle(recorder)
+    control.advance(2999)
+    retired(
+      try SilentMicrophoneEngine.pcm(format: first.inputFormat),
+      AVAudioTime(hostTime: 1_000_000_000, sampleTime: 480, atRate: 48000))
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 2)
+    control.advance(1)
+    recorder.maintain()
+    XCTAssertEqual(factory.calls, 3)
+    XCTAssertEqual(recorder.snapshot().microphoneFlowTimeouts, 2)
+    XCTAssertEqual(recorder.snapshot().frames, 480)
+    XCTAssertEqual(recorder.snapshot().inputEventHistory?.events.map(\.kind), ["interrupted"])
   }
 
   func testNormalRepeatedStartupNotificationsAndSameEngineRestartsAreBounded() async throws {

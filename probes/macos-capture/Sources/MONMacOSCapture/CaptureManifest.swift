@@ -28,12 +28,15 @@ struct TrackStats: Encodable {
   // an older current state, and do not add telemetry to the audio manifest.
   var inputEventHistory: InputEventHistory?
   var rawSegments: RawSegmentStatus?
+  var microphoneFlowTimeouts: Int?
+  var clockAlignment: CapturePCMAlignment.Diagnostics?
 
   enum CodingKeys: String, CodingKey {
     case callbackCount, frames, firstPresentationTimeSeconds, lastPresentationTimeSeconds
     case appendFailures, sampleRate, channels, clockSegments, clockFailure
     case microphoneRecovery, systemRecovery
     case rawSegments
+    case microphoneFlowTimeouts, clockAlignment
   }
 
   var firstCaptureNanoseconds: Int64? { timing?.firstCaptureNanoseconds }
@@ -142,6 +145,8 @@ struct Manifest: Encodable {
   var inputEventJournalError: String? = nil
   var inputEventJournalPersistence: InputJournalPersistence? = nil
   var microphoneSelectionError: String? = nil
+  var timingEstimated: Bool? = nil
+  var observedCaptureEnd: CaptureEndMetadata? = nil
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
     guard schemaVersion == 4,
@@ -226,11 +231,37 @@ struct Manifest: Encodable {
     let (metadata, ending) = try clock.ending(
       originNanoseconds: origin, microphone: microphoneClosure, system: systemClosure)
     guard let micEnd = microphone.frames == 0 ? 0 : microphone.clockSegments?.last?.timelineEndUs,
-      let pcEnd = system.frames == 0 ? 0 : system.clockSegments?.last?.timelineEndUs,
-      micEnd <= ending.microphoneClosedUs, pcEnd <= ending.systemClosedUs
+      let pcEnd = system.frames == 0 ? 0 : system.clockSegments?.last?.timelineEndUs
     else { throw ProbeError.capture("saved PCM extends beyond its acquisition closure") }
-    captureClock = metadata
-    captureEnd = ending
+    // Like the Windows producer, a rebased lane has an estimated timeline.
+    // Native closure receipts remain mandatory; extend only that lane's logical
+    // endpoint to cover retained PCM, and disclose a conservative uncertainty.
+    let micClosed =
+      microphone.clockAlignment == nil
+      ? ending.microphoneClosedUs
+      : max(
+        micEnd, ending.microphoneClosedUs)
+    let pcClosed =
+      system.clockAlignment == nil
+      ? ending.systemClosedUs
+      : max(
+        pcEnd, ending.systemClosedUs)
+    guard micEnd <= micClosed, pcEnd <= pcClosed else {
+      throw ProbeError.capture("saved PCM extends beyond its acquisition closure")
+    }
+    let estimated = microphone.clockAlignment != nil || system.clockAlignment != nil
+    let end = max(micClosed, pcClosed)
+    guard end <= (9_007_199_254_740_991 - 1_000_000) / 1000 else {
+      throw ProbeError.capture("estimated capture timeline is outside precision bounds")
+    }
+    timingEstimated = estimated ? true : nil
+    observedCaptureEnd = estimated ? ending : nil
+    captureClock = CaptureClockMetadata(
+      originUtcMs: metadata.originUtcMs,
+      uncertaintyNs: estimated
+        ? max(metadata.uncertaintyNs, end * 1000 + 1_000_000) : metadata.uncertaintyNs)
+    captureEnd = CaptureEndMetadata(
+      microphoneClosedUs: micClosed, systemClosedUs: pcClosed, endUs: end)
     schemaVersion = 4
   }
 

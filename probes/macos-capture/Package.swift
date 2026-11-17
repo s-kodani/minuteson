@@ -11,9 +11,10 @@ let package = Package(
   products: [.executable(name: "mon-macos-capture", targets: ["MONMacOSCaptureCLI"])],
   targets: [
     .systemLibrary(name: "MONCaptureCore", path: "Sources/MONCaptureCore"),
+    .target(name: "MONAudioEngineBridge"),
     .target(
       name: "MONMacOSCapture",
-      dependencies: ["MONCaptureCore"],
+      dependencies: ["MONCaptureCore", "MONAudioEngineBridge"],
       linkerSettings: [
         .unsafeFlags(["-L", captureCoreLibrary]),
         .linkedLibrary("mon_capture_ffi"),
@@ -26,7 +27,7 @@ let package = Package(
     ),
     .executableTarget(name: "MONMacOSCaptureCLI", dependencies: ["MONMacOSCapture"]),
     .testTarget(
-      name: "MONMacOSCaptureTests", dependencies: ["MONMacOSCapture"],
+      name: "MONMacOSCaptureTests", dependencies: ["MONMacOSCapture", "MONAudioEngineBridge"],
       path: "Tests/MONMacOSCaptureTests"
     ),
   ]

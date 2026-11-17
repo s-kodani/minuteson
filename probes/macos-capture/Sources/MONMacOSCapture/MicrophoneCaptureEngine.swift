@@ -2,6 +2,7 @@ import AVFoundation
 import AudioToolbox
 import CoreAudio
 import Foundation
+import MONAudioEngineBridge
 
 enum MicrophonePCMFormat {
   static func matches(_ expected: AVAudioFormat, _ actual: AVAudioFormat) -> Bool {
@@ -22,7 +23,7 @@ protocol MicrophoneCaptureEngine: AnyObject, Sendable {
   func observeConfiguration(_ handler: (@Sendable () -> Void)?)
   func installTap(
     format: AVAudioFormat,
-    handler: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void)
+    handler: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void) throws
   func removeTap()
   func prepare()
   func start() throws
@@ -71,8 +72,8 @@ final class NativeMicrophoneCaptureEngine: MicrophoneCaptureEngine, @unchecked S
   func installTap(
     format: AVAudioFormat,
     handler: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
-  ) {
-    engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: format, block: handler)
+  ) throws {
+    if let error = MONInstallAudioTap(engine.inputNode, format, handler) { throw error }
   }
 
   func removeTap() { engine.inputNode.removeTap(onBus: 0) }
