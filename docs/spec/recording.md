@@ -15,6 +15,8 @@ sources:
 
 # 録音と音声取り込み
 
+アプリとOSの境界、プロセス・スレッド・キューは[録音構成図（draw.io・3ページ）](../diagrams/current-recording.drawio)を参照してください。PNG版は[全体構成](../diagrams/current-recording-01-overview.png)、[macOS](../diagrams/current-recording-02-macos.png)、[Windows](../diagrams/current-recording-03-windows.png)です。
+
 ## 録音範囲と入力
 
 マイクとPC音声を別トラックで取得します。全体録音は全出力機器の音声を対象とします。Windowsは各出力機器のWASAPIループバックを直接取得し、共通のQPC時刻で重ね合わせます。macOSは録音ヘルパー自身のプロセスツリーを除外します。アプリ選択録音は指定したアプリのプロセスツリーに限定し、取得失敗時に全体録音へ切り替えません。
