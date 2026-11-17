@@ -13,8 +13,7 @@ enum CaptureInputFault: String, Error, Sendable {
       format.sampleRate.rounded() == format.sampleRate,
       (8000...384000).contains(format.sampleRate),
       frames > 0,
-      mon_capture_pcm_geometry(UInt32(format.sampleRate), format.channelCount, UInt64(frames)),
-      frames <= Int(format.sampleRate) / 4
+      mon_capture_pcm_geometry(UInt32(format.sampleRate), format.channelCount, UInt64(frames))
     else { throw Self.invalidFormat }
   }
   static func copy(_ sample: CMSampleBuffer) throws -> AVAudioPCMBuffer {

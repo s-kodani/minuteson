@@ -91,6 +91,27 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
   private let owner = "735027d4-a03e-43d3-830a-21e767dfaf88"
   private let origin: Int64 = 9_000_000_000_000
 
+  func testNativeLowRateSlicesLargerThanQuarterSecondKeepEveryAcceptedFrame() throws {
+    for rate in [8000, 16000] {
+      for lane in ["microphone", "system"] {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let raw = try RawRecordingSegments(output: root, owner: owner, lane: lane)
+        let pcm = try buffer(frames: 4096, rate: Double(rate))
+        try CaptureInputFault.validate(pcm)
+        try raw.enqueue(
+          pcm, observation: .timestamp(origin), sourceFrame: 0, sourceEpoch: 1)
+        try raw.finish()
+        let stats = raw.applyingSavedAudio(to: TrackStats(callbackCount: 1))
+        XCTAssertEqual(stats.frames, Int64(4096 * 16000 / rate))
+        XCTAssertNil(raw.snapshot().failure)
+        try raw.verifyClosed(expected: stats)
+      }
+    }
+    let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1))
+    XCTAssertThrowsError(try CaptureInputFault.requireFormat(format, frames: 96_001))
+  }
+
   func testRebasedOwnedLanesRetainEveryPCMFrameAndReportEstimatedTiming() throws {
     for rate in [8000, 48000] {
       for lane in ["microphone", "system"] {

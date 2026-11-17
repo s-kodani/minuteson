@@ -36,10 +36,15 @@ final class CaptureTelemetryPublisherTests: XCTestCase {
     let data = try Data(contentsOf: directory.appendingPathComponent(leaf))
     return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
   }
-  private func awaitRevision(_ revision: Int, in directory: URL) throws -> [String: Any] {
+  private func awaitRevision(
+    _ revision: Int, in directory: URL, systemState: String? = nil
+  ) throws -> [String: Any] {
     let deadline = ContinuousClock.now.advanced(by: .seconds(3))
     while ContinuousClock.now < deadline {
-      if let value = try? report(directory), (value["revision"] as? Int ?? 0) >= revision {
+      if let value = try? report(directory), (value["revision"] as? Int ?? 0) >= revision,
+        systemState == nil
+          || (value["system"] as? [String: Any])?["state"] as? String == systemState
+      {
         return value
       }
       Thread.sleep(forTimeInterval: 0.01)
@@ -72,7 +77,8 @@ final class CaptureTelemetryPublisherTests: XCTestCase {
     XCTAssertLessThan(
       Date().timeIntervalSince(try XCTUnwrap(attributes[.modificationDate] as? Date)), 0.8)
     inputs.systemEnded()
-    let changed = try awaitRevision((fresh["revision"] as? Int ?? 0) + 1, in: directory)
+    let changed = try awaitRevision(
+      (fresh["revision"] as? Int ?? 0) + 1, in: directory, systemState: "disconnected")
     XCTAssertEqual((changed["system"] as? [String: Any])?["reason"] as? String, "stream_stopped")
     XCTAssertEqual(
       (changed["system"] as? [String: Any])?["state"] as? String, "disconnected",

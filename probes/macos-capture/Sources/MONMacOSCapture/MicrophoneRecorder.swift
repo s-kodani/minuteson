@@ -250,8 +250,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
       throw ProbeError.capture("microphone has no usable audio format")
     }
     try lock.withLock {
+      captureFormat = format
       if rawSegments != nil {
-        captureFormat = format
         stats.sampleRate = format.sampleRate
         stats.channels = format.channelCount
         normalizer = nil
@@ -319,13 +319,16 @@ final class MicrophoneRecorder: @unchecked Sendable {
         return self.configurationRevision
       }
       guard let revision else { return }
-      // Core Audio property reads may notify or wait for another queue. Keep
-      // them outside the callback/state lock, then fence the proof against
-      // notification changes and binding retirement before writing any PCM.
+      // The native input uses an ownership proof revoked by metadata listeners;
+      // HAL reads belong to the control owner, never this audio callback.
+      // Fence that proof against notification and binding retirement again
+      // under the writer lock before admitting any PCM.
       let identityError: Error?
       do {
-        try engine.verifyDevice(token)
+        try engine.verifyCallbackDevice(token)
         identityError = nil
+      } catch is MicrophoneDeviceProofPending {
+        return
       } catch { identityError = error }
       self.lock.lock()
       defer { self.lock.unlock() }
@@ -485,7 +488,9 @@ final class MicrophoneRecorder: @unchecked Sendable {
         else { throw ProbeError.capture("microphone activation is obsolete or stopped") }
         return configurationRevision
       }
-      try engine.verifyDevice(token)
+      do { try engine.verifyDevice(token) } catch is MicrophoneDeviceProofPending {
+        continue
+      }
       guard MicrophonePCMFormat.matches(format, engine.inputFormat) else {
         throw RebindError.formatChanged
       }
@@ -521,14 +526,24 @@ final class MicrophoneRecorder: @unchecked Sendable {
     throw ProbeError.capture("microphone configuration did not stabilize during initialization")
   }
 
-  private func releaseEngine() {
+  @discardableResult
+  private func releaseEngine() -> Bool {
     engine?.observeConfiguration(nil)
     if tapInstalled, let engine {
       engine.removeTap()
       tapInstalled = false
     }
-    engine?.stop()
+    do { try engine?.stop() } catch {
+      // Keep the native owner alive until an actual stop succeeds. A source
+      // failure must never fabricate acquisition closure or permit overlap.
+      lock.withLock {
+        stats.appendFailures += 1
+        stats.retainCaptureFailure(error)
+      }
+      return false
+    }
     engine = nil
+    return true
   }
 
   // Called only with the callback/state lock held.
@@ -585,6 +600,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
         configurationRevision < UInt64.max
       else { throw ProbeError.capture("microphone preparation is obsolete or stopped") }
       try stats.requireWritable(raw: rawSegments?.snapshot())
+      pending.nextProof = now.advanced(by: .milliseconds(100))
+      normalPreparation = pending
       return configurationRevision
     }
     try engine.verifyDevice(pending.token)
@@ -679,7 +696,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
       guard selected.objectID == token.objectID else {
         throw ProbeError.capture("microphone identity changed during test preparation")
       }
-      try engine.verifyDevice(token)
+      do { try engine.verifyDevice(token) } catch is MicrophoneDeviceProofPending {
+        previousRevision = nil
+        stableProofs = 0
+        continue
+      }
       guard MicrophonePCMFormat.matches(format, engine.inputFormat) else {
         throw RebindError.formatChanged
       }
@@ -773,6 +794,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       try stats.requireWritable(raw: rawSegments?.snapshot())
     }
     suspend("clock_changed")
+    try lock.withLock { try stats.requireWritable(raw: rawSegments?.snapshot()) }
     // Invalidation takes the callback lock, draining already-admitted writes.
     // After removeTap/stop, late callbacks still carry the retired binding and
     // are rejected before timestamps, CAF or raw writes are considered.
@@ -881,7 +903,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
       lastRecoveryAttempt = nil
     }
     if lock.withLock({ normalPreparation != nil && selectedDeviceID == selected.objectID }) {
-      do { try maintainNormalPreparation() } catch RebindError.formatChanged {
+      do { try maintainNormalPreparation() } catch is MicrophoneDeviceProofPending {
+        // Keep the same input fenced until the next spaced proof. The original
+        // preparation deadline still bounds a stream of racing notifications.
+        return
+      } catch RebindError.formatChanged {
         reportPreparationFailure(RebindError.formatChanged, stage: "stabilization")
         lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
         suspend("format_changed", unavailable: true)
@@ -893,19 +919,43 @@ final class MicrophoneRecorder: @unchecked Sendable {
       return
     }
     let healthy = lock.withLock {
-      (recovery?.status.state == "connected" || normalAdmission != nil) && !configurationChanged
+      (recovery?.status.state == "connected" || normalAdmission != nil)
         && selectedDeviceID == selected.objectID
     }
     if healthy, let engine, engine.isRunning {
       do {
-        let binding = try lock.withLock {
-          if let token = normalAdmission, recovery?.owns(token) == true { return token }
-          guard let binding = try recovery?.currentBinding() else {
+        let proof = try lock.withLock {
+          let binding: MicrophoneRecovery.Binding
+          if let token = normalAdmission, recovery?.owns(token) == true {
+            binding = token
+          } else if let current = try recovery?.currentBinding() {
+            binding = current
+          } else {
             throw ProbeError.capture("microphone binding is missing")
           }
-          return binding
+          guard let captureFormat else {
+            throw ProbeError.capture("microphone input format is missing")
+          }
+          return (binding, captureFormat, configurationRevision)
         }
-        try engine.verifyDevice(binding)
+        try engine.verifyDevice(proof.0)
+        guard MicrophonePCMFormat.matches(proof.1, engine.inputFormat) else {
+          throw RebindError.formatChanged
+        }
+        lock.withLock {
+          // A notification is a request to inspect the input, not proof that
+          // it was lost. Keep a running, unchanged physical input open rather
+          // than renegotiating a Bluetooth profile for an output-only event.
+          if mayContinue(), recovery?.owns(proof.0) == true,
+            configurationRevision == proof.2
+          {
+            configurationChanged = false
+          }
+        }
+        return
+      } catch is MicrophoneDeviceProofPending {
+        // Listener and metadata read raced. Recheck on the next heartbeat;
+        // opening the device again would turn notification noise into IO loss.
         return
       } catch {
         // Continue only after invalidating the old engine binding.
@@ -915,6 +965,9 @@ final class MicrophoneRecorder: @unchecked Sendable {
     // backoff instead of changing unavailable/restart_failed to engine_changed
     // on every heartbeat without any new acquisition evidence.
     if engine != nil { suspend() }
+    guard engine == nil,
+      lock.withLock({ (try? stats.requireWritable(raw: rawSegments?.snapshot())) != nil })
+    else { return }
     let now = controlNow()
     guard lock.withLock({ inputRetry.permits(retryNow()) }) else { return }
     if let lastRecoveryAttempt, now < lastRecoveryAttempt.advanced(by: .seconds(1)) { return }
@@ -954,7 +1007,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       return initialNativePending
     }
     guard !pending else { return }
-    releaseEngine()
+    guard releaseEngine() else { return }
     lock.withLock {
       if captureClosure == nil {
         do { captureClosure = try clock?.close(.microphone) } catch {
