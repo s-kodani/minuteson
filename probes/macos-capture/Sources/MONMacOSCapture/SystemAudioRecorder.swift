@@ -353,6 +353,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
       guard self.stream === stream, let token = streamToken else { return }
       streamEnded = true
       guard !stopping, recovery?.owns(token) == true else { return }
+      inputRetry.failedAttempt(at: now() ?? 0)
       recovery?.interrupt("stream_stopped")
       pcm.invalidateLevels()
       if !retries, testWindow == nil || testWindow?.accepting == true { pcm.recordFailure(error) }

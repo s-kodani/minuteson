@@ -97,6 +97,7 @@ export class RecordingInputSession{
 export function inputLabel(m:VisibleInput,input:InputKind):string{
   const label={unknown:"状態を確認できません",stale:"状態の更新を確認できません",connected:"接続済み",disconnected:"切断されました",reconnecting:"再取得中",unavailable:"再取得できません",stopped:"取得を停止しました"}[m.state];
   if(!("reason" in m)||!m.reason)return label;
+  if(m.reason==="invalid_audio_data"&&["disconnected","unavailable","reconnecting"].includes(m.state))return "音声データの異常により再取得中";
   const detail=m.reason==="permission_unavailable"?(input==="microphone"?"マイクの権限を確認してください":"PC音声の権限を確認してください"):
     ({identity_changed:"機器の識別が変更",device_changed:"録音するマイクを切替中",engine_changed:"音声エンジンが変更",device_disconnected:"選択した機器が未接続",identity_ambiguous:"機器を一意に確認できません",metadata_unavailable:"機器情報を確認できません",restart_failed:"再取得に失敗",format_changed:"入力形式が変更",invalid_audio_data:"音声データの異常により再取得中",clock_changed:"スリープ等により取得時計が変更",stream_stopped:"取得処理が停止",application_unavailable:"選択したアプリを確認できません",acquisition_timeout:"取得処理の応答待ち"} as Record<string,string>)[m.reason]??"取得条件を確認してください";
   return `${label}（${detail}）`;

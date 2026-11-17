@@ -172,7 +172,7 @@ struct CaptureSession {
           selection_schedule.begin(selection_now);
           selection_preparation=std::make_unique<SelectionPreparation>([uid=s.uid,pid=s.pid,identity](auto){return current_microphone_choice(uid,pid,identity);});
         }
-        for(auto lane:{&mic,&system})if(lane->started){try{lane->pump();}catch(const InputDataFault&){if(s.test)throw;lane->input_fault();}catch(const InputFailure& error){lane->detach(error.result==E_ACCESSDENIED?"permission_unavailable":lane==&mic?"device_disconnected":"stream_stopped");}}
+        for(auto lane:{&mic,&system})if(lane->started){try{lane->pump();}catch(const InputDataFault&){if(s.test)throw;lane->input_fault();}catch(const InputFailure& error){if(lane->input_retry.failures)mon_capture_input_fault(&lane->input_retry,GetTickCount64()*1000000ULL);lane->detach(error.result==E_ACCESSDENIED?"permission_unavailable":lane==&mic?"device_disconnected":"stream_stopped");}}
         reconnect(mic,true);reconnect(system,false);
         if(s.test&&!start&&mic.preparation_schedule.initial_resolved&&system.preparation_schedule.initial_resolved){
           start=qpc();mic.holding_for_window=system.holding_for_window=false;

@@ -1556,7 +1556,8 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       defer { try? FileManager.default.removeItem(at: directory) }
       let old = SilentSystemSource()
       let next = SilentSystemSource()
-      let factory = SilentSystemFactory([old, next])
+      let third = SilentSystemSource()
+      let factory = SilentSystemFactory([old, next, third])
       let time = SystemTestTime()
       let commits = RawSegmentCommitWorker()
       let raw = try RawRecordingSegments(
@@ -1591,6 +1592,14 @@ final class SystemAudioRecoveryTests: XCTestCase, @unchecked Sendable {
       recorder.receive(
         from: old, sampleBuffer: try sample(value: .nan), observation: .timestamp(1_040_000_000))
       XCTAssertEqual(recorder.snapshot().systemRecovery?.state, "connected")
+      recorder.sourceEnded(next)
+      time.set(3_999_999_999)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 2, "one valid packet must not reset backoff")
+      time.set(4_000_000_000)
+      recorder.maintain()
+      try await wait { !recorder.acquisitionPending }
+      XCTAssertEqual(factory.calls, 3)
       _ = try await recorder.stopRecording()
       XCTAssertEqual(recorder.snapshot().frames, 320)
       XCTAssertEqual(recorder.snapshot().appendFailures, 0)

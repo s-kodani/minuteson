@@ -66,7 +66,7 @@ test("invalid audio data is a recoverable reason for both independent inputs",()
     const value={...report(),[input]:status};
     assert.deepEqual(checkedInputStatus(value,owner),value);
     const session=new RecordingInputSession();session.reset(owner);session.accept(value,0);
-    assert.match(inputLabel(session.read(0)[input],input),/音声データの異常により再取得中/u);
+    assert.equal(inputLabel(session.read(0)[input],input),"音声データの異常により再取得中");
     assert.equal(session.read(0)[input==="microphone"?"system":"microphone"].state,"connected");
     assert.deepEqual(session.read(0).notices,[]);
   }

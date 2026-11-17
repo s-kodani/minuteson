@@ -714,6 +714,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
       retireBinding(reason, unavailable: unavailable)
     }
     releaseEngine()
+    flushRetiredSource()
+    // The current CAF remains open. Recreating it would overwrite prior PCM.
+  }
+
+  private func flushRetiredSource() {
     do {
       if lock.withLock({ inputRetry.recovering }) { try rawSegments?.retireSource() }
     } catch {
@@ -722,7 +727,6 @@ final class MicrophoneRecorder: @unchecked Sendable {
         stats.retainCaptureFailure(error)
       }
     }
-    // The current CAF remains open. Recreating it would overwrite prior PCM.
   }
 
   // Caller holds the callback lock. Invalidation and the last-PCM timeout
@@ -851,11 +855,13 @@ final class MicrophoneRecorder: @unchecked Sendable {
         controlNow() >= flow.deadline
       else { return false }
       stats.microphoneFlowTimeouts = (stats.microphoneFlowTimeouts ?? 0) + 1
+      inputRetry.failedAttempt(at: retryNow())
       retireBinding("engine_changed", unavailable: true)
       return true
     }
     if flowExpired {
       releaseEngine()
+      flushRetiredSource()
       lastRecoveryAttempt = nil
     }
     if lock.withLock({ normalPreparation != nil && selectedDeviceID == selected.objectID }) {
