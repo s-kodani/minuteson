@@ -73,14 +73,74 @@ void source_fault_preserves_both_recording_lanes(){
   require(rejected&&mic.binding.state=="unavailable"&&mic.binding.reason=="invalid_audio_data","input data error did not retire the affected binding");
   require(system.binding.state=="connected","microphone fault interrupted PC audio");
   system.pump();
+  const auto retired_by=GetTickCount64()+5000;
+  while(mic.retirement&&GetTickCount64()<retired_by){mic.poll_retirement();Sleep(1);}
+  require(!mic.retirement,"source fault did not finish its owned retirement");
   mic.adopt(prepare(1,110000000,false));mic.pump();
   mic.close();system.close();mic.raw->finish();system.raw->finish();commits->wait();
   require(mic.raw->stored_frames()==640&&system.raw->stored_frames()==320,"reacquisition lost valid PCM or included the rejected packet");
   const auto state=pending->snapshot();require(state.frames[0]==0&&state.frames[1]==0&&state.bytes==0&&state.jobs==0,"source fault leaked pending storage credits");
 }
+struct StopGate {
+  std::mutex mutex;std::condition_variable changed;bool entered=false,open=false;
+  void wait(){std::unique_lock lock(mutex);entered=true;changed.notify_all();changed.wait(lock,[&]{return open;});}
+  void release(){{std::lock_guard lock(mutex);open=true;}changed.notify_all();}
+};
+class HeldStopReader final : public product::CaptureReader {
+  std::shared_ptr<StopGate> gate_;
+ public: explicit HeldStopReader(std::shared_ptr<StopGate> gate):gate_(std::move(gate)){}
+  void stop() override{gate_->wait();}
+};
+void bluetooth_stop_wait_cannot_block_pc_audio_or_status(){
+  const auto directory=fs::temp_directory_path()/(L"mon-bt-stop-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(product::qpc()));
+  fs::create_directory(directory);
+  struct Cleanup {fs::path path;~Cleanup(){fs::remove_all(path);}} cleanup{directory};
+  constexpr auto owner="735027d4-a03e-43d3-830a-21e767dfaf88";
+  auto pending=std::make_shared<product::StoragePending>();auto commits=std::make_shared<product::RawCommitWorker>(pending);
+  product::Lane mic(directory/L"microphone.caf",1),pc(directory/L"system.caf",2);
+  mic.raw=std::make_unique<product::RawSegments>(directory,owner,"microphone",1,commits);
+  pc.raw=std::make_unique<product::RawSegments>(directory,owner,"system",2,commits);
+  auto gate=std::make_shared<StopGate>();
+  // A watchdog makes the old synchronous implementation fail instead of
+  // hanging the test forever. No physical Bluetooth or WASAPI device opens.
+  std::jthread watchdog([gate]{std::unique_lock lock(gate->mutex);gate->changed.wait_for(lock,std::chrono::seconds(5),[&]{return gate->open;});lock.unlock();gate->release();});
+  struct Release {std::shared_ptr<StopGate> gate;~Release(){gate->release();}} release{gate};
+  product::PreparedInput input;input.matching_position_rate=true;input.reader=std::make_unique<HeldStopReader>(gate);
+  for(unsigned i=0;i<20;++i){product::CapturePacket first;first.frames=480;first.samples.assign(480,0.25f);first.time=100000000+i*100000ULL;first.arrival=first.time;first.position=i*480;input.reader->queue.push(std::move(first));}
+  mic.adopt(std::move(input));
+  pc.clock.begin_stream(true);pc.binding.connected();
+  const auto started=GetTickCount64();mic.detach("device_changed");
+  require(GetTickCount64()-started<1000,"Bluetooth Stop blocked input status/control thread");
+  bool overlap=false;try{product::PreparedInput replacement;replacement.reader=std::make_unique<QueuedReader>();mic.adopt(std::move(replacement));}catch(const std::logic_error&){overlap=true;}
+  require(overlap,"replacement input opened before old native stop completed");
+  product::MetadataWorker metadata(directory,owner);std::vector<float> signal(960,0.25f);std::uint64_t revision=0;
+  for(unsigned i=0;i<125;++i){
+    mic.poll_retirement();pc.append(signal.data(),480,100000000+i*100000ULL,i*480,0,100000000+i*100000ULL);
+    if(i%20==0)metadata.publish(product::Json{{"schemaVersion",3},{"ownerId",owner},{"revision",++revision},{"microphone",mic.binding.status()},{"system",pc.binding.status()},{"microphoneHistory",mic.binding.history()},{"systemHistory",pc.binding.history()}},false);
+    Sleep(10);
+  }
+  {std::lock_guard lock(gate->mutex);require(gate->entered&&!gate->open,"native stop was not held during status publication");}
+  metadata.finish();
+  product::Json status;{std::ifstream file(directory/L"input-status.json");file>>status;}
+  require(status["revision"]==revision&&status["system"]["state"]=="connected"&&status["microphone"]["state"]=="disconnected","pending Bluetooth retirement aged or falsified live PC status");
+  // Virtual expiry proves stop cannot publish closure or start another Stop
+  // while the original native call is still owned. Accepted PCM remains salvageable.
+  mic.retirement_wait_expired=true;bool unproven=false;
+  try{mic.close();}catch(const std::runtime_error&){unproven=true;}
+  require(unproven&&!mic.acquisition_closed(),"pending native stop manufactured recording closure");
+  mic.raw->drain();mic.raw->seal();commits->wait();
+  require(mic.raw->stored_frames()==20*160&&mic.raw->status()["producerClosed"]==false,"pending stop lost the validated prefix or closed it falsely");
+  gate->release();watchdog.join();
+  const auto deadline=GetTickCount64()+5000;while(mic.retirement&&GetTickCount64()<deadline){mic.poll_retirement();Sleep(1);}
+  require(!mic.retirement,"completed native stop remained owned");
+  mic.close();pc.close();mic.raw->finish();pc.raw->finish();commits->wait();
+  require(mic.raw->stored_frames()==20*160&&pc.raw->stored_frames()==125*160,"retirement lost accepted mic/PC samples");
+  const auto remaining=pending->snapshot();require(!remaining.frames[0]&&!remaining.frames[1]&&!remaining.jobs&&!remaining.bytes,"native retirement leaked recording credits");
+}
 int main(){
   try {
     source_fault_preserves_both_recording_lanes();
+    bluetooth_stop_wait_cannot_block_pc_audio_or_status();
     product::MicrophoneFlow flow(100);
     require(!flow.expired(3099)&&flow.expired(3100)&&!flow.received,"microphone first-packet deadline changed");
     flow.packet(3000);

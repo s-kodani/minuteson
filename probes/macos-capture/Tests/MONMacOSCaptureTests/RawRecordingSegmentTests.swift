@@ -166,12 +166,16 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
         XCTAssertNil(raw.snapshot().failure)
         try raw.retireSource()
         try raw.drainAcceptedPCM()
-        XCTAssertEqual(raw.snapshot().sealedFrames, 68_000, "valid converter tail must survive")
+        XCTAssertEqual(
+          raw.applyingSavedAudio(to: TrackStats()).frames, 68_000,
+          "valid converter tail must survive")
         try raw.enqueue(
           pcm, observation: .timestamp(origin + 10_000_000_000), sourceFrame: 0, sourceEpoch: 2)
         try raw.finish()
         let stats = raw.applyingSavedAudio(to: TrackStats())
         XCTAssertEqual(stats.frames, 72_000)
+        XCTAssertEqual(
+          raw.snapshot().sealedSegments, 2, "no short intermediate receipt may be published")
         XCTAssertTrue(raw.snapshot().producerClosed)
         XCTAssertNil(raw.snapshot().failure)
         try raw.verifyClosed(expected: stats)
@@ -736,7 +740,7 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
         buffer(frames: 8), observation: .timestamp(origin + 402_000_000), sourceFrame: 1608))
   }
 
-  func testLaterNormalizationFailureStillCommitsPreviouslyValidatedQueuedSegments() throws {
+  func testFinalizationCapacityFailureStillCommitsPreviouslyValidatedQueuedSegments() throws {
     let root = try directory()
     defer { try? FileManager.default.removeItem(at: root) }
     let gate = RawSegmentGate()
@@ -772,7 +776,7 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     try writer.enqueue(
       quarter,
       observation: .timestamp(origin + 10_250_000_000), sourceFrame: 0, sourceEpoch: 2)
-    XCTAssertThrowsError(try writer.retireSource())
+    try writer.retireSource()
     gate.released.signal()
     XCTAssertThrowsError(try writer.finish())
     XCTAssertNotNil(writer.snapshot().failure)

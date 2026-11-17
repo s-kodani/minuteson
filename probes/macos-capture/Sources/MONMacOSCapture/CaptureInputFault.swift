@@ -61,6 +61,9 @@ enum CaptureInputFault: String, Error, Sendable {
 
 struct CaptureInputRetry {
   private static let diagnostics = DispatchQueue(label: "app.mon.capture.input-fault-log")
+  static func diagnostic(_ message: String) {
+    diagnostics.async { FileHandle.standardError.write(Data((message + "\n").utf8)) }
+  }
   private var value = MonCaptureInputRetry()
   private var reported = 0
   var recovering: Bool { value.failures > 0 }

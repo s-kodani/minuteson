@@ -31,10 +31,15 @@ protocol MicrophoneCaptureEngine: AnyObject, Sendable {
 }
 
 final class NativeMicrophoneCaptureEngine: MicrophoneCaptureEngine, @unchecked Sendable {
-  private let engine = AVAudioEngine()
+  private let engine: AVAudioEngine
   private var observer: NSObjectProtocol?
 
-  var inputFormat: AVAudioFormat { engine.inputNode.outputFormat(forBus: 0) }
+  init(engine: AVAudioEngine = AVAudioEngine()) { self.engine = engine }
+
+  // The output/client bus can retain 44.1 kHz while a Bluetooth speakerphone
+  // has already switched its hardware input to 16 kHz. Applying that stale
+  // client format to a tap starts another format negotiation/retry loop.
+  var inputFormat: AVAudioFormat { engine.inputNode.inputFormat(forBus: 0) }
   var isRunning: Bool { engine.isRunning }
 
   func selectDevice(_ binding: MicrophoneRecovery.Binding) throws {

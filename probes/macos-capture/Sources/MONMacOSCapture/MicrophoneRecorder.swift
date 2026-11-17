@@ -16,6 +16,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private var lastRecoveryAttempt: ContinuousClock.Instant?
   private var inputRetry = CaptureInputRetry()
   private let retryOrigin: ContinuousClock.Instant
+  private var preparationReports = 0
   private struct NormalPreparation {
     let token: MicrophoneRecovery.Binding
     let format: AVAudioFormat
@@ -163,6 +164,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
       }
       try configure(selected)
     } catch {
+      reportPreparationFailure(error, stage: "initial")
       suspend("restart_failed", unavailable: true)
       if clock == nil || testWindow != nil || !mayContinue() {
         lock.withLock { recovery?.stop() }
@@ -549,6 +551,20 @@ final class MicrophoneRecorder: @unchecked Sendable {
     return max(0, elapsed.seconds * 1_000_000_000 + elapsed.attoseconds / 1_000_000_000)
   }
 
+  private func reportPreparationFailure(_ error: Error, stage: String) {
+    let status = lock.withLock { () -> MicrophoneRecovery.Status? in
+      guard preparationReports < 16 else { return nil }
+      preparationReports += 1
+      return recovery?.status
+    }
+    guard let status else { return }
+    let detail = String(String(describing: error).prefix(1200)).replacingOccurrences(
+      of: "\n", with: " ")
+    CaptureInputRetry.diagnostic(
+      "mon_capture_microphone_preparation: stage=\(stage) epoch=\(status.sourceEpoch) error=\(detail)"
+    )
+  }
+
   /// Serialized control-loop proofs, not sleeps or engine control on Apple's
   /// notification/audio queue. Delayed startup notifications keep this same
   /// engine preparing instead of repeatedly reporting a false recovery.
@@ -866,9 +882,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
     }
     if lock.withLock({ normalPreparation != nil && selectedDeviceID == selected.objectID }) {
       do { try maintainNormalPreparation() } catch RebindError.formatChanged {
+        reportPreparationFailure(RebindError.formatChanged, stage: "stabilization")
         lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
         suspend("format_changed", unavailable: true)
       } catch {
+        reportPreparationFailure(error, stage: "stabilization")
         lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
         suspend("restart_failed", unavailable: true)
       }
@@ -902,9 +920,11 @@ final class MicrophoneRecorder: @unchecked Sendable {
     if let lastRecoveryAttempt, now < lastRecoveryAttempt.advanced(by: .seconds(1)) { return }
     lastRecoveryAttempt = now
     do { try configure(selected) } catch RebindError.formatChanged {
+      reportPreparationFailure(RebindError.formatChanged, stage: "recovery")
       lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
       suspend("format_changed", unavailable: true)
     } catch {
+      reportPreparationFailure(error, stage: "recovery")
       lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
       suspend("restart_failed", unavailable: true)
     }

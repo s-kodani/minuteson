@@ -119,6 +119,8 @@ enum CaptureSession {
     let tap = CoreAudioTapRecorder(
       outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
       levelsEnabled: options.inputLevelOwner != nil, rawSegments: rawSystem)
+    var telemetry: CaptureTelemetryPublisher?
+    defer { telemetry?.stop() }
     var manifest = Manifest(
       schemaVersion: 4,
       scenario: options.scenario,
@@ -197,10 +199,19 @@ enum CaptureSession {
       }
       manifest.captureTest = testWindow?.metadata()
       try write(manifest, to: manifestURL)
+      if let owner = options.inputLevelOwner {
+        let standalone = options.usesStandaloneTapProbe
+        telemetry = CaptureTelemetryPublisher(
+          output: options.output, owner: owner, publishesStatus: options.publishesInputStatus,
+          snapshots: { (mic.snapshot(), standalone ? tap.snapshot() : system.snapshot()) },
+          journal: {
+            if let inputEvents { try? journalStatus?.publish(inputEvents.persistence()) }
+          })
+        telemetry?.start()
+      }
       if options.stopOnFile {
         let stopRequest = options.output.appendingPathComponent("stop.request")
         let startedAt = ContinuousClock.now
-        var levelRevision: Int64 = 0
         while options.shouldContinueRecording(
           startedAt: startedAt, now: .now,
           stopRequested: FileManager.default.fileExists(atPath: stopRequest.path),
@@ -277,34 +288,6 @@ enum CaptureSession {
               microphone.clockAlignment != nil || systemStats.clockAlignment != nil ? true : nil
             try write(manifest, to: manifestURL)
           }
-          if let owner = options.inputLevelOwner, levelRevision < 9_007_199_254_740_991 {
-            levelRevision += 1
-            if options.publishesInputStatus,
-              let status = microphone.microphoneRecovery,
-              let history = microphone.inputEventHistory
-            {
-              try? InputStatusReport(
-                ownerId: owner, revision: levelRevision, microphone: status,
-                system: systemStats.systemRecovery,
-                microphoneHistory: history,
-                systemHistory: systemStats.inputEventHistory
-              )
-              .publish(to: options.output)
-            }
-            if let inputEvents {
-              try? journalStatus?.publish(inputEvents.persistence())
-            }
-            let microphone = microphone.inputLevel
-            let systemLevel =
-              (options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot())
-              .inputLevel
-            let now = PCMInputLevel.nowNanoseconds()
-            // Failure to publish telemetry must not stop or declare a saved recording.
-            try? InputLevelReport(
-              ownerId: owner, revision: levelRevision, microphone: microphone.snapshot(at: now),
-              system: systemLevel.snapshot(at: now)
-            ).publish(to: options.output)
-          }
           try await Task.sleep(for: .milliseconds(options.inputLevelOwner == nil ? 200 : 100))
         }
       } else {
@@ -319,6 +302,7 @@ enum CaptureSession {
           try await Task.sleep(for: .milliseconds(100))
         }
       }
+      telemetry?.stop()
       testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
       let systemClosure = try await stopInputs(microphone: mic) {
         if options.publishesInputStatus {
@@ -380,6 +364,7 @@ enum CaptureSession {
       // Keep the initiating failure first. Cleanup can also fail when an
       // input never started, but must not replace the permission/device error.
       manifest.errors.append(String(describing: error))
+      telemetry?.stop()
       testWindow?.finish(at: PCMInputLevel.nowNanoseconds())
       do {
         _ = try await stopInputs(microphone: mic) {

@@ -219,6 +219,22 @@ private final class SilentMicrophoneEngine: MicrophoneCaptureEngine, @unchecked 
 }
 
 final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
+  func testNativeCaptureUsesHardwareInputFormatInsteadOfStaleClientBus() throws {
+    // Offline input deliberately has different hardware/client formats. No
+    // microphone, Bluetooth device, permission prompt or real IO is started.
+    let engine = AVAudioEngine()
+    let hardware = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1))
+    let client = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
+    try engine.enableManualRenderingMode(.offline, format: client, maximumFrameCount: 1024)
+    defer { engine.disableManualRenderingMode() }
+    let input = engine.inputNode
+    XCTAssertTrue(input.setManualRenderingInputPCMFormat(hardware, inputBlock: { _ in nil }))
+    engine.connect(input, to: engine.mainMixerNode, format: client)
+    XCTAssertEqual(input.inputFormat(forBus: 0).sampleRate, 16000)
+    XCTAssertEqual(input.outputFormat(forBus: 0).sampleRate, 44100)
+    XCTAssertEqual(NativeMicrophoneCaptureEngine(engine: engine).inputFormat.sampleRate, 16000)
+  }
+
   func testDetachedNativeTapExceptionReturnsAnErrorWithoutUnwindingSwift() throws {
     // A detached mixer has no engine. This exercises AVFAudio's real exception
     // path without opening a hardware input or asking for OS permission.

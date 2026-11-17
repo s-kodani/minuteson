@@ -53,6 +53,8 @@ struct CaptureSession {
     std::string selected=s.uid;
     auto reconnect=[&](Lane& lane,bool microphone){
       const auto now=GetTickCount64();
+      lane.poll_retirement();
+      if(lane.retirement)return;
       if(lane.preparation){
         // Expiry wins over a result first observed after the deadline. Such a
         // result is never allowed to restart a timed-out or stopped input.

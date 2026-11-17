@@ -360,11 +360,9 @@ final class RawRecordingSegments: @unchecked Sendable {
           converter = nil
           outputEpoch += 1
         }
-        if let active {
-          let maps = try active.timing.finish(
-            originNanoseconds: active.origin, expectedFrames: active.frames)
-          try seal(active, maps: maps)
-        }
+        // Keep the partial assembler: a short intermediate receipt cannot be
+        // extended by the Rust reader. The next binding continues this bounded
+        // four-second segment with a new clock map; final stop seals its tail.
         guard sourceCredits.isEmpty else {
           throw ProbeError.capture("retired source retained unmatched acquisition credits")
         }
