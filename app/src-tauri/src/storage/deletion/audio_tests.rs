@@ -183,7 +183,41 @@ impl Fixture {
             .unwrap()
     }
     pub(crate) fn documents(&self) {
+        // Analysis admission requires a committed canonical WAV. Keep this
+        // deletion fixture's one audio asset and its identity, but replace the
+        // placeholder PCM and register the same publication evidence as production.
+        let mut wave = crate::audio::wave::header(16000).unwrap();
+        wave.resize(wave.len() + 32000, 0);
+        std::fs::write(&self.path, &wave).unwrap();
+        let (bytes, hash) = crate::storage::hash_file(&self.path).unwrap();
+        let relative = PathBuf::from(format!("meetings/{}/analysis-source.json", self.meeting));
+        std::fs::write(self.storage.root().join(&relative), b"{}").unwrap();
+        let manifest = self
+            .storage
+            .register_ready_meeting_asset(&self.meeting, &relative, "application/json")
+            .unwrap();
+        {
+            let db = self.storage.connection.lock().unwrap();
+            db.execute("UPDATE file_assets SET media_type='audio/wav',size_bytes=?2,content_hash=?3 WHERE id=?1", params![self.asset,bytes,hash]).unwrap();
+            db.execute("UPDATE audio_tracks SET kind='processed',format='wav',sample_rate=16000 WHERE id=?1", [&self.track]).unwrap();
+            db.execute(
+                "UPDATE audio_chunks SET frame_count=16000,sample_rate=16000 WHERE track_id=?1",
+                [&self.track],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE recording_sessions SET audio_manifest_hash=?2 WHERE id=?1",
+                params![self.session, manifest.content_hash],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO meeting_audio_commits VALUES(?1,?2,?3,?4,16000,'{}','[]','cleaned',0)",
+                params![self.meeting, self.track, manifest.id, manifest.content_hash],
+            )
+            .unwrap();
+        }
         let mut input = analysis_fixture::input();
+        input.audio_manifest_hash = manifest.content_hash;
         for segment in &mut input.segments {
             segment.track_id = self.track.clone();
         }
@@ -207,6 +241,19 @@ impl Fixture {
             "# 音声削除後も保持する人間本文\n",
         );
     }
+}
+
+#[test]
+fn documents_fixture_has_verified_canonical_audio_and_keeps_one_deletion_target() {
+    let f = Fixture::new();
+    f.documents();
+    let plan = f
+        .storage
+        .verify_canonical_audio(&f.meeting, &crate::test_support::never_cancelled)
+        .unwrap();
+    assert_eq!(plan.tracks[0].id, f.track);
+    assert_eq!(plan.tracks[0].chunks[0].frames, 16000);
+    assert_eq!(f.preview().audio_files, 1);
 }
 
 fn entry<'a>(preview: &'a Preview, suffix: &str) -> &'a Entry {
