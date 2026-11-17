@@ -34,6 +34,7 @@ class FakeCapture final : public IAudioCaptureClient {
   void same_thread(){auto id=GetCurrentThreadId();if(!thread)thread=id;require(thread==id,"GetBuffer/ReleaseBuffer changed acquisition threads");}
  public:
   std::atomic<unsigned> released{0},packet_limit{500};DWORD thread=0,service_release_thread=0;
+  unsigned invalid_at=std::numeric_limits<unsigned>::max();
   explicit FakeCapture(bool fail):fail_(fail){}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID,void** value) override{*value=nullptr;return E_NOINTERFACE;}
   ULONG STDMETHODCALLTYPE AddRef() override{return ++references_;}
@@ -43,12 +44,43 @@ class FakeCapture final : public IAudioCaptureClient {
     same_thread();auto p=released.load();*count=479;*position=p*160;*time=p*75000;
     *flags=p%17==0?AUDCLNT_BUFFERFLAGS_SILENT:0;
     for(unsigned i=0;i<479;++i){buffer_[2*i]=float(std::sin(double(p*479+i)*0.04));buffer_[2*i+1]=-buffer_[2*i];}
+    if(p==invalid_at){*flags=0;buffer_[0]=NAN;}
     *data=(*flags&AUDCLNT_BUFFERFLAGS_SILENT)?nullptr:reinterpret_cast<BYTE*>(buffer_.data());return S_OK;
   }
   HRESULT STDMETHODCALLTYPE ReleaseBuffer(UINT32 count) override{same_thread();require(count==479,"buffer released with wrong frame count");std::fill(buffer_.begin(),buffer_.end(),NAN);++released;return S_OK;}
 };
+class QueuedReader final : public product::CaptureReader {
+ public: void stop() override{}
+};
+void source_fault_preserves_both_recording_lanes(){
+  const auto directory=fs::temp_directory_path()/(L"mon-input-fault-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(product::qpc()));
+  fs::create_directory(directory);
+  struct Cleanup {fs::path path;~Cleanup(){fs::remove_all(path);}} cleanup{directory};
+  auto pending=std::make_shared<product::StoragePending>();
+  auto commits=std::make_shared<product::RawCommitWorker>(pending);
+  product::Lane mic(directory/L"microphone.caf",1),system(directory/L"system.caf",2);
+  constexpr auto owner="735027d4-a03e-43d3-830a-21e767dfaf88";
+  mic.raw=std::make_unique<product::RawSegments>(directory,owner,"microphone",1,commits);
+  system.raw=std::make_unique<product::RawSegments>(directory,owner,"system",2,commits);
+  auto prepare=[](unsigned channels,std::uint64_t start,bool fault){
+    product::PreparedInput ready;ready.matching_position_rate=true;auto reader=std::make_unique<QueuedReader>();
+    for(unsigned i=0;i<2;++i){product::CapturePacket p;p.frames=480;p.samples.assign(480*channels,0.25f);p.time=start+i*100000;p.arrival=p.time;p.position=i*480;reader->queue.push(std::move(p));}
+    if(fault)reader->queue.fail(std::make_exception_ptr(product::InputDataFault("invalid source data")));
+    ready.reader=std::move(reader);return ready;
+  };
+  mic.adopt(prepare(1,100000000,true));system.adopt(prepare(2,100000000,false));
+  bool rejected=false;try{mic.pump();}catch(const product::InputDataFault&){rejected=true;mic.input_fault();}
+  require(rejected&&mic.binding.state=="unavailable"&&mic.binding.reason=="invalid_audio_data","input data error did not retire the affected binding");
+  require(system.binding.state=="connected","microphone fault interrupted PC audio");
+  system.pump();
+  mic.adopt(prepare(1,110000000,false));mic.pump();
+  mic.close();system.close();mic.raw->finish();system.raw->finish();commits->wait();
+  require(mic.raw->stored_frames()==640&&system.raw->stored_frames()==320,"reacquisition lost valid PCM or included the rejected packet");
+  const auto state=pending->snapshot();require(state.frames[0]==0&&state.frames[1]==0&&state.bytes==0&&state.jobs==0,"source fault leaked pending storage credits");
+}
 int main(){
   try {
+    source_fault_preserves_both_recording_lanes();
     product::MicrophoneFlow flow(100);
     require(!flow.expired(3099)&&flow.expired(3100)&&!flow.received,"microphone first-packet deadline changed");
     flow.packet(3000);
@@ -129,6 +161,18 @@ int main(){
       require(meter.frames==480&&meter.packets==1&&level["state"]=="measured"&&level["peak"]==0.25&&level["rms"]==0.25,"received endpoint audio did not reach the saved lane and PC meter");
     }
     fs::remove(meter_path);
+    for(UINT32 channels:{1u,2u}){
+      ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(false);capture.Attach(input);input->invalid_at=1;
+      ComPtr<IAudioClient> client;auto* device=new FakeClient(input);client.Attach(device);
+      product::AsyncCapture reader(client,channels);
+      const auto deadline=GetTickCount64()+5000;
+      while(input->released<2&&GetTickCount64()<deadline)Sleep(1);
+      reader.stop();
+      require(input->released==2&&device->stops>0,"invalid packet did not release native buffer and stop on owner thread");
+      require(reader.queue.pop()->frames==479,"valid packet before input fault was lost");
+      bool rejected=false;try{reader.queue.pop();}catch(const product::InputDataFault&){rejected=true;}
+      require(rejected,"native input fault became a generic writer error");
+    }
     for(bool fail:{false,true}) {
       ComPtr<IAudioCaptureClient> capture;auto* input=new FakeCapture(fail);capture.Attach(input);
       ComPtr<IAudioClient> client;auto* device=new FakeClient(input);client.Attach(device);

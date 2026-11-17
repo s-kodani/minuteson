@@ -12,6 +12,13 @@
 #include "storage_pending.h"
 
 namespace product {
+struct InputDataFault : std::runtime_error {
+  explicit InputDataFault(const char* reason):std::runtime_error(reason){}
+};
+inline void require_input_pcm(const float* samples,std::uint32_t frames,std::uint32_t channels,bool silent=false){
+  if(!mon_capture_pcm_geometry(48000,channels,frames))throw InputDataFault("invalid PCM geometry");
+  if(!silent&&!mon_capture_pcm_samples(samples,std::size_t(frames)*channels))throw InputDataFault("invalid PCM samples");
+}
 struct AlignmentLoss {
   std::uint64_t first=0,frames=0;
   const char* reason="late";
@@ -47,6 +54,11 @@ class PacketQueue {
  public:
   static inline const std::uint64_t max_frames=48000*mon_capture_limit(7)/1000000000;
   void push(CapturePacket packet) {
+    // Rejection cannot acquire storage credits or contaminate the converter.
+    const bool silent=(packet.flags&2)!=0;
+    if(!packet.frames||(!silent&&(packet.samples.size()%packet.frames!=0)))throw InputDataFault("invalid queued PCM layout");
+    const auto channels=packet.samples.empty()?1u:std::uint32_t(packet.samples.size()/packet.frames);
+    require_input_pcm(packet.samples.data(),packet.frames,channels,silent);
     std::lock_guard lock(mutex_);
     const auto bytes=std::uint64_t(packet.samples.size())*sizeof(float);
     const auto duration=(std::uint64_t(packet.frames)*1000000000+47999)/48000;

@@ -135,6 +135,11 @@ final class RawRecordingSegments: @unchecked Sendable {
   private var converterInputFrames: Int64 = 0
   private var converterOutputBase: Int64 = 0
   private var sourceCredits: [SourceCredit] = []
+  // Admission owns the last source counter; the serial normalizer must never
+  // discover malformed source data after it has mutated converter state.
+  private var admittedEpoch: UInt64?
+  private var admittedFormat: AVAudioFormat?
+  private var admittedSourceEnd: Int64?
   private var compactStats = TrackStats()
   private var outputEpoch: UInt64 = 0
 
@@ -207,22 +212,9 @@ final class RawRecordingSegments: @unchecked Sendable {
   func enqueue(
     _ sample: CMSampleBuffer, observation: CaptureClockObservation?, sourceEpoch: UInt64
   ) throws {
-    guard sample.isValid, sample.numSamples > 0, sample.numSamples <= 96_000,
-      let description = sample.formatDescription
-    else { throw ProbeError.capture("raw segment sample is invalid") }
-    let format = AVAudioFormat(cmAudioFormatDescription: description)
-    try Self.requireFormat(format, frames: sample.numSamples)
-    guard
-      let buffer = AVAudioPCMBuffer(
-        pcmFormat: format, frameCapacity: AVAudioFrameCount(sample.numSamples))
-    else { throw ProbeError.capture("raw segment sample allocation failed") }
-    buffer.frameLength = AVAudioFrameCount(sample.numSamples)
-    guard
-      CMSampleBufferCopyPCMDataIntoAudioBufferList(
-        sample, at: 0, frameCount: Int32(sample.numSamples), into: buffer.mutableAudioBufferList
-      ) == noErr
-    else { throw ProbeError.capture("raw segment sample copy failed") }
-    try enqueue(buffer, observation: observation, sourceFrame: nil, sourceEpoch: sourceEpoch)
+    try enqueue(
+      CaptureInputFault.copy(sample), observation: observation, sourceFrame: nil,
+      sourceEpoch: sourceEpoch)
   }
 
   func enqueue(
@@ -230,9 +222,11 @@ final class RawRecordingSegments: @unchecked Sendable {
     sourceEpoch: UInt64 = 0
   ) throws {
     let frames = Int(buffer.frameLength)
-    try Self.requireFormat(buffer.format, frames: frames)
-    guard let observation, case .timestamp = observation else {
-      throw ProbeError.capture("raw segment capture timestamp is unavailable")
+    try CaptureInputFault.validate(buffer)
+    guard let observation, case .timestamp(let timestamp) = observation,
+      timestamp >= 0
+    else {
+      throw CaptureInputFault.invalidClock
     }
     let bytes = frames * Int(buffer.format.channelCount) * 4
     let rate = Int64(buffer.format.sampleRate)
@@ -240,9 +234,31 @@ final class RawRecordingSegments: @unchecked Sendable {
     // admit more PCM than the shared pending limit. requireFormat bounds
     // frames and the integer rate, so this numerator cannot overflow Int64.
     let duration = (Int64(frames) * 1_000_000_000 + rate - 1) / rate
+    guard timestamp <= Int64.max - duration else { throw CaptureInputFault.invalidClock }
+    let sourceEnd: Int64?
+    if let sourceFrame {
+      let (end, overflow) = sourceFrame.addingReportingOverflow(Int64(frames))
+      guard !overflow, sourceFrame >= 0 else { throw CaptureInputFault.sourceCounter }
+      sourceEnd = end
+    } else {
+      sourceEnd = nil
+    }
     try lock.withLock {
       guard accepting, failure == nil, admissionFailure == nil else {
         throw ProbeError.capture("raw segment writer is closed or failed")
+      }
+      if let admittedEpoch {
+        guard sourceEpoch >= admittedEpoch else {
+          throw ProbeError.capture("retired source entered raw recording admission")
+        }
+        if sourceEpoch == admittedEpoch {
+          if let admittedFormat, !admittedFormat.isEqual(buffer.format) {
+            throw CaptureInputFault.invalidFormat
+          }
+          if let sourceFrame, let admittedSourceEnd, sourceFrame < admittedSourceEnd {
+            throw CaptureInputFault.sourceCounter
+          }
+        }
       }
       guard
         CaptureCore.permitsPending(
@@ -301,6 +317,9 @@ final class RawRecordingSegments: @unchecked Sendable {
             }
           }
         }
+        admittedEpoch = sourceEpoch
+        admittedFormat = buffer.format
+        admittedSourceEnd = sourceEnd
       } catch {
         pendingBytes -= bytes
         pendingNanoseconds -= duration
@@ -326,6 +345,38 @@ final class RawRecordingSegments: @unchecked Sendable {
   func drainNormalization() throws {
     queue.sync {}
     try requireHealthy()
+  }
+
+  /// Control owner only, after native callbacks have quiesced. Preserve the
+  /// valid filter tail and partial segment without closing the recording lane.
+  func retireSource() throws {
+    do {
+      try queue.sync {
+        try requireHealthy()
+        if converter != nil {
+          try converter?.finish { [self] pcm, start, end in
+            try appendCompact(pcm, start: start, end: end)
+          }
+          converter = nil
+          outputEpoch += 1
+        }
+        if let active {
+          let maps = try active.timing.finish(
+            originNanoseconds: active.origin, expectedFrames: active.frames)
+          try seal(active, maps: maps)
+        }
+        guard sourceCredits.isEmpty else {
+          throw ProbeError.capture("retired source retained unmatched acquisition credits")
+        }
+      }
+    } catch {
+      lock.withLock {
+        if failure == nil {
+          failure = Self.storageFailure(error, fallback: "raw_segment_write_or_sync_failed")
+        }
+      }
+      throw error
+    }
   }
 
   private func requireHealthy(allowAdmissionFailure: Bool = false) throws {
@@ -400,14 +451,6 @@ final class RawRecordingSegments: @unchecked Sendable {
     }
     guard valid else { throw ProbeError.capture("recorded raw prefix differs from saved audio") }
     try pointer.verifyCurrent(try tip(producerClosed: true))
-  }
-
-  private static func requireFormat(_ format: AVAudioFormat, frames: Int) throws {
-    guard format.commonFormat == .pcmFormatFloat32, format.sampleRate.isFinite,
-      format.sampleRate.rounded() == format.sampleRate, (8000...384000).contains(format.sampleRate),
-      (1...8).contains(format.channelCount), frames > 0,
-      frames <= Int(format.sampleRate) / 4
-    else { throw ProbeError.capture("raw segment PCM format or callback size is invalid") }
   }
 
   private func appendSource(_ payload: Payload) throws {

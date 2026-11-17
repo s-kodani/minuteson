@@ -135,29 +135,77 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     }
   }
 
-  func testClockRebasingDoesNotHideInvalidPCMRetiredBindingsOrCounterResets() throws {
-    for fault in ["counter", "epoch", "nonfinite", "strict"] {
+  func testRejectedSourceDataDoesNotPoisonSavedPrefixAndNewBindingContinues() throws {
+    for lane in ["microphone", "system"] {
+      for fault in ["counter", "nonfinite", "infinity", "amplitude", "format"] {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let raw = try RawRecordingSegments(
+          output: root, owner: owner, lane: lane, allowsClockRebasing: true)
+        let pcm = try buffer()
+        for index in 0..<17 {
+          try raw.enqueue(
+            pcm, observation: .timestamp(origin + Int64(index) * 250_000_000),
+            sourceFrame: Int64(index * 2000), sourceEpoch: 1)
+        }
+        try raw.drainAcceptedPCM()
+        let original = try Data(contentsOf: root.appendingPathComponent("raw-\(lane).json"))
+        let bad = try buffer(rate: fault == "format" ? 16000 : 8000)
+        if fault == "nonfinite" { bad.floatChannelData![0][0] = .nan }
+        if fault == "infinity" { bad.floatChannelData![0][0] = .infinity }
+        if fault == "amplitude" { bad.floatChannelData![0][0] = 17 }
+        XCTAssertThrowsError(
+          try raw.enqueue(
+            bad, observation: .timestamp(origin + 4_250_000_000),
+            sourceFrame: fault == "counter" ? 0 : 34_000, sourceEpoch: 1)
+        ) { error in
+          XCTAssertTrue(error is CaptureInputFault)
+        }
+        XCTAssertEqual(
+          try Data(contentsOf: root.appendingPathComponent("raw-\(lane).json")), original)
+        XCTAssertNil(raw.snapshot().failure)
+        try raw.retireSource()
+        try raw.drainAcceptedPCM()
+        XCTAssertEqual(raw.snapshot().sealedFrames, 68_000, "valid converter tail must survive")
+        try raw.enqueue(
+          pcm, observation: .timestamp(origin + 10_000_000_000), sourceFrame: 0, sourceEpoch: 2)
+        try raw.finish()
+        let stats = raw.applyingSavedAudio(to: TrackStats())
+        XCTAssertEqual(stats.frames, 72_000)
+        XCTAssertTrue(raw.snapshot().producerClosed)
+        XCTAssertNil(raw.snapshot().failure)
+        try raw.verifyClosed(expected: stats)
+      }
+    }
+  }
+
+  func testRetiredBindingsAndUnrecoverableClockMappingStillFailClosed() throws {
+    for fault in ["epoch", "strict"] {
       let root = try directory()
       defer { try? FileManager.default.removeItem(at: root) }
       let raw = try RawRecordingSegments(
         output: root, owner: owner, lane: "system", allowsClockRebasing: fault != "strict")
-      let pcm = try buffer()
       for index in 0..<17 {
         try raw.enqueue(
-          pcm, observation: .timestamp(origin + Int64(index) * 250_000_000),
+          buffer(), observation: .timestamp(origin + Int64(index) * 250_000_000),
           sourceFrame: Int64(index * 2000), sourceEpoch: 1)
       }
       try raw.drainAcceptedPCM()
-      let prefix = raw.snapshot().sealedFrames
-      XCTAssertGreaterThan(prefix, 0)
-      if fault == "nonfinite" { pcm.floatChannelData![0][0] = .nan }
-      try raw.enqueue(
-        pcm, observation: .timestamp(origin + (fault == "strict" ? 500_000_000 : 4_250_000_000)),
-        sourceFrame: fault == "counter" ? 0 : 34_000, sourceEpoch: fault == "epoch" ? 0 : 1)
-      XCTAssertThrowsError(try raw.finish(), fault)
-      XCTAssertNotNil(raw.snapshot().failure, fault)
-      XCTAssertEqual(raw.snapshot().sealedFrames, prefix, fault)
-      XCTAssertFalse(raw.snapshot().producerClosed, fault)
+      if fault == "epoch" {
+        XCTAssertThrowsError(
+          try raw.enqueue(
+            buffer(), observation: .timestamp(origin + 4_250_000_000), sourceFrame: 34_000,
+            sourceEpoch: 0)
+        ) {
+          XCTAssertFalse($0 is CaptureInputFault, "generation ownership is not a source error")
+        }
+      } else {
+        try raw.enqueue(
+          buffer(), observation: .timestamp(origin + 500_000_000), sourceFrame: 34_000,
+          sourceEpoch: 1)
+        XCTAssertThrowsError(try raw.finish())
+        XCTAssertNotNil(raw.snapshot().failure)
+      }
     }
   }
 
@@ -459,25 +507,6 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(try value(moved)["sealedFrames"] as? Int, 68_000)
   }
 
-  func testSourceCounterResetAndFormatChangePreserveConfirmedPrefixAndRejectSuccess() throws {
-    for format in [false, true] {
-      let root = try directory()
-      defer { try? FileManager.default.removeItem(at: root) }
-      let writer = try RawRecordingSegments(output: root, owner: owner, lane: "microphone")
-      try append(writer)
-      try waitForPrefix(writer)
-      let original = try Data(contentsOf: root.appendingPathComponent("raw-microphone.json"))
-      try writer.enqueue(
-        buffer(rate: format ? 16000 : 8000), observation: .timestamp(origin + 4_250_000_000),
-        sourceFrame: format ? 34_000 : 0)
-      XCTAssertThrowsError(try writer.finish())
-      XCTAssertEqual(
-        try Data(contentsOf: root.appendingPathComponent("raw-microphone.json")), original)
-      XCTAssertFalse(writer.snapshot().producerClosed)
-      XCTAssertNotNil(writer.snapshot().failure)
-    }
-  }
-
   func testProductionSystemPCMWriterStoresSameRealSamplesInLiveSegments() async throws {
     let root = try directory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -735,14 +764,15 @@ final class RawRecordingSegmentTests: XCTestCase, @unchecked Sendable {
     // durable commit is held and a third segment is only being assembled.
     XCTAssertEqual(commits.pending(lane: "microphone").jobs, 3)
     XCTAssertEqual(writer.snapshot().sealedFrames, 0)
-    try writer.enqueue(
-      quarter,
-      observation: .timestamp(origin + 9_250_000_000), sourceFrame: 0, sourceEpoch: 1)
+    XCTAssertThrowsError(
+      try writer.enqueue(
+        quarter,
+        observation: .timestamp(origin + 9_250_000_000), sourceFrame: 0, sourceEpoch: 0))
     try writer.drainNormalization()
     try writer.enqueue(
       quarter,
       observation: .timestamp(origin + 10_250_000_000), sourceFrame: 0, sourceEpoch: 2)
-    XCTAssertThrowsError(try writer.drainNormalization())
+    XCTAssertThrowsError(try writer.retireSource())
     gate.released.signal()
     XCTAssertThrowsError(try writer.finish())
     XCTAssertNotNil(writer.snapshot().failure)

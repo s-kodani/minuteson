@@ -2,6 +2,7 @@
 //! native drivers; these decisions are independent of Core Audio and WASAPI.
 pub mod catalog;
 pub mod commit;
+pub mod input;
 pub mod limits;
 pub mod request;
 pub mod supervisor;

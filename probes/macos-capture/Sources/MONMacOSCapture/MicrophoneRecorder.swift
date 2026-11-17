@@ -14,6 +14,8 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private var configurationRevision: UInt64 = 0
   private var recovery: MicrophoneRecovery?
   private var lastRecoveryAttempt: ContinuousClock.Instant?
+  private var inputRetry = CaptureInputRetry()
+  private let retryOrigin: ContinuousClock.Instant
   private struct NormalPreparation {
     let token: MicrophoneRecovery.Binding
     let format: AVAudioFormat
@@ -97,6 +99,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
     self.rawSegments = rawSegments
     self.mayContinue = mayContinue
     self.controlNow = controlNow
+    self.retryOrigin = controlNow()
     self.makeEngine = makeEngine
     self.devices = devices
     self.permission = permission
@@ -373,12 +376,14 @@ final class MicrophoneRecorder: @unchecked Sendable {
           guard let captureFormat = self.captureFormat,
             self.stats.acceptsMicrophonePCM(buffer, at: when, processingFormat: captureFormat)
           else {
-            self.recovery?.interrupt("format_changed", unavailable: true)
-            self.configurationChanged = true
-            self.stats.inputLevel.invalidate()
-            return
+            throw CaptureInputFault.invalidFormat
           }
-          let sourceFrame = when.isSampleTimeValid ? when.sampleTime + sourceFrameOffset : nil
+          var sourceFrame: Int64?
+          if when.isSampleTimeValid {
+            let (frame, overflow) = when.sampleTime.addingReportingOverflow(sourceFrameOffset)
+            guard !overflow else { throw CaptureInputFault.sourceCounter }
+            sourceFrame = frame
+          }
           try rawSegments.enqueue(
             buffer, observation: observation, sourceFrame: sourceFrame, sourceEpoch: token.epoch)
           if self.levelsEnabled { self.stats.inputLevel.receive(buffer, at: receivedAt) }
@@ -425,6 +430,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
           guard !overflow else { throw ProbeError.capture("microphone frame offset overflows") }
           savedSourceFrame = frame
         }
+        try CaptureInputFault.validate(buffer)
         try self.stats.prepareSavedClock(
           observation, frames: Int64(buffer.frameLength), sourceFrame: savedSourceFrame,
           sourceEpoch: token.epoch)
@@ -446,6 +452,15 @@ final class MicrophoneRecorder: @unchecked Sendable {
           self.normalAdmission = nil
         }
         self.receivedPCM(token)
+      } catch let fault as CaptureInputFault {
+        if self.clock != nil, self.testWindow == nil, self.rawSegments != nil {
+          self.inputRetry.fault(fault, at: self.retryNow(), input: "microphone")
+          self.retireBinding("invalid_audio_data", unavailable: true)
+        } else {
+          self.stats.appendFailures += 1
+          self.stats.retainCaptureFailure(fault)
+          self.stats.inputLevel.invalidate()
+        }
       } catch {
         self.stats.appendFailures += 1
         self.stats.retainCaptureFailure(error)
@@ -523,9 +538,15 @@ final class MicrophoneRecorder: @unchecked Sendable {
   // Called under the callback lock, after valid PCM has been accepted. Silent
   // samples count; engine flags, notifications and retired callbacks do not.
   private func receivedPCM(_ token: MicrophoneRecovery.Binding) {
+    inputRetry.valid(at: retryNow())
     if pcmFlow?.token == token {
       pcmFlow?.deadline = controlNow().advanced(by: Self.pcmTimeout)
     }
+  }
+
+  private func retryNow() -> Int64 {
+    let elapsed = retryOrigin.duration(to: controlNow()).components
+    return max(0, elapsed.seconds * 1_000_000_000 + elapsed.attoseconds / 1_000_000_000)
   }
 
   /// Serialized control-loop proofs, not sleeps or engine control on Apple's
@@ -693,6 +714,14 @@ final class MicrophoneRecorder: @unchecked Sendable {
       retireBinding(reason, unavailable: unavailable)
     }
     releaseEngine()
+    do {
+      if lock.withLock({ inputRetry.recovering }) { try rawSegments?.retireSource() }
+    } catch {
+      lock.withLock {
+        stats.appendFailures += 1
+        stats.retainCaptureFailure(error)
+      }
+    }
     // The current CAF remains open. Recreating it would overwrite prior PCM.
   }
 
@@ -831,8 +860,12 @@ final class MicrophoneRecorder: @unchecked Sendable {
     }
     if lock.withLock({ normalPreparation != nil && selectedDeviceID == selected.objectID }) {
       do { try maintainNormalPreparation() } catch RebindError.formatChanged {
+        lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
         suspend("format_changed", unavailable: true)
-      } catch { suspend("restart_failed", unavailable: true) }
+      } catch {
+        lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
+        suspend("restart_failed", unavailable: true)
+      }
       return
     }
     let healthy = lock.withLock {
@@ -859,11 +892,16 @@ final class MicrophoneRecorder: @unchecked Sendable {
     // on every heartbeat without any new acquisition evidence.
     if engine != nil { suspend() }
     let now = controlNow()
+    guard lock.withLock({ inputRetry.permits(retryNow()) }) else { return }
     if let lastRecoveryAttempt, now < lastRecoveryAttempt.advanced(by: .seconds(1)) { return }
     lastRecoveryAttempt = now
     do { try configure(selected) } catch RebindError.formatChanged {
+      lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
       suspend("format_changed", unavailable: true)
-    } catch { suspend("restart_failed", unavailable: true) }
+    } catch {
+      lock.withLock { inputRetry.failedAttempt(at: retryNow()) }
+      suspend("restart_failed", unavailable: true)
+    }
   }
 
   func stop() {

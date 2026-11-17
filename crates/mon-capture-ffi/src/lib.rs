@@ -5,6 +5,36 @@ use mon_core::capture::{limits, request, supervisor::InputLifecycle};
 use mon_core::media::voice::VoiceConverter;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+#[no_mangle]
+pub extern "C" fn mon_capture_pcm_geometry(rate: u32, channels: u32, frames: u64) -> bool {
+    mon_core::capture::input::geometry(rate, channels, frames)
+}
+#[no_mangle]
+pub unsafe extern "C" fn mon_capture_pcm_samples(values: *const f32, count: usize) -> bool {
+    !values.is_null()
+        && count > 0
+        && count <= 96_000 * 8
+        && mon_core::capture::input::samples(std::slice::from_raw_parts(values, count))
+}
+#[no_mangle]
+pub unsafe extern "C" fn mon_capture_input_fault(
+    value: *mut mon_core::capture::input::InputRetry,
+    now: u64,
+) {
+    if let Some(value) = value.as_mut() {
+        value.fault(now);
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn mon_capture_input_valid(
+    value: *mut mon_core::capture::input::InputRetry,
+    now: u64,
+) {
+    if let Some(value) = value.as_mut() {
+        value.valid(now);
+    }
+}
+
 /// PCM and timestamps are borrowed during the callback. Returning false makes
 /// the converter terminal; native IO failures must never drop audio silently.
 pub type VoiceWrite =

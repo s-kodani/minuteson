@@ -34,11 +34,9 @@ class EndpointMixer {
     AddResult result;
     if(!frames)return result;
     if(frames>48000||first>std::numeric_limits<std::uint64_t>::max()-frames)
-      throw std::runtime_error("invalid endpoint packet geometry");
+      throw InputDataFault("invalid endpoint packet geometry");
     const bool silent=(flags&2)!=0;
-    if(!silent&&!samples)throw std::runtime_error("PC音声のPCMがありません");
-    for(std::uint64_t i=0;!silent&&i<std::uint64_t(frames)*2;++i)
-      if(!std::isfinite(samples[i])||std::abs(samples[i])>16)throw std::runtime_error("invalid endpoint PCM amplitude");
+    require_input_pcm(samples,frames,2,silent);
     auto mapped=checked_add(first,source.correction);
     if(source.next){
       const auto distance=mapped>*source.next?mapped-*source.next:*source.next-mapped;

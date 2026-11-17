@@ -81,6 +81,7 @@ class SystemCapture final : public CaptureReader {
       acquisition(stream.capture->GetBuffer(&data,&frames,&flags,&position,&time),"read PC audio output packet");
       try{
         if(frames){
+          require_input_pcm(reinterpret_cast<const float*>(data),frames,2,(flags&AUDCLNT_BUFFERFLAGS_SILENT)!=0);
           auto arrival=qpc();const auto mapped=stream.clock.observe(frames,time,position,flags,arrival);
           const auto first=EndpointMixer::frame_at(mapped.start);
           if(mapped.boundary)flags|=AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY;
@@ -141,7 +142,7 @@ class SystemCapture final : public CaptureReader {
           auto error=std::current_exception();
           for(auto& [id,stream]:streams){
             if(stream->started){stream->client->Stop();stream->started=false;}
-            try{drain(*stream,mixer,256);}catch(const InputFailure&){}catch(...){error=std::current_exception();}
+            try{drain(*stream,mixer,256);}catch(const InputFailure&){}catch(const InputDataFault&){}catch(...){error=std::current_exception();}
           }
           try{
             mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);

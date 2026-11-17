@@ -112,7 +112,9 @@ struct MicrophoneRecovery {
 
   // A control-loop retry retires the engine but is not a new diagnosis.
   mutating func interruptForRetry() {
-    if reason == "format_changed" {
+    if reason == "invalid_audio_data" {
+      interrupt("invalid_audio_data", unavailable: true)
+    } else if reason == "format_changed" {
       interrupt("format_changed", unavailable: true)
     } else {
       interrupt(reason == "clock_changed" ? "clock_changed" : "engine_changed")

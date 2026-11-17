@@ -16,6 +16,7 @@ item_types = ["structs", "typedefs", "functions"]
 
 [export.rename]
 InputLifecycle = "MonCaptureLifecycle"
+InputRetry = "MonCaptureInputRetry"
 RawPrefix = "MonRawPrefix"
 ReadAt = "MonMediaReadAt"
 

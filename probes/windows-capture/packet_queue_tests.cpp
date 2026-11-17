@@ -23,18 +23,27 @@ int main(){
     bool failed=false;try{queue.pop();}catch(const std::runtime_error& error){failed=std::string(error.what())=="device disconnected";}
     require(failed,"acquisition failure disappeared or preceded queued PCM");
     product::PacketQueue bounded;
-    product::CapturePacket maximum;maximum.frames=product::PacketQueue::max_frames;bounded.push(std::move(maximum));
-    product::CapturePacket extra;extra.frames=1;
+    for(unsigned i=0;i<10;++i){product::CapturePacket packet;packet.frames=96000;packet.flags=2;bounded.push(std::move(packet));}
+    product::CapturePacket extra;extra.frames=1;extra.flags=2;
     bool overflow=false;try{bounded.push(std::move(extra));}catch(const std::runtime_error&){overflow=true;}
-    require(overflow&&bounded.pop()->frames==product::PacketQueue::max_frames,"overflow replaced already captured audio");
+    require(overflow&&bounded.pop()->frames==96000,"overflow replaced already captured audio");
     product::PacketQueue bytes;
-    product::CapturePacket large;large.frames=1;large.samples.resize(16*1024*1024/sizeof(float));
-    bytes.push(std::move(large));
+    for(unsigned i=0;i<8;++i){product::CapturePacket large;large.frames=65536;large.samples.resize(65536*8);bytes.push(std::move(large));}
     product::CapturePacket one;one.frames=1;one.samples.push_back(0.25f);
     overflow=false;try{bytes.push(std::move(one));}catch(const std::runtime_error&){overflow=true;}
-    require(overflow&&bytes.pop()->samples.size()==16*1024*1024/sizeof(float),"byte overflow discarded accepted audio");
+    require(overflow&&bytes.pop()->samples.size()==65536*8,"byte overflow discarded accepted audio");
     product::CapturePacket released;released.frames=1;released.samples.push_back(0.5f);bytes.push(std::move(released));
+    for(unsigned i=0;i<7;++i)bytes.pop();
     require(bytes.pop()->samples[0]==0.5f,"popped bytes did not release budget");
+    auto pending=std::make_shared<product::StoragePending>();
+    product::PacketQueue checked;checked.attach_storage(pending,0);
+    for(float value:{NAN,INFINITY,-INFINITY,17.0f}){
+      product::CapturePacket bad;bad.frames=1;bad.samples={value};bool rejected=false;
+      try{checked.push(std::move(bad));}catch(const product::InputDataFault&){rejected=true;}
+      require(rejected&&checked.pending_frames()==0&&pending->snapshot().frames[0]==0,"invalid PCM acquired storage credits");
+    }
+    product::CapturePacket valid;valid.frames=1;valid.samples={0.25f};checked.push(std::move(valid));
+    require(checked.pop()->samples[0]==0.25f&&pending->snapshot().frames[0]==1,"rejection poisoned later valid data");
     std::cout<<"acquisition queue: delayed storage, exact continuous PCM, ordered drain before failure, and bounded overflow passed\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

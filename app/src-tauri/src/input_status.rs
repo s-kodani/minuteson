@@ -174,6 +174,7 @@ fn valid_input(m: &Input, input: &str) -> bool {
                     | "restart_failed"
                     | "format_changed"
                     | "clock_changed"
+                    | "invalid_audio_data"
             )
         } else {
             matches!(
@@ -185,6 +186,7 @@ fn valid_input(m: &Input, input: &str) -> bool {
                     | "restart_failed"
                     | "format_changed"
                     | "clock_changed"
+                    | "invalid_audio_data"
             )
         }
     });

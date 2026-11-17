@@ -7,6 +7,13 @@ void require(bool ok,const char* message){if(!ok)throw std::runtime_error(messag
 int main(){
   try{
     require(mon_capture_abi_version()==1,"capture ABI differs");
+    MonCaptureInputRetry retry{};
+    for(auto seconds:{1ULL,2ULL,4ULL,8ULL,16ULL,30ULL,30ULL}){
+      mon_capture_input_fault(&retry,1);
+      require(retry.retry_at==1+seconds*1000000000ULL,"native retry ABI lost bounded backoff");
+    }
+    for(auto now:{1ULL,1000000001ULL,2000000001ULL,3000000001ULL})mon_capture_input_valid(&retry,now);
+    require(retry.failures==0&&retry.retry_at==0,"healthy native PCM did not reset backoff");
     const auto metadata=mon_capture_limit(3)-mon_capture_limit(4);
     require(mon_capture_permits_commit(32767,metadata-1,65535,1,1),"last compatible prefix rejected");
     require(!mon_capture_permits_commit(32768,0,0,1,1),"unreadable segment prefix permitted");

@@ -290,6 +290,63 @@ final class MicrophoneStartupTests: XCTestCase, @unchecked Sendable {
       try AVAudioFile(forReading: dir.appendingPathComponent("microphone.caf")).length, 960)
   }
 
+  func testInvalidMicrophonePCMReacquiresWithoutPoisoningWriterOrAcceptingOldCallbacks()
+    async throws
+  {
+    for value in [Float.nan, .infinity, 17] {
+      let created = try directory()
+      defer { try? FileManager.default.removeItem(at: created) }
+      let canonical = try XCTUnwrap(realpath(created.path, nil))
+      defer { free(canonical) }
+      let dir = URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
+      let old = SilentMicrophoneEngine()
+      let next = SilentMicrophoneEngine()
+      let factory = StartupFactory([old, next])
+      let catalog = StartupDeviceCatalog()
+      let control = StartupControlClock()
+      let time = StartupClock()
+      let commits = RawSegmentCommitWorker()
+      let raw = try RawRecordingSegments(
+        output: dir, owner: "735027d4-a03e-43d3-830a-21e767dfaf88", lane: "microphone",
+        commits: commits)
+      let recorder = MicrophoneRecorder(
+        outputURL: dir.appendingPathComponent("microphone.caf"),
+        clock: try time.domain(), rawSegments: raw, controlNow: control.read,
+        makeEngine: factory.make, devices: catalog.read, permission: { .authorized })
+      defer { recorder.stop() }
+      try await recorder.start()
+      control.settle(recorder)
+      try old.emit(host: 1_000_000_000)
+      let stale = old.savedTap()
+      let bad = try SilentMicrophoneEngine.pcm(format: old.inputFormat)
+      bad.floatChannelData![0][0] = value
+      time.set(1_010_000_000)
+      stale?(bad, AVAudioTime(hostTime: 1_010_000_000, sampleTime: 480, atRate: 48000))
+      XCTAssertEqual(recorder.snapshot().microphoneRecovery?.reason, "invalid_audio_data")
+      XCTAssertNil(recorder.snapshot().captureFailure)
+      XCTAssertEqual(recorder.snapshot().appendFailures, 0)
+      recorder.maintain()
+      XCTAssertFalse(old.isRunning)
+      XCTAssertEqual(factory.calls, 1)
+      control.advance(999)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 1)
+      control.advance(1)
+      recorder.maintain()
+      XCTAssertEqual(factory.calls, 2)
+      control.settle(recorder)
+      time.set(1_030_000_000)
+      try next.emit(host: 1_030_000_000)
+      stale?(bad, AVAudioTime(hostTime: 1_020_000_000, sampleTime: 960, atRate: 48000))
+      XCTAssertEqual(recorder.snapshot().microphoneRecovery?.state, "connected")
+      recorder.stop()
+      XCTAssertEqual(recorder.snapshot().frames, 320)
+      XCTAssertNil(raw.snapshot().failure)
+      XCTAssertEqual(commits.pending(lane: "microphone").nanoseconds, 0)
+      try raw.verifyClosed(expected: recorder.snapshot())
+    }
+  }
+
   func testAutomaticDifferentRateNormalizesIntoTheExistingMicrophoneTrack() async throws {
     let created = try directory()
     let canonical = try XCTUnwrap(realpath(created.path, nil))

@@ -32,10 +32,11 @@ class AsyncCapture final : public CaptureReader {
           if(count>PacketQueue::max_frames)throw std::runtime_error("Windows音声パケットが保存待ち上限を超えています");
           CapturePacket packet;packet.frames=count;packet.flags=flags;packet.time=time;packet.position=position;packet.arrival=qpc();
           if(!(flags&AUDCLNT_BUFFERFLAGS_SILENT)) {
-            if(!data)throw std::runtime_error("Windows音声パケットのPCMがありません");
+            require_input_pcm(reinterpret_cast<const float*>(data),count,channels_);
             const auto samples=reinterpret_cast<const float*>(data);
             packet.samples.assign(samples,samples+std::size_t(count)*channels_);
           }
+          else require_input_pcm(nullptr,count,channels_,true);
           queue.push(std::move(packet));
           received=true;
         }
