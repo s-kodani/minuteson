@@ -54,6 +54,44 @@ async (page, capturePath, detailUI) => {
     check(await count("start_recording")===1&&await count("select_recording_microphone")===2,"microphone switching restarted capture or duplicated a request");
     results.push("preparing and recording allow fixed/automatic microphone switching without restarting capture");
 
+    stage="active-bluetooth-hotplug";
+    await page.evaluate(()=>{
+      const f=window.closeFixture;
+      f.captureInputs.devices=f.captureInputs.devices.map(device=>({...device,isDefault:false}));
+      f.captureInputs.devices.push({uid:"powerconf",name:"PowerConf",isDefault:true});
+      f.microphoneSelection={...f.microphoneSelection,revision:f.microphoneSelection.revision+1,deviceUID:"powerconf"};
+    });
+    await page.waitForFunction(()=>document.querySelector(".active-microphone-source")?.textContent==="選択先: PowerConf（OSの既定）");
+    check(await active.inputValue()===""&&await active.locator('option[value="powerconf"]').textContent()==="PowerConf（OSの既定）"&&await active.locator('option[value="built-in"]').textContent()==="内蔵マイク","automatic Bluetooth hotplug kept stale names/defaults or changed selection mode");
+    const hotplugReads=await count("get_capture_inputs");
+    await page.evaluate(()=>{window.closeFixture.microphoneSelection.revision++;});
+    await page.clock.runFor(1000);
+    check(await count("get_capture_inputs")===hotplugReads,"status-only revisions repeatedly reloaded the microphone catalog");
+    results.push("a newly selected Bluetooth UID refreshes names/defaults once without changing automatic mode or starting capture");
+
+    stage="active-catalog-race";
+    await page.evaluate(()=>{
+      const f=window.closeFixture;
+      f.holdCaptureInputs=true;
+      f.captureInputs.devices=f.captureInputs.devices.map(device=>({...device,isDefault:device.uid==="built-in"}));
+      f.microphoneSelection={...f.microphoneSelection,revision:f.microphoneSelection.revision+1,deviceUID:"built-in"};
+    });
+    await page.waitForFunction(()=>window.closeFixture.pendingInputs.length===1);
+    await page.evaluate(()=>{
+      const f=window.closeFixture;
+      f.holdCaptureInputs=false;
+      f.captureInputs.devices=f.captureInputs.devices.map(device=>({...device,name:device.uid==="powerconf"?"PowerConf 最新":device.name,isDefault:device.uid==="powerconf"}));
+      f.microphoneSelection={...f.microphoneSelection,revision:f.microphoneSelection.revision+1,deviceUID:"powerconf"};
+    });
+    await page.waitForFunction(()=>document.querySelector('[aria-label="録音中のマイク"] option[value="powerconf"]')?.textContent==="PowerConf 最新（OSの既定）");
+    await page.evaluate(()=>window.closeFixture.pendingInputs.splice(0).forEach(resolve=>resolve()));
+    await page.clock.runFor(1000);
+    check(await active.inputValue()===""&&await active.locator('option[value="powerconf"]').textContent()==="PowerConf 最新（OSの既定）"&&await active.locator('option[value="built-in"]').textContent()==="内蔵マイク","late catalog response replaced the newer reported selection/default");
+    await active.selectOption("usb-123");
+    await page.waitForFunction(()=>document.querySelector(".active-microphone-source")?.textContent==="選択先: ヘッドセットのマイク（固定）");
+    check(await active.inputValue()==="usb-123"&&await count("start_recording")===1&&await count("select_recording_microphone")===3,"catalog refresh reset a fixed choice or changed recording ownership");
+    results.push("rapid reported-UID changes discard the older catalog response and preserve subsequent explicit fixed selection");
+
     stage="saved-default-changed";await boot({selectedMicrophoneUID:"usb-123"});
     check(await input().inputValue()===""&&await start().isEnabled(),"old selected UID pinned the automatic default");
     results.push("a previously selected UID does not override the new automatic initial mode");
