@@ -259,7 +259,9 @@ impl RecipeExt for Recipe {
         let mut seen = std::collections::BTreeSet::new();
         let mut total = 0_u64;
         for (file, source) in self.manifest.files.iter().zip(&self.sources) {
-            if is_bundled(&source.url) {
+            if is_bundled(&source.url)
+                || crate::model_license::embedded_download_notice(file, source)?.is_some()
+            {
                 continue;
             }
             let size = match &source.archive {

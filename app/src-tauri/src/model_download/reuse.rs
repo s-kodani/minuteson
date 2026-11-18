@@ -19,7 +19,7 @@ pub(super) fn candidates(
     for (file, source) in recipe.manifest.files.iter().zip(&recipe.sources) {
         if !matches!(
             file.role,
-            Role::Asr | Role::AsrAsset | Role::Vad | Role::Llm
+            Role::Asr | Role::AsrAsset | Role::Vad | Role::Llm | Role::SpeakerEmbedding
         ) || source.archive.is_some()
         {
             continue;
@@ -97,6 +97,10 @@ impl Candidate {
 #[cfg(all(test, windows))]
 #[path = "reuse/windows_tests.rs"]
 mod windows_tests;
+
+#[cfg(test)]
+#[path = "reuse/speaker_embedding_tests.rs"]
+mod speaker_embedding_tests;
 
 #[cfg(all(test, unix))]
 mod tests {

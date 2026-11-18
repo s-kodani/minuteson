@@ -2,6 +2,7 @@ import type { ArchiveMember, BackendManifest, DownloadSource, PackageFile, Packa
 import { validateRecipe } from "./generated/validators.js";
 import type { ModelInspectionReport, ModelPlacementReceipt } from "./model-inspection-state";
 import { assertModelLicenseSummary, type ModelLicenseSummary } from "./model-license-state.ts";
+import licensePolicy from "../model-catalog/model-license-policy.json" with { type: "json" };
 
 export const downloadId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const hash = /^[0-9a-f]{64}$/u, maximum = 32 * 1024 ** 3;
@@ -88,7 +89,15 @@ export function downloadByteTotals(recipe: DownloadRecipe): { downloadBytes: num
         else downloadBytes += source.archive.expectedSize;
         archiveBytes += source.archive.expectedSize; archives.set(source.url, source.archive);
       }
-    } else downloadBytes += recipe.manifest.files[index].expectedSize;
+    } else {
+      const file = recipe.manifest.files[index];
+      // Match the native acquisition boundary against the same offline registry.
+      // The recipe keeps its original URL and identity even when bytes are local.
+      const embedded = file.role === "notice" && file.relativePath === source.relativePath
+        && licensePolicy.notices.some(notice => notice.sourceUrl === source.url
+          && notice.bytes === file.expectedSize && notice.sha256 === file.expectedHash);
+      if (!embedded) downloadBytes += file.expectedSize;
+    }
   });
   if (recipe.sources.some(source => !source.archive && archives.has(source.url))) fail();
   return { downloadBytes: size(downloadBytes), archiveBytes: size(archiveBytes), ...(recipe.sources.some(source => isBundledSource(source.url)) ? { bundledBytes: size(bundledBytes) } : {}) };

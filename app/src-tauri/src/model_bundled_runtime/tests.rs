@@ -116,7 +116,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     let recipe = bundle.recipe().unwrap();
     let review = recipe.review().unwrap();
     assert_eq!(review.recipe_schema_version, 4);
-    assert_eq!(review.download_bytes, 1_534_653_673);
+    assert_eq!(review.download_bytes, 1_533_763_059 + 885_098);
     assert_eq!(review.bundled_bytes, Some(bytes.len() as u64));
     assert_eq!(review.archive_bytes, review.bundled_bytes.unwrap());
     assert_eq!(review.total_bytes, 1_534_653_673 + runtime_bytes);
@@ -190,7 +190,7 @@ fn all_multilingual_variants_bind_exact_model_bytes_and_preserve_shared_runtime_
         assert_eq!(model.expected_hash.as_deref(), Some(sha));
         assert_eq!(Recipe::parse(&recipe.bytes().unwrap()).unwrap(), *recipe);
         let review = recipe.review().unwrap();
-        assert_eq!(review.download_bytes, size + 4_259 + 886_355);
+        assert_eq!(review.download_bytes, size + 885_098);
         assert_eq!(review.total_bytes, size + 4_259 + 886_355 + 48);
         for shared in [
             "bin/whisper-cli",
