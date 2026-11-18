@@ -13,14 +13,14 @@ export interface OperationProgress {
   total: number | null;
   detail?: string;
   paused?: boolean;
-  kind: "backup" | "restore" | "deletion" | "audio_deletion" | "model_deletion" | "recording_recovery" | "recording_save" | "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
+  kind: "backup" | "restore" | "deletion" | "audio_deletion" | "model_deletion" | "recording_save" | "model" | "audio_import" | "transcription" | "diarization" | "minutes_generation" | "voice_registration" | "voice_matching" | "speaker_completion";
   state: "queued" | "running" | "pausing" | "paused" | "interrupted";
   meetingId?: string;
   startedAtMs?: number;
   finishedAtMs?: number;
 }
 
-export const operationName = (kind: OperationProgress["kind"]) => ({ backup:"バックアップ", restore:"バックアップから復元", deletion:"会議の削除", audio_deletion:"音声の削除", model_deletion:"モデルの削除", recording_recovery: "録音の回復", recording_save: "録音の保存", model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
+export const operationName = (kind: OperationProgress["kind"]) => ({ backup:"バックアップ", restore:"バックアップから復元", deletion:"会議の削除", audio_deletion:"音声の削除", model_deletion:"モデルの削除", recording_save: "録音の保存", model: "モデル準備", audio_import: "音声取り込み", transcription: "文字起こし", diarization: "話者分離", minutes_generation: "議事録生成", voice_registration: "声の登録", voice_matching: "声の照合", speaker_completion: "話者補完" })[kind];
 
 export function dataJobProgress(job: DataJob): OperationProgress {
   const s = job.snapshot, completed = s.phase === "completed";
@@ -49,7 +49,7 @@ export function deletionProgress(s: DataSnapshot | null): OperationProgress | nu
 export const operationStatus = (state: OperationProgress["state"]) => ({ queued: "待機中", running: "処理中", pausing: "停止処理中", paused: "一時停止", interrupted: "中断" })[state];
 export function orderedProgress(items: OperationProgress[]): OperationProgress[] {
   const priority = { running: 0, pausing: 1, queued: 2, paused: 3, interrupted: 4 };
-  const foreground = (item: OperationProgress) => item.kind === "deletion" && ["running", "pausing"].includes(item.state) ? 0 : item.kind === "recording_recovery" && item.state === "running" ? 1 : 2;
+  const foreground = (item: OperationProgress) => item.kind === "deletion" && ["running", "pausing"].includes(item.state) ? 0 : item.kind === "recording_save" && item.state === "running" ? 1 : 2;
   return [...items].sort((a, b) => foreground(a) - foreground(b) || priority[a.state] - priority[b.state]);
 }
 
@@ -85,7 +85,7 @@ export function importProgress(snapshot: ImportSnapshot | null): OperationProgre
 export function recordingSaveProgress(snapshot: RecordingSnapshot | null, title?: string): OperationProgress | null {
   if (!snapshot || !["stopping", "saving"].includes(snapshot.phase) || !snapshot.sessionId || !snapshot.meetingId) return null;
   return {
-    id: `recording-save:${snapshot.sessionId}`, target: title || "録音した会議",
+    id: `recording_save:${snapshot.sessionId}`, target: title || "録音した会議",
     kind: "recording_save", state: "running", meetingId: snapshot.meetingId,
     label: snapshot.phase === "stopping" ? "録音を停止中" : stageLabel(snapshot.progress) ?? "録音を保存中",
     completed: null, total: null,

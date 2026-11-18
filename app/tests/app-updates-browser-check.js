@@ -2,6 +2,46 @@ async(page)=>{
   const check=(value,message)=>{if(!value)throw Error(message);},results=[];
   const banner=page.getByRole("complementary",{name:"アプリの更新",exact:true});
   await banner.getByText("Microsoft Storeに更新があります",{exact:true}).waitFor();
+  const workspace=page.getByRole("main",{name:"会議ワークスペース",exact:true});
+  const sameRect=(before,after,label)=>check(before&&after&&["x","y","width","height"].every(key=>Math.abs(before[key]-after[key])<0.5),label);
+  const initialUrl=page.url();
+  for(const platform of ["windows","macos"]){
+    const url=new URL(initialUrl);url.searchParams.set("resident",platform);
+    await page.goto(url.href);
+    await banner.getByText("Microsoft Storeに更新があります",{exact:true}).waitFor();
+    const status={channel:platform==="windows"?"windows_store":"macos_release",state:"available",updateAvailable:true,availableVersion:platform==="macos"?"1.0.7":null,errorMessage:null};
+    await page.evaluate(status=>window.appUpdateFixture.publish(status),status);
+    for(const size of [{width:1200,height:900},{width:960,height:640}]){
+      await page.setViewportSize(size);
+      await banner.waitFor();
+      const shown=await workspace.boundingBox(),heading=await page.locator(".page-heading").boundingBox();
+      await page.evaluate(()=>window.appUpdateFixture.publish({state:"no_update",updateAvailable:false}));
+      await banner.waitFor({state:"hidden"});
+      sameRect(shown,await workspace.boundingBox(),`${platform}: banner reserves workspace area`);
+      sameRect(heading,await page.locator(".page-heading").boundingBox(),`${platform}: banner shifts page content`);
+      await page.evaluate(status=>window.appUpdateFixture.publish(status),status);
+      await banner.waitFor();
+      sameRect(shown,await workspace.boundingBox(),`${platform}: showing banner resizes workspace`);
+      const surface=await page.locator(".workspace-surface").boundingBox(),box=await banner.boundingBox();
+      check(box.x>=surface.x&&box.y>=surface.y&&box.x+box.width<=surface.x+surface.width&&box.y+box.height<=surface.y+surface.height,`${platform}: floating banner escapes workspace`);
+      check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${platform}: floating banner causes horizontal overflow`);
+      if(size.width===1200)await page.screenshot({path:`output/playwright/app-update-floating-${platform}.png`});
+    }
+    if(platform==="macos"){
+      const before=await workspace.boundingBox();
+      await page.evaluate(()=>window.appUpdateFixture.publish({state:"downloading",downloadedBytes:1048576,totalBytes:2097152}));
+      await banner.getByText("1.0 MB / 2.0 MB",{exact:true}).waitFor();
+      sameRect(before,await workspace.boundingBox(),"download progress resizes workspace");
+      await page.evaluate(()=>window.appUpdateFixture.publish({state:"failed",errorMessage:"取得に失敗しました。接続を確認して再試行してください。".repeat(30)}));
+      await banner.getByRole("button",{name:"再試行",exact:true}).waitFor();
+      const close=banner.getByRole("button",{name:"あとで",exact:true});
+      check(await close.evaluate(button=>{const box=button.getBoundingClientRect();return button.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2));}),"long update failure hides the dismiss control");
+    }
+  }
+  results.push("Windows and macOS floating banners preserve content position and height at 1200×900 and 960×640, with bounded progress and failure states");
+  await page.setViewportSize({width:1200,height:900});
+  await page.goto(initialUrl);
+  await banner.getByText("Microsoft Storeに更新があります",{exact:true}).waitFor();
   const nav=page.getByRole("navigation",{name:"メインナビゲーション",exact:true});
   const search=page.locator(".meeting-search");
   await search.fill("会議");
@@ -18,13 +58,28 @@ async(page)=>{
     await page.screenshot({path:`output/playwright/app-update-detail-${theme}.png`});
   }
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
-  results.push('banner stays inside the workspace below the detail tabs, preserving a continuous surrounding background in both themes');
+  const detail=await workspace.boundingBox(),detailTabs=await page.locator('.meeting-detail-navigation').boundingBox();
+  await page.evaluate(()=>window.appUpdateFixture.publish({state:"no_update",updateAvailable:false}));
+  await banner.waitFor({state:"hidden"});
+  sameRect(detail,await workspace.boundingBox(),"banner changes detail editor area");
+  sameRect(detailTabs,await page.locator('.meeting-detail-navigation').boundingBox(),"banner moves detail tabs");
+  await page.evaluate(()=>window.appUpdateFixture.publish({state:"available",updateAvailable:true}));
+  await banner.waitFor();
+  results.push('floating banner stays below detail navigation and above playback without resizing the editor in either theme');
   await nav.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
   await banner.waitFor();
   await nav.getByRole("button",{name:"設定",exact:true}).click();
   await banner.waitFor();
+  const anchored=await banner.boundingBox();
+  await workspace.evaluate(element=>{element.scrollTop=element.scrollHeight;});
+  sameRect(anchored,await banner.boundingBox(),"scrolling settings moves the floating banner");
+  await workspace.evaluate(element=>{element.scrollTop=0;});
   await page.screenshot({path:"output/playwright/app-update-banner.png"});
   results.push("update banner is independent of recording and survives meeting, jobs and settings navigation without taking focus");
+  const beforeDismiss=await workspace.boundingBox();
+  await banner.getByRole("button",{name:"更新案内を閉じる",exact:true}).click();
+  await banner.waitFor({state:"hidden"});
+  sameRect(beforeDismiss,await workspace.boundingBox(),"dismissing banner resizes workspace");
   const aboutButton=page.getByRole("button",{name:"このアプリについて",exact:true});
   await page.evaluate(()=>{window.appUpdateFixture.holdRead=true;});
   await aboutButton.scrollIntoViewIfNeeded();await aboutButton.click();
@@ -58,8 +113,7 @@ async(page)=>{
   await page.screenshot({path:"output/playwright/app-update-about-macos.png"});
   await page.keyboard.press("Escape");await about.waitFor({state:"hidden"});
   check(await aboutButton.evaluate(element=>element===document.activeElement),"About did not restore focus");
-  await banner.getByRole("button",{name:"あとで",exact:true}).click();
-  await banner.waitFor({state:"hidden"});
+  check(!await banner.isVisible(),"update state changes resurrected dismissed banner");
   await nav.getByRole("button",{name:"ジョブ一覧",exact:true}).click();
   await nav.getByRole("button",{name:"設定",exact:true}).click();
   check(!await banner.isVisible(),"navigation resurrected dismissed banner");

@@ -53,13 +53,32 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_generated_macos_recipes_bind_the_reviewed_runtime_and_preserve_asr(self):
         expected = {
-            'macos.json': ('base', 'e18a2f918edf15e882817b3a30855162b450f895b7a4dba119cad3784464f99f'),
+            'macos.json': ('base', '79b5b89774c16ede8e0e75ee64ddbce5de2b0d3e6bbdf4785a4932bee315defe'),
             'asr-transducer.json': ('asr', 'd72e39de3b7a96da478e4d267bf88f83400dee5fc64cb35d4deaade73eadc8a1'),
         }
         for name, (group, golden) in expected.items():
             generated = catalog.compile_target('macos_aarch64', group)
             self.assertEqual(generated, json.loads((catalog.CATALOG / name).read_text(encoding='utf8')))
             self.assertEqual(canonical_hash(generated), golden)
+
+    def test_optional_titanet_binds_both_platforms_without_changing_existing_recipes(self):
+        identity = 'sherpa-1138-pyannote3-int8-titanet-small'
+        mac = catalog.compile_target('macos_aarch64')
+        self.assertEqual(canonical_hash([c for c in mac if c['id'] != identity]),
+                         'e18a2f918edf15e882817b3a30855162b450f895b7a4dba119cad3784464f99f')
+        for target, prefix in [('macos_aarch64', ''), ('windows_x86_64', 'windows-')]:
+            choice = next(c for c in catalog.compile_target(target) if c['id'] == prefix + identity)
+            files = choice['recipe']['manifest']['files']
+            embedding = next(f for f in files if f['role'] == 'speaker_embedding')
+            self.assertEqual(embedding['expectedSize'], 40257283)
+            self.assertEqual(embedding['expectedHash'],
+                             'ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e')
+            source = next(s for s in choice['recipe']['sources'] if s['relativePath'] == embedding['relativePath'])
+            self.assertEqual(source['url'], 'https://github.com/k2-fsa/sherpa-onnx/releases/download/'
+                             'speaker-recongition-models/nemo_en_titanet_small.onnx')
+            self.assertEqual(choice['recipe']['manifest']['target'], target)
+            self.assertTrue(any(f['relativePath'] == 'notices/NeMo-Apache-2.0.txt' for f in files))
+            self.assertFalse(any('3DSpeaker' in f['relativePath'] for f in files))
 
     def test_windows_model_templates_match_previous_recipe_transform_without_mac_source(self):
         baseline = json.loads((catalog.CATALOG / 'macos.json').read_text(encoding='utf8'))

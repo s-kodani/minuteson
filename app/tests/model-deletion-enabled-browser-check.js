@@ -70,7 +70,7 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
   await boot();
   await page.evaluate(async()=>{
     const f=window.modelAdmissionFixture;
-    f.otherProgress=[{id:"analysis",kind:"transcription",state:"running",target:"別会議",label:"文字起こし中",completed:null,total:null},{id:"recovery",kind:"recording_recovery",state:"running",target:"回復する会議",label:"回復中",completed:null,total:null}];
+    f.otherProgress=[{id:"analysis",kind:"transcription",state:"running",target:"別会議",label:"文字起こし中",completed:null,total:null},{id:"recovery",kind:"recording_save",state:"running",target:"回復する会議",label:"録音を保存中",completed:null,total:null}];
     f.render();
     await f.change({token:"22222222-2222-4222-8222-222222222222",kind:"deletion",busy:true,phase:"deleting_files",
       deletionPreview:{confirmationId:"33333333-3333-4333-8333-333333333333",operationId:"44444444-4444-4444-8444-444444444444",meetingId:"55555555-5555-4555-8555-555555555555",title:"週次会議",phase:"files",pending:true,executeAllowed:true,resumeReason:null,keepAllowed:false,pathCount:10,processedPaths:7,fileCount:10,missingCount:0,changedCount:0,unregisteredCount:0,bytes:1000,rowCount:1,rowPhaseCommitted:false},

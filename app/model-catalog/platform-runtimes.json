@@ -1153,6 +1153,73 @@
             "notices/llama-MIT.txt",
             "notices/Gemma-Apache-2.0.txt"
           ]
+        },
+        "sherpa-1138-pyannote3-int8-titanet-small": {
+          "files": [
+            {
+              "relativePath": "bin/sherpa-onnx-offline-speaker-diarization",
+              "role": "executable",
+              "expectedSize": 405440,
+              "expectedHash": "e1170a93308867d8e343ac22a00b46b1d8e786c763c32a17caff07cf934ff66f"
+            },
+            {
+              "relativePath": "lib/libonnxruntime.dylib",
+              "role": "runtime_library",
+              "expectedSize": 28775120,
+              "expectedHash": "3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b"
+            },
+            {
+              "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+              "role": "runtime_library",
+              "expectedSize": 2999920,
+              "expectedHash": "ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1"
+            }
+          ],
+          "sources": [
+            {
+              "relativePath": "bin/sherpa-onnx-offline-speaker-diarization",
+              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+              "archive": {
+                "format": "tar",
+                "expectedSize": 18252168,
+                "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+                "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/bin/sherpa-onnx-offline-speaker-diarization"
+              }
+            },
+            {
+              "relativePath": "lib/libonnxruntime.dylib",
+              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+              "archive": {
+                "format": "tar",
+                "expectedSize": 18252168,
+                "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+                "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libonnxruntime.dylib"
+              }
+            },
+            {
+              "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+              "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+              "archive": {
+                "format": "tar",
+                "expectedSize": 18252168,
+                "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+                "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libsherpa-onnx-c-api.dylib"
+              }
+            }
+          ],
+          "order": [
+            "bin/sherpa-onnx-offline-speaker-diarization",
+            "lib/libonnxruntime.dylib",
+            "lib/libsherpa-onnx-c-api.dylib",
+            "models/segmentation.onnx",
+            "models/embedding.onnx",
+            "notices/segmentation-MIT.txt",
+            "notices/sherpa-Apache-2.0.txt",
+            "notices/NeMo-Apache-2.0.txt",
+            "notices/onnxruntime-MIT.txt",
+            "notices/onnxruntime-ThirdPartyNotices.txt"
+          ],
+          "backendFiles": {}
         }
       }
     },

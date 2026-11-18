@@ -37,6 +37,12 @@ fn real_sherpa_int8_catalog_copy_cpu_and_apply_with_reused_assets() {
     sherpa_trial("sherpa-1138-pyannote3-int8-eres2net-base");
 }
 
+#[test]
+#[ignore = "requires fixed TitaNet assets and explicit synthetic CPU permission"]
+fn real_titanet_int8_catalog_copy_cpu_and_apply_with_reused_assets() {
+    sherpa_trial("sherpa-1138-pyannote3-int8-titanet-small");
+}
+
 fn sherpa_trial(choice: &str) {
     let assets =
         PathBuf::from(std::env::var("MON_QA_SHERPA_ASSETS").expect("existing sherpa assets"));
@@ -51,10 +57,14 @@ fn sherpa_trial(choice: &str) {
                 assets.join("segmentation.tar.bz2")
             } else if url.ends_with("16k.onnx") {
                 assets.join("embedding-base.onnx")
+            } else if url.ends_with("nemo_en_titanet_small.onnx") {
+                assets.join("nemo_en_titanet_small.onnx")
             } else if url.contains("/k2-fsa/sherpa-onnx/") {
                 notices.join("sherpa-Apache-2.0.txt")
             } else if url.contains("/modelscope/3D-Speaker/") {
                 notices.join("3DSpeaker-Apache-2.0.txt")
+            } else if url.contains("/NVIDIA/NeMo/") {
+                notices.join("NeMo-Apache-2.0.txt")
             } else if url.ends_with("/ThirdPartyNotices.txt") {
                 notices.join("onnxruntime-ThirdPartyNotices.txt")
             } else {
@@ -62,7 +72,9 @@ fn sherpa_trial(choice: &str) {
                 notices.join("onnxruntime-MIT.txt")
             }
         },
-        7,
+        // Standalone notices are embedded; only the runtime archive,
+        // segmentation archive and embedding weights reach the transport.
+        3,
     );
 }
 

@@ -15,6 +15,40 @@ function setup() {
 }
 const notice = (key = "one", props: Partial<ToastInput> = {}): ToastInput => ({ key, level: "success", message: "保存しました", ...props });
 
+test("recording save enriches one failed event and preserves independent results", () => {
+  const {c}=setup();
+  const failure=notice("session",{level:"error",message:"保存失敗",eventId:"recording_save:session:failed",replaceEventHistory:true});
+  c.show(failure);
+  const firstId=c.getSnapshot()[0].id;
+  c.show({...failure,message:"元音声は保持しています。保存を再試行できます。"});
+  assert.equal(c.getSnapshot().length,1);
+  assert.equal(c.getSnapshot()[0].id,firstId);
+  assert.equal(c.getHistorySnapshot().length,1);
+  assert.match(c.getHistorySnapshot()[0].message,/再試行/);
+  c.show({...failure,level:"success",message:"録音を保存完了しました。",eventId:"recording_save:session:succeeded"});
+  assert.equal(c.getHistorySnapshot().length,2);
+  const failed=c.getHistorySnapshot().find(n=>n.level==="error")!;
+  c.removeHistory(failed.id);
+  c.show({...failure,message:"同じ保存失敗の遅延応答"});
+  assert.equal(c.getHistorySnapshot().length,1);
+  c.resolve(failure.key);
+  c.show({...failure,key:"another",eventId:"recording_save:another:failed"});
+  assert.equal(c.getHistorySnapshot().length,2);
+});
+
+test("acknowledging one recording save failure suppresses enriched handover and older replay", () => {
+  const {c}=setup();
+  const input=notice("session",{level:"error",message:"保存失敗",eventId:"recording_save:session:failed",replaceEventHistory:true});
+  c.show(input);c.dismiss(input.key,c.getSnapshot()[0].id);
+  c.resolve(input.key);
+  c.show({...input,message:"保存側で確認した最新の詳細"});
+  assert.equal(c.getSnapshot().length,0);
+  assert.equal(c.getHistorySnapshot().length,1);
+  assert.match(c.getHistorySnapshot()[0].message,/最新の詳細/);
+  c.show(input);
+  assert.equal(c.getSnapshot().length,0);
+});
+
 test("history-only feature actions require an explicit list action and detach with their owner",async()=>{
   const {c}=setup();let calls=0,release!:()=>void;
   const run=async()=>{calls++;await new Promise<void>(resolve=>{release=resolve;});};

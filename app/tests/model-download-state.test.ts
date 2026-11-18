@@ -201,9 +201,14 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
     } };
   }));
   const options = await assertOfficialModelOptions(native);
-  assert.equal(options.length, 7);
+  assert.equal(options.length, 8);
   const extraChoices = [...native, ...native.map((option, i) => ({ ...option, id: `extra-${i}` }))];
-  assert.equal((await assertOfficialModelOptions(extraChoices)).length, 14);
+  assert.equal((await assertOfficialModelOptions(extraChoices)).length, 16);
+  const titanet = options.find(o => o.id === "sherpa-1138-pyannote3-int8-titanet-small")!;
+  assert.ok(titanet);
+  assert.equal(titanet.review.manifest.files.find(f => f.role === "speaker_embedding")?.expectedHash,
+    "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e");
+  assert.equal(titanet.review.ready, false);
   await assert.rejects(assertOfficialModelOptions(Array.from({ length: 33 }, (_, i) => ({ ...native[0], id: `extra-${i}` }))));
   const gemma = options.find(o => o.id === "llama-b11960-gemma4-e4b-it-q4km")!;
   assert.equal(gemma.label, "Gemma 4 E4B IT · Q4_K_M");

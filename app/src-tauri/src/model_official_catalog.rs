@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn fixed_catalog_is_bounded_complete_and_review_only_with_notices() {
         let choices = options().unwrap();
-        assert_eq!(choices.len(), 7);
+        assert_eq!(choices.len(), 8);
         let mut ids = std::collections::BTreeSet::new();
         for choice in choices {
             assert!(ids.insert(choice.id.clone()));
@@ -171,6 +171,9 @@ mod tests {
                 }
                 "sherpa-1138-pyannote3-int8-eres2net-base" => {
                     "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96"
+                }
+                "sherpa-1138-pyannote3-int8-titanet-small" => {
+                    "b2ac4fcbd3527ffe7776601b28eb6198d922164cc383340cc67a9cec2e16ceb7"
                 }
                 "llama-b11533-qwen3-8b-q4km" => {
                     "d985b93ece8e0c10e87af2a2a7342be13f22a4bba729c7f8ffb44fd306b597ee"

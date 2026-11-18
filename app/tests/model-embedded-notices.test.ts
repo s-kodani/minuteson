@@ -45,8 +45,11 @@ test("all official standalone notices have exact embedded bytes and require no t
       references++;
     });
   }
-  assert.equal(unique.size, 14);
-  assert.equal(references, 27);
+  assert.equal(unique.size, 15);
+  assert.equal(references, 31);
+  const nemo = licensePolicy.notices.find(notice => notice.name === "NeMo-Apache-2.0.txt");
+  assert.ok(nemo);
+  assert.ok(unique.has(JSON.stringify([nemo.sourceUrl, nemo.bytes, nemo.sha256])));
 });
 
 test("ReazonSpeech still counts weights and its runtime archive while excluding all five standalone notices", () => {

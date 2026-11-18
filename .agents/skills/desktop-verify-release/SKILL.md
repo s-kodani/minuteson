@@ -16,6 +16,14 @@ description: "Verify desktop changes and prepare requested QA or release artifac
 未コミット状態から作る場合はコミットSHAだけで一致を主張せず、差分と入力の識別を残す。
 不要なブランチ切替やmainへの反映を行わず、依頼された共有先と完了範囲に従う。
 
+## Windowsネイティブビルドの実行環境
+
+このリポジトリをCodexのWindowsサンドボックスで構築すると、MSBuildの子ノードが繰り返し起動したままコンパイラが進まず、制限外での再実行では進む事象を確認している。CMake／MSBuildを含むQA・NSIS・MSIXビルドやWindows資材準備は、最初の実行から`exec_command`に`sandbox_permissions: "require_escalated"`を指定する。停止を再現してから実行環境を切り替える手順にしない。実行権限の審査は通常どおり受ける。
+
+- npmのキャッシュは書き込み可能な`<workspace>/output/npm-cache`を`npm_config_cache`へ指定し、ビルドの子プロセスにも引き継ぐ。
+- 誤ってサンドボックス内で開始したビルドが停止した場合は、その実行を中断し、所有する子プロセスの終了を確認してから同じソースで再実行する。同時に二つのビルドを動かさない。
+- 中断した実行のソース証跡と`.cache/windows-runtime/package-update-*`等の一時領域は、今回作成した対象を特定して整理する。既存の共有キャッシュや別作業の成果物は保持する。
+
 ## 検証を選ぶ
 
 既存のコマンドとCI定義を読み、変更した境界に必要な検証を実行する。

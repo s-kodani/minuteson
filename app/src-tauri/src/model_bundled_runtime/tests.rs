@@ -99,6 +99,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
             "llama-b11533-qwen35-4b-q4km",
             "llama-b11533-qwen35-9b-q4km",
             "llama-b11960-gemma4-e4b-it-q4km",
+            "sherpa-1138-pyannote3-int8-titanet-small",
             "reazonspeech-k2-v2-int8-fp32",
             "reazonspeech-k2-v2-fp32",
         ]

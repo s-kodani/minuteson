@@ -122,6 +122,22 @@ fn speaker_embedding_is_copied_without_a_network_fetch_for_a_new_segmentation_va
 }
 
 #[test]
+fn changing_from_eres2net_to_titanet_never_reuses_the_previous_embedding() {
+    let (_temp, models, entry, mut recipe) = fixture();
+    let model = recipe
+        .manifest
+        .files
+        .iter_mut()
+        .find(|f| f.role == Role::SpeakerEmbedding)
+        .unwrap();
+    // The same managed relative path does not make different weights reusable.
+    model.expected_hash =
+        Some("ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e".into());
+    model.expected_size = Some(40_257_283);
+    assert!(candidates(&models, &[entry], &recipe).is_empty());
+}
+
+#[test]
 fn speaker_embedding_reuse_requires_recorded_identity_and_still_detects_cancellation_and_tampering()
 {
     let (_temp, models, entry, recipe) = fixture();

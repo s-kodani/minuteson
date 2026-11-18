@@ -10,7 +10,7 @@ export function MeetingDeletionMenu({ meeting, recoveryRunning, deletion, audioD
   const note = useId();
   const hasAudio = ["recorded", "imported"].includes(meeting.lifecycle);
   const nativeReason = deletion.meetingReviewReason(meeting.id);
-  const reason = recoveryRunning && nativeReason && deletion.meetingBlockers(meeting.id).some(b => b.kind === "recording") ? "録音を回復中です。完了するまで削除できません。" : nativeReason;
+  const reason = recoveryRunning && nativeReason && deletion.meetingBlockers(meeting.id).some(b => b.kind === "recording") ? "録音を保存中です。完了するまで削除できません。" : nativeReason;
   const blockers = deletion.meetingBlockers(meeting.id);
   const audioReason = hasAudio ? audioDeletion.meetingReviewReason(meeting.id) : null;
   const reasons = [...new Set([reason, audioReason && audioReason !== reason ? `音声だけの削除：${audioReason}` : audioReason].filter((value): value is string => !!value))];

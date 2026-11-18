@@ -44,7 +44,15 @@ impl Storage {
             .map_err(|e| e.to_string());
         rows
     }
+    #[cfg(test)]
     pub(crate) fn history_source_records(&self, cutoff: i64) -> Result<Vec<Entry>, String> {
+        self.history_source_records_including_recordings(cutoff, true)
+    }
+    pub(crate) fn history_source_records_including_recordings(
+        &self,
+        cutoff: i64,
+        recordings: bool,
+    ) -> Result<Vec<Entry>, String> {
         let db = self
             .connection
             .lock()
@@ -81,14 +89,13 @@ impl Storage {
                     .map_err(|e| e.to_string())?,
             );
         }
-        {
+        if recordings {
             let mut q=db.prepare("SELECT r.id,r.meeting_id,m.title,r.state,r.ended_at_utc_ms,r.updated_at FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.updated_at>=?1 AND r.state IN ('saved','failed','interrupted','stopping') AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=r.meeting_id AND p.domain='meetings')").map_err(|e|e.to_string())?;
             let rows = q
                 .query_map([cutoff], |r| {
                     let state: String = r.get(3)?;
                     let updated: i64 = r.get(5)?;
                     let outcome = match state.as_str() {
-                        "saved" => "succeeded",
                         "failed" => "failed",
                         "stopping" => "running",
                         _ => "interrupted",
@@ -102,7 +109,7 @@ impl Storage {
                     );
                     // Old sessions do not retain the beginning of audio saving.
                     e.accepted_at = None;
-                    e.finished_at = if ["saved", "failed"].contains(&state.as_str()) {
+                    e.finished_at = if state == "failed" {
                         Some(updated)
                     } else {
                         None
@@ -210,6 +217,39 @@ impl Storage {
                     .map_err(|e| e.to_string())?,
             );
         }
+        drop(db);
+        // Saving the session row precedes canonical publication/cleanup. Match
+        // the finalizer's durable evidence, with no source DB lock during hashes.
+        for entry in records
+            .iter_mut()
+            .filter(|entry| entry.kind == "recording_save")
+        {
+            let session = entry
+                .id
+                .strip_prefix("recording_save:")
+                .ok_or("録音履歴IDが不正です")?;
+            match self.recording_save_complete(
+                session,
+                entry
+                    .meeting_id
+                    .as_deref()
+                    .ok_or("録音履歴の会議が不明です")?,
+                &|| false,
+            ) {
+                Ok(true) => {
+                    entry.state = "succeeded".into();
+                    entry.finished_at = Some(entry.observed_at);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    entry.state = "interrupted".into();
+                    entry.finished_at = None;
+                    entry.detail = Some(format!(
+                        "録音の保存完了を確認できません。元の記録を保持しています: {error}"
+                    ));
+                }
+            }
+        }
         Ok(records)
     }
 }
@@ -239,5 +279,69 @@ mod tests {
         assert_eq!(row.observed_at, 200);
         assert!(store.history_source_records(201).unwrap().is_empty());
         assert_eq!(store.list_jobs(&meeting.id).unwrap()[0].state, "succeeded");
+    }
+
+    #[test]
+    fn recording_backfill_requires_verified_wav_and_completed_cleanup_not_just_saved_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Storage::open(dir.path().into()).unwrap();
+        let (meeting, session, _, _) = super::super::recordings::tests::saved_probe_fixture(&store);
+        store.finalize_recording(&session).unwrap();
+        assert!(store
+            .recording_save_complete(&session, &meeting, &|| false)
+            .unwrap());
+        let rows = store.history_source_records(0).unwrap();
+        assert_eq!(
+            rows.iter()
+                .find(|e| e.id == format!("recording_save:{session}"))
+                .unwrap()
+                .state,
+            "succeeded"
+        );
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE meeting_audio_commits SET phase='committed' WHERE meeting_id=?1",
+                [&meeting],
+            )
+            .unwrap();
+        let rows = store.history_source_records(0).unwrap();
+        let pending = rows
+            .iter()
+            .find(|e| e.id == format!("recording_save:{session}"))
+            .unwrap();
+        assert_eq!(pending.state, "interrupted");
+        assert!(pending.finished_at.is_none());
+        assert!(!store
+            .recording_save_complete(&session, &meeting, &|| false)
+            .unwrap());
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE meeting_audio_commits SET phase='cleaned' WHERE meeting_id=?1",
+                [&meeting],
+            )
+            .unwrap();
+        let plan = store.canonical_audio_plan(&meeting).unwrap();
+        let path = store.meeting_mix_path(&meeting, &plan.tracks[0]).unwrap();
+        std::fs::write(path, b"invalid canonical wav").unwrap();
+        let rows = store.history_source_records(0).unwrap();
+        let unverified = rows
+            .iter()
+            .find(|e| e.id == format!("recording_save:{session}"))
+            .unwrap();
+        assert_eq!(unverified.state, "interrupted");
+        assert!(unverified
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("保存完了を確認できません")));
+        // Page refreshes do not hash every existing meeting repeatedly.
+        assert!(store
+            .history_source_records_including_recordings(0, false)
+            .is_ok());
     }
 }

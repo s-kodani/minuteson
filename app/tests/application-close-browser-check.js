@@ -115,6 +115,33 @@ async (page) => {
     check(await count("finish_main_close") === 0 && await count("stop_recording") === 0 && await page.evaluate(() => window.closeFixture.recording.phase === "error"), "save failure closed app or fabricated idle");
     results.push("exit during saving retains canonical error and never continues closing after dismissal");
 
+    const configureRecovery = origin => page.evaluate(origin=>{
+      const f=window.closeFixture,sessionId=crypto.randomUUID(),meeting=window.dataFixture.meetings[0];
+      return f.recoveryChanged({runId:crypto.randomUUID(),origin,targetSessionId:origin==="startup"?null:sessionId,phase:"running",error:null,
+        items:[{sessionId,meetingId:meeting.id,meetingTitle:meeting.title,phase:"running",startedAtMs:Date.now(),error:null}]});
+    },origin);
+    const waitForSaving = () => modal(savingTitle).getByRole("button",{name:"保存完了を待って終了へ進む",exact:true});
+    for(const origin of ["startup","retry"]){
+      stage=`${origin}-saving-wait`;await boot();await configureRecovery(origin);await request();await waitForSaving().dblclick();await modal(savingTitle).getByRole("status").waitFor();
+      check(await count("finish_main_close")===0&&await count("stop_recording")===0&&await count("retry_recording_recovery")===0,"save confirmation stopped or retried work instead of waiting for completion");
+      await page.evaluate(()=>{const f=window.closeFixture;return f.recoveryChanged({phase:"completed",items:f.recovery.items.map(item=>({...item,phase:"succeeded"}))});});
+      await page.waitForFunction(()=>window.closeFixture.calls.some(c=>c.command==="finish_main_close"));
+      check(await count("finish_main_close")===1,`${origin} save completion did not perform one checked exit`);
+      results.push(`${origin} recording saving waits for actual terminal save evidence while the recorder is idle`);
+    }
+    for(const fault of ["failed","read","target"]){
+      stage=`recovery-saving-${fault}`;await boot();await configureRecovery("startup");await request();await waitForSaving().click();await modal(savingTitle).getByRole("status").waitFor();
+      await page.evaluate(fault=>{
+        const f=window.closeFixture;
+        if(fault==="read"){f.failRecoveryRead=true;return;}
+        if(fault==="failed")return f.recoveryChanged({phase:"completed",items:f.recovery.items.map(item=>({...item,phase:"failed",error:"模擬保存失敗"}))});
+        return f.recoveryChanged({runId:crypto.randomUUID(),items:f.recovery.items.map(item=>({...item,sessionId:crypto.randomUUID()}))});
+      },fault);
+      await dismissFailed(savingTitle);
+      check(await count("finish_main_close")===0&&await count("stop_recording")===0&&await count("retry_recording_recovery")===0,`${fault} saving evidence closed the app or resubmitted recording work`);
+      results.push(`${fault} recording-save evidence retains the app and ends the pending exit confirmation`);
+    }
+
     stage = "quiet-close"; await boot(); await request(); await page.waitForFunction(() => window.closeFixture.calls.some(c => c.command === "finish_main_close")); check(await count("finish_main_close") === 1 && await page.getByRole("dialog").count() === 0 && await page.evaluate(() => window.closeFixture.flushes > 0), "quiet close missed save or prompted unnecessarily");
     results.push("quiet closing flushes edits and uses checked native tokens without a destructive prompt");
 

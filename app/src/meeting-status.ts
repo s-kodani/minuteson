@@ -11,7 +11,8 @@ interface MeetingStatusSource {
 // restart/delete, or treat a stored lifecycle as proof of a running helper.
 export function meetingStatusLabel(meeting: MeetingStatusSource, state: BridgeState, recovery?: RecoverySnapshot | null): string {
   const item = recoveryMeetingState(recovery ?? null, meeting.id);
-  if (item) return item.phase === "running" ? "録音を回復中" : item.phase === "queued" ? "録音の回復待ち" : item.noAudio ? "録音失敗" : "音声保存エラー";
+  if (item) return item.phase === "running" ? "録音を保存中" : item.phase === "queued" ? "録音の保存待ち" : item.noAudio ? "録音失敗" : "音声保存エラー";
+  if (recovery?.items.some(i => i.meetingId === meeting.id && i.phase === "succeeded")) return "録音済み";
   if (state.kind === "ready" && state.snapshot.meetingId === meeting.id && state.snapshot.phase === "saving") return "音声保存中";
   if (meeting.lifecycle === "imported") return "取り込み済み";
   if (meeting.lifecycle === "recorded") return "録音済み";

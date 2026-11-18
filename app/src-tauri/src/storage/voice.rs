@@ -1205,6 +1205,17 @@ pub(in crate::storage) mod tests {
         registration: bool,
         selected: Option<Vec<Window>>,
     ) -> (JobSnapshot, JobSpec, Plan) {
+        enqueue_with_model(s, m, speaker, registration, selected, &"a".repeat(64), None)
+    }
+    fn enqueue_with_model(
+        s: &Storage,
+        m: &str,
+        speaker: &str,
+        registration: bool,
+        selected: Option<Vec<Window>>,
+        model_hash: &str,
+        person_id: Option<String>,
+    ) -> (JobSnapshot, JobSpec, Plan) {
         let c = s.voice_context(m).unwrap();
         let fp = crate::local_engine::Fingerprint {
             path: PathBuf::from(crate::test_support::absolute("/test-only")),
@@ -1214,7 +1225,10 @@ pub(in crate::storage) mod tests {
         let engine = crate::diarization::sherpa::SherpaConfig {
             executable: fp.clone(),
             segmentation_model: fp.clone(),
-            embedding_model: fp.clone(),
+            embedding_model: crate::local_engine::Fingerprint {
+                sha256: model_hash.into(),
+                ..fp.clone()
+            },
             runtime_libraries: vec![fp.clone()],
             threads: 1,
             cluster_threshold_milli: 500,
@@ -1236,8 +1250,8 @@ pub(in crate::storage) mod tests {
             book_hash: c.book_hash,
             working_hash: c.working_hash,
             audio_manifest_hash: s.recorded_analysis_input(m).unwrap().0.manifest_hash,
-            person_id: None,
-            person_name: registration.then(|| "田中".into()),
+            person_name: (registration && person_id.is_none()).then(|| "田中".into()),
+            person_id,
             windows: selected.clone().unwrap_or_else(|| {
                 c.windows
                     .into_iter()
@@ -1254,7 +1268,7 @@ pub(in crate::storage) mod tests {
             working_hash: plan.working_hash.clone(),
             book_hash: plan.book_hash.clone(),
             speaker_id: registration.then(|| speaker.into()),
-            person_id: None,
+            person_id: plan.person_id.clone(),
             person_name: plan.person_name.clone(),
             selected_windows: selected,
         };
@@ -1567,6 +1581,98 @@ pub(in crate::storage) mod tests {
             )
             .is_err());
         assert!(s.voice_context(&m).unwrap().matches.is_empty());
+    }
+    #[test]
+    fn eres2net_and_titanet_voices_can_be_added_to_one_person_and_match_only_their_model() {
+        let (_root, s, m, speaker) = fixture();
+        let eres2net = "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b";
+        let titanet = "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e";
+        let mut original = vec![0.; 512];
+        original[0] = 1.;
+        let mut additional = vec![0.; 192];
+        additional[191] = 1.;
+        let (job, spec, plan) = enqueue_with_model(&s, &m, &speaker, true, None, eres2net, None);
+        s.publish_voice_result(
+            &spec,
+            &plan,
+            vec![(plan.windows[0].clone(), original.clone())],
+            &job.id,
+        )
+        .unwrap();
+        let person = s.voice_people().unwrap().remove(0);
+        let original_sample = person.samples[0].id.clone();
+        let analysis = s.load_current_analysis(&m).unwrap().unwrap();
+        let (job, spec, plan) = enqueue_with_model(
+            &s,
+            &m,
+            &speaker,
+            true,
+            None,
+            titanet,
+            Some(person.id.clone()),
+        );
+        s.publish_voice_result(
+            &spec,
+            &plan,
+            vec![(plan.windows[0].clone(), additional.clone())],
+            &job.id,
+        )
+        .unwrap();
+        let people = s.voice_people().unwrap();
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].name, "田中");
+        assert_eq!(people[0].samples.len(), 2);
+        assert!(people[0].samples.iter().any(|v| v.id == original_sample
+            && v.model_hash == eres2net
+            && v.model_name.as_deref() == Some("3D-Speaker ERes2Net base")));
+        assert!(people[0]
+            .samples
+            .iter()
+            .any(|v| v.model_hash == titanet
+                && v.model_name.as_deref() == Some("NVIDIA TitaNet small")));
+        assert_eq!(
+            s.load_current_analysis(&m).unwrap().unwrap().id,
+            analysis.id
+        );
+        let draft = s.load_transcript_draft(&m).unwrap().unwrap();
+        for (hash, vector) in [(eres2net, original.clone()), (titanet, additional)] {
+            // Confirmed decisions otherwise intentionally suppress a new match.
+            s.connection
+                .lock()
+                .unwrap()
+                .execute("DELETE FROM voice_matches", [])
+                .unwrap();
+            let (job, spec, plan) = enqueue_with_model(&s, &m, &speaker, false, None, hash, None);
+            s.publish_voice_result(
+                &spec,
+                &plan,
+                vec![(plan.windows[0].clone(), vector)],
+                &job.id,
+            )
+            .unwrap();
+            let matches = s.voice_context(&m).unwrap().matches;
+            assert_eq!(matches.len(), 1);
+            assert_eq!(matches[0].person_id.as_deref(), Some(person.id.as_str()));
+            assert_eq!(matches[0].model_hash, hash);
+            assert_eq!(
+                s.load_transcript_draft(&m).unwrap().unwrap().payload,
+                draft.payload
+            );
+        }
+        let db = s.connection.lock().unwrap();
+        validate_registry(&db).unwrap();
+        let (dimension, bytes): (i64, Vec<u8>) = db
+            .query_row(
+                "SELECT dimension,vector FROM voice_samples WHERE id=?1",
+                [&original_sample],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(dimension, 512);
+        assert_eq!(
+            voice::decode(&bytes, usize::try_from(dimension).unwrap()).unwrap(),
+            original
+        );
     }
     #[test]
     fn removing_person_keeps_applied_name_and_removing_source_keeps_registered_features() {

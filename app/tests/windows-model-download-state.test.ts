@@ -72,10 +72,10 @@ test("all Windows model choices from the native IPC pass the production frontend
 }, async () => {
   const native = JSON.parse(readFileSync(process.env.MON_WINDOWS_MODEL_OPTIONS!, "utf8"));
   const choices = await assertOfficialModelOptions(native);
-  assert.equal(choices.length, 12);
+  assert.equal(choices.length, 13);
   assert.deepEqual(choices.map(o => o.review.manifest.engine).reduce((counts, engine) => {
     counts[engine] = (counts[engine] ?? 0) + 1; return counts;
-  }, {} as Record<string, number>), { "whisper.cpp": 3, "sherpa-onnx": 2, "llama.cpp": 5, "asr": 2 });
+  }, {} as Record<string, number>), { "whisper.cpp": 3, "sherpa-onnx": 3, "llama.cpp": 5, "asr": 2 });
   for (const option of choices.filter(option => option.review.manifest.engine === "asr")) {
     assert.equal(option.review.manifest.backend?.id, "sherpa-onnx-transducer");
   }
@@ -83,5 +83,9 @@ test("all Windows model choices from the native IPC pass the production frontend
   assert.ok(gemma);
   assert.equal(gemma.review.manifest.engineVersion, "b11960");
   assert.equal(gemma.tokenLimits?.tokenizer, "gguf");
+  const titanet = choices.find(option => option.id === "windows-sherpa-1138-pyannote3-int8-titanet-small");
+  assert.ok(titanet);
+  assert.equal(titanet.review.manifest.files.find(file => file.role === "speaker_embedding")?.expectedHash,
+    "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e");
   for (const choice of choices) assert.ok(choice.review.bundledBytes! > 0);
 });

@@ -4,7 +4,7 @@ const key="MON_LIFECYCLE_GUIDANCE";
 const f=window.lifecycleFixture={calls:[],pending:localStorage.getItem(key)==="pending"||(localStorage.getItem(key)===null&&new URLSearchParams(location.search).has("initial")),failDismiss:false,readFail:false};
 await import("./voice-browser-fixture.js");
 const original=window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
-const kinds=["minutes_generation","diarization","transcription","backup","restore","model","recording_save","recording_recovery","audio_import","voice_registration","voice_matching","speaker_completion","deletion","audio_deletion","model_deletion"];
+const kinds=["minutes_generation","diarization","transcription","backup","restore","model","recording_save","audio_import","voice_registration","voice_matching","speaker_completion","deletion","audio_deletion","model_deletion"];
 const outcomes=["succeeded","failed","cancelled","interrupted","attention"];
 const time=Date.now();
 f.rows=Array.from({length:57},(_,i)=>({id:`history-${String(i).padStart(3,"0")}`,kind:kinds[i%kinds.length],target:`企画会議 ${i+1}`,meetingId:i%kinds.length<3?"meeting-0":null,state:outcomes[i%outcomes.length],acceptedAt:time-i*600000-60000,finishedAt:i%outcomes.length>=3?null:time-i*600000,observedAt:time-i*600000,detail:i%outcomes.length===1?"合成の処理失敗です。":null}));

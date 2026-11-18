@@ -15,18 +15,18 @@ const icons: Record<ToastLevel, string> = { success: "✓", info: "ⓘ", warning
 
 /** An event notification, not operation state. Clearing it never clears an error
  * or submits a command. Only the originating controller can resolve a problem. */
-export function ToastNotice({ scope, type, message, details, level = "success", important, onClose, onRendered, action, eventId, meetingId, historyOnly = false, clearHistoryOnResolve = false }: { scope: string; type: string; message: string | null | undefined; details?: string; level?: ToastLevel; important?: boolean; onClose?: () => void; onRendered?:()=>void; action?: ToastAction; eventId?: string; meetingId?: string; historyOnly?: boolean; clearHistoryOnResolve?:boolean }) {
+export function ToastNotice({ scope, type, message, details, level = "success", important, onClose, onRendered, action, eventId, replaceEventHistory = false, meetingId, historyOnly = false, clearHistoryOnResolve = false }: { scope: string; type: string; message: string | null | undefined; details?: string; level?: ToastLevel; important?: boolean; onClose?: () => void; onRendered?:()=>void; action?: ToastAction; eventId?: string; replaceEventHistory?: boolean; meetingId?: string; historyOnly?: boolean; clearHistoryOnResolve?:boolean }) {
   const key = toastKey(scope, type), latest = useRef({ onClose, onRendered, action });
   const priorKey = useRef(key);
   latest.current = { onClose, onRendered, action };
   useLayoutEffect(() => {
     let active = true;
     const run = async () => { const current = latest.current.action; if (active && current && !current.disabled) await current.run(); };
-    if (message) (historyOnly ? toasts.record.bind(toasts) : toasts.show.bind(toasts))({ key, message, details, historyOnly, level, important, eventId, meetingId, onClose: () => { if (active) latest.current.onClose?.(); }, onRendered:()=>{if(active)latest.current.onRendered?.();}, action: action ? { ...action, run } : undefined });
+    if (message) (historyOnly ? toasts.record.bind(toasts) : toasts.show.bind(toasts))({ key, message, details, historyOnly, level, important, eventId, replaceEventHistory, meetingId, onClose: () => { if (active) latest.current.onClose?.(); }, onRendered:()=>{if(active)latest.current.onRendered?.();}, action: action ? { ...action, run } : undefined });
     else { if(clearHistoryOnResolve)toasts.forget(key);else toasts.resolve(key); if (priorKey.current !== key) toasts.resolve(priorKey.current); }
     priorKey.current = key;
     return () => { active = false; toasts.detachAction(key, run); };
-  }, [key, message, details, level, important, eventId, action?.kind, action?.label, action?.disabled, meetingId, historyOnly, clearHistoryOnResolve]);
+  }, [key, message, details, level, important, eventId, replaceEventHistory, action?.kind, action?.label, action?.disabled, meetingId, historyOnly, clearHistoryOnResolve]);
   useEffect(()=>()=>{if(historyOnly&&clearHistoryOnResolve)toasts.forget(key);},[key,historyOnly,clearHistoryOnResolve]);
   return null;
 }
