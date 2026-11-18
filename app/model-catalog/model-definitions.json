@@ -806,5 +806,112 @@
       "macos_aarch64",
       "windows_x86_64"
     ]
+  },
+  {
+    "id": "sherpa-1138-pyannote3-int8-titanet-small",
+    "label": "Pyannote int8 + TitaNet small",
+    "speakerEmbeddingName": "NVIDIA TitaNet small",
+    "description": "pyannote segmentation 3.0 int8・NVIDIA TitaNet small。CPUで動作します。人数は通常自動推定です。品質は評価前で、取得後にCPU動作確認と適用が必要です。",
+    "group": "base",
+    "recipeSchemaVersion": 4,
+    "manifest": {
+      "schemaVersion": 1,
+      "engine": "sherpa-onnx",
+      "engineVersion": "v1.13.8",
+      "modelName": "pyannote segmentation 3.0 int8 + NVIDIA TitaNet small",
+      "modelVersion": "segmentation-3-0-int8+titanet-small-16k-SHA-fixed-capi1",
+      "quantization": null,
+      "licenseRef": "sherpa-onnx Apache-2.0: https://github.com/k2-fsa/sherpa-onnx/blob/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE ; segmentation MITは公式配布アーカイブ内。NVIDIA TitaNet small 1.19.0: https://catalog.ngc.nvidia.com/orgs/nvidia/nemo/models/titanet_small/1.19.0 （NeMo Toolkit Apache-2.0）。NeMo利用条件原文: https://raw.githubusercontent.com/NVIDIA/NeMo/2331b063d6f0282fa79c32e4e780db6cc7ef19f2/LICENSE ; ONNX変換: sherpa-onnx。ONNX Runtime 1.28.2 MIT/ThirdPartyNotices: https://github.com/microsoft/onnxruntime/tree/33ca9628233dc8f002435e868d4c2e9f82766ca1 ; 本文はnoticesに保持。容量・SHAは配布ファイルの照合値で、配布元署名の認証ではない。"
+    },
+    "files": [
+      {
+        "relativePath": "models/segmentation.onnx",
+        "role": "segmentation",
+        "expectedSize": 1540506,
+        "expectedHash": "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d"
+      },
+      {
+        "relativePath": "models/embedding.onnx",
+        "role": "speaker_embedding",
+        "expectedSize": 40257283,
+        "expectedHash": "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e"
+      },
+      {
+        "relativePath": "notices/segmentation-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1061,
+        "expectedHash": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba"
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11358,
+        "expectedHash": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "relativePath": "notices/NeMo-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11356,
+        "expectedHash": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1073,
+        "expectedHash": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "role": "notice",
+        "expectedSize": 325054,
+        "expectedHash": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+      }
+    ],
+    "sources": [
+      {
+        "relativePath": "models/segmentation.onnx",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 6958444,
+          "expectedHash": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+          "memberPath": "sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx"
+        }
+      },
+      {
+        "relativePath": "models/embedding.onnx",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx"
+      },
+      {
+        "relativePath": "notices/segmentation-MIT.txt",
+        "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+        "archive": {
+          "format": "tar",
+          "expectedSize": 6958444,
+          "expectedHash": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+          "memberPath": "sherpa-onnx-pyannote-segmentation-3-0/LICENSE"
+        }
+      },
+      {
+        "relativePath": "notices/sherpa-Apache-2.0.txt",
+        "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+      },
+      {
+        "relativePath": "notices/NeMo-Apache-2.0.txt",
+        "url": "https://raw.githubusercontent.com/NVIDIA/NeMo/2331b063d6f0282fa79c32e4e780db6cc7ef19f2/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-MIT.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+      },
+      {
+        "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+        "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+      }
+    ],
+    "targets": [
+      "macos_aarch64",
+      "windows_x86_64"
+    ]
   }
 ]

@@ -7,6 +7,16 @@ test("enrollment explicitly binds the selected speaker, person and current edito
   assert.equal(voiceStartRequest("m",context,"s","p","ignored","op").personName,null);
   assert.equal(voiceStartRequest("m",context,null,null,"ignored","op").speakerId,null);
 });
+test("voice library preserves names for both embedding models when adding a sample to an existing person",async()=>{
+  const {voicePersonModels}=await import("../src/voice-state.ts");
+  const common={id:"sample",extractorVersion:"sherpa-1.13.8-mono16k-normalized-v1",sourceMeetingId:"m",sourceAvailable:true,audioAvailable:true,audioStorageState:"ready" as const,startUs:0,endUs:2e6,createdAt:1};
+  const person={...context.people[0],samples:[
+    {...common,modelHash:"1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",modelName:"3D-Speaker ERes2Net base"},
+    {...common,id:"additional",modelHash:"ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e",modelName:"NVIDIA TitaNet small"},
+  ]};
+  assert.equal(voicePersonModels(person),"3D-Speaker ERes2Net base / NVIDIA TitaNet small");
+  assert.equal(voiceStartRequest("m",{...context,people:[person]},"s",person.id,"","new-model-operation").personId,person.id);
+});
 test("unsupported platforms, stale people and ineligible mixed voices do not start enrollment",()=>{
   assert.throws(()=>voiceStartRequest("m",{...context,supported:false},"s",null,"田中","op"),/この環境/);
   assert.throws(()=>voiceStartRequest("m",context,"missing",null,"田中","op"),/単独/);

@@ -2,7 +2,7 @@
   const results = [], check = (value, message) => { if (!value) throw Error(message); };
   const choices = [
     ["文字起こし", ["whisper-synthetic-medium", "whisper-synthetic-large-v3", "whisper-synthetic-large-v3-turbo", "reazonspeech-k2-v2-int8-fp32", "reazonspeech-k2-v2-fp32"]],
-    ["話者分離", ["sherpa-1138-pyannote3-eres2net-base", "sherpa-1138-pyannote3-int8-eres2net-base"]],
+    ["話者分離", ["sherpa-1138-pyannote3-eres2net-base", "sherpa-1138-pyannote3-int8-eres2net-base", "sherpa-1138-pyannote3-int8-titanet-small"]],
     ["議事録生成", ["llama-b11533-qwen3-8b-q4km", "llama-b11533-qwen3-4b-q4km", "llama-b11533-qwen35-4b-q4km", "llama-b11533-qwen35-9b-q4km", "llama-b11960-gemma4-e4b-it-q4km"]],
   ];
   const recommended = {
@@ -144,5 +144,11 @@
   await page.screenshot({ path: "output/playwright/model-choices.png" });
   await use("文字起こし", "asr", "reazonspeech-k2-v2-fp32");
   results.push("all three recommendations retain their selected labels after installation, with the original names in license review and inventory");
+  await use("話者分離", "sherpa-onnx", "sherpa-1138-pyannote3-int8-titanet-small");
+  const titanet = await page.evaluate(() => JSON.parse(window.modelDownloadFixture.calls.filter(c => c.command === "start_model_download").at(-1).args.definition));
+  check(titanet.manifest.files.find(file => file.role === "speaker_embedding").expectedHash === "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e", "TitaNet weights not bound");
+  check(titanet.manifest.files.some(file => file.relativePath === "notices/NeMo-Apache-2.0.txt"), "TitaNet notice missing");
+  check(await inventory.getByText("Pyannote int8 + ERes2Net base", {exact:true}).count() === 1, "TitaNet removed the previous model");
+  results.push("optional TitaNet setup binds its own weights and NeMo notice while keeping the previous ERes2Net package");
   return { passed: results.length, results };
 })

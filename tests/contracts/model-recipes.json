@@ -1714,6 +1714,160 @@
       "sha256": "ae970f92556b47c250dc78ad6413f04404cfcc0b854cfd2d88969491f708d67d",
       "manifestCanonical": "{\"schemaVersion\":1,\"engine\":\"asr\",\"engineVersion\":\"v1.13.8\",\"modelName\":\"ReazonSpeech-k2-v2（FP32）\",\"modelVersion\":\"291488c8151be24d7da4bf7af26e533fad96e407\",\"quantization\":\"fp32\",\"licenseRef\":\"ReazonSpeech-k2-v2 / sherpa-onnx: Apache-2.0; ONNX Runtime / Silero VAD / nlohmann-json: MIT. License texts and the official model card are included in notices/.\",\"target\":\"macos_aarch64\",\"files\":[{\"relativePath\":\"models/encoder.onnx\",\"role\":\"asr\",\"expectedSize\":592347848,\"expectedHash\":\"ecdb0b771e16104aaf8e579cb3c1e32fbd589eb641c5946d82b615bd366c5f96\"},{\"relativePath\":\"models/decoder.onnx\",\"role\":\"asr_asset\",\"expectedSize\":11767836,\"expectedHash\":\"58b18211ae06265466bfa17172dab574df94f76c8bcb61a3640c28ba860e4124\"},{\"relativePath\":\"models/joiner.onnx\",\"role\":\"asr_asset\",\"expectedSize\":10720115,\"expectedHash\":\"d38a81d1191c9ed6de6a1719503692e07e3e973e2364adde0abae5eaaded1174\"},{\"relativePath\":\"models/tokens.txt\",\"role\":\"asr_asset\",\"expectedSize\":45754,\"expectedHash\":\"2c3ac659818a48a0c04010e0593bbc4d7c8a24a054340b01131499c05fd52def\"},{\"relativePath\":\"models/silero_vad.onnx\",\"role\":\"vad\",\"expectedSize\":643854,\"expectedHash\":\"9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6\"},{\"relativePath\":\"lib/libonnxruntime.dylib\",\"role\":\"runtime_library\",\"expectedSize\":28775120,\"expectedHash\":\"3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b\"},{\"relativePath\":\"lib/libsherpa-onnx-c-api.dylib\",\"role\":\"runtime_library\",\"expectedSize\":2999920,\"expectedHash\":\"ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1\"},{\"relativePath\":\"notices/sherpa-Apache-2.0.txt\",\"role\":\"notice\",\"expectedSize\":11358,\"expectedHash\":\"cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30\"},{\"relativePath\":\"notices/onnxruntime-MIT.txt\",\"role\":\"notice\",\"expectedSize\":1073,\"expectedHash\":\"2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c\"},{\"relativePath\":\"notices/onnxruntime-ThirdPartyNotices.txt\",\"role\":\"notice\",\"expectedSize\":325054,\"expectedHash\":\"0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2\"},{\"relativePath\":\"notices/reazonspeech-model-card.md\",\"role\":\"notice\",\"expectedSize\":1188,\"expectedHash\":\"7debad4c9430f3310ad6d119fce385787c1c19f3ebc0cabe685a48dbe72a4de0\"},{\"relativePath\":\"notices/silero-MIT.txt\",\"role\":\"notice\",\"expectedSize\":1075,\"expectedHash\":\"2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b\"}],\"backend\":{\"id\":\"sherpa-onnx-transducer\",\"files\":{\"decoder\":\"models/decoder.onnx\",\"joiner\":\"models/joiner.onnx\",\"library\":\"lib/libsherpa-onnx-c-api.dylib\",\"tokens\":\"models/tokens.txt\"}}}",
       "manifestSha256": "175333328c42c8e8f74c861934781bb155b28d75167f5466dd0454d69d1603e5"
+    },
+    {
+      "name": "catalog-sherpa-1138-pyannote3-int8-titanet-small",
+      "input": {
+        "schemaVersion": 4,
+        "manifest": {
+          "schemaVersion": 1,
+          "engine": "sherpa-onnx",
+          "engineVersion": "v1.13.8",
+          "modelName": "pyannote segmentation 3.0 int8 + NVIDIA TitaNet small",
+          "modelVersion": "segmentation-3-0-int8+titanet-small-16k-SHA-fixed-capi1",
+          "quantization": null,
+          "licenseRef": "sherpa-onnx Apache-2.0: https://github.com/k2-fsa/sherpa-onnx/blob/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE ; segmentation MITは公式配布アーカイブ内。NVIDIA TitaNet small 1.19.0: https://catalog.ngc.nvidia.com/orgs/nvidia/nemo/models/titanet_small/1.19.0 （NeMo Toolkit Apache-2.0）。NeMo利用条件原文: https://raw.githubusercontent.com/NVIDIA/NeMo/2331b063d6f0282fa79c32e4e780db6cc7ef19f2/LICENSE ; ONNX変換: sherpa-onnx。ONNX Runtime 1.28.2 MIT/ThirdPartyNotices: https://github.com/microsoft/onnxruntime/tree/33ca9628233dc8f002435e868d4c2e9f82766ca1 ; 本文はnoticesに保持。容量・SHAは配布ファイルの照合値で、配布元署名の認証ではない。",
+          "target": "macos_aarch64",
+          "files": [
+            {
+              "relativePath": "bin/sherpa-onnx-offline-speaker-diarization",
+              "role": "executable",
+              "expectedSize": 405440,
+              "expectedHash": "e1170a93308867d8e343ac22a00b46b1d8e786c763c32a17caff07cf934ff66f"
+            },
+            {
+              "relativePath": "lib/libonnxruntime.dylib",
+              "role": "runtime_library",
+              "expectedSize": 28775120,
+              "expectedHash": "3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b"
+            },
+            {
+              "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+              "role": "runtime_library",
+              "expectedSize": 2999920,
+              "expectedHash": "ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1"
+            },
+            {
+              "relativePath": "models/segmentation.onnx",
+              "role": "segmentation",
+              "expectedSize": 1540506,
+              "expectedHash": "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d"
+            },
+            {
+              "relativePath": "models/embedding.onnx",
+              "role": "speaker_embedding",
+              "expectedSize": 40257283,
+              "expectedHash": "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e"
+            },
+            {
+              "relativePath": "notices/segmentation-MIT.txt",
+              "role": "notice",
+              "expectedSize": 1061,
+              "expectedHash": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba"
+            },
+            {
+              "relativePath": "notices/sherpa-Apache-2.0.txt",
+              "role": "notice",
+              "expectedSize": 11358,
+              "expectedHash": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+            },
+            {
+              "relativePath": "notices/NeMo-Apache-2.0.txt",
+              "role": "notice",
+              "expectedSize": 11356,
+              "expectedHash": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+            },
+            {
+              "relativePath": "notices/onnxruntime-MIT.txt",
+              "role": "notice",
+              "expectedSize": 1073,
+              "expectedHash": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+            },
+            {
+              "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+              "role": "notice",
+              "expectedSize": 325054,
+              "expectedHash": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+            }
+          ]
+        },
+        "sources": [
+          {
+            "relativePath": "bin/sherpa-onnx-offline-speaker-diarization",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+            "archive": {
+              "format": "tar",
+              "expectedSize": 18252168,
+              "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+              "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/bin/sherpa-onnx-offline-speaker-diarization"
+            }
+          },
+          {
+            "relativePath": "lib/libonnxruntime.dylib",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+            "archive": {
+              "format": "tar",
+              "expectedSize": 18252168,
+              "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+              "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libonnxruntime.dylib"
+            }
+          },
+          {
+            "relativePath": "lib/libsherpa-onnx-c-api.dylib",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2",
+            "archive": {
+              "format": "tar",
+              "expectedSize": 18252168,
+              "expectedHash": "91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a",
+              "memberPath": "sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libsherpa-onnx-c-api.dylib"
+            }
+          },
+          {
+            "relativePath": "models/segmentation.onnx",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+            "archive": {
+              "format": "tar",
+              "expectedSize": 6958444,
+              "expectedHash": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+              "memberPath": "sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx"
+            }
+          },
+          {
+            "relativePath": "models/embedding.onnx",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx"
+          },
+          {
+            "relativePath": "notices/segmentation-MIT.txt",
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+            "archive": {
+              "format": "tar",
+              "expectedSize": 6958444,
+              "expectedHash": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+              "memberPath": "sherpa-onnx-pyannote-segmentation-3-0/LICENSE"
+            }
+          },
+          {
+            "relativePath": "notices/sherpa-Apache-2.0.txt",
+            "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+          },
+          {
+            "relativePath": "notices/NeMo-Apache-2.0.txt",
+            "url": "https://raw.githubusercontent.com/NVIDIA/NeMo/2331b063d6f0282fa79c32e4e780db6cc7ef19f2/LICENSE"
+          },
+          {
+            "relativePath": "notices/onnxruntime-MIT.txt",
+            "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+          },
+          {
+            "relativePath": "notices/onnxruntime-ThirdPartyNotices.txt",
+            "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+          }
+        ]
+      },
+      "canonical": "{\"schemaVersion\":4,\"manifest\":{\"schemaVersion\":1,\"engine\":\"sherpa-onnx\",\"engineVersion\":\"v1.13.8\",\"modelName\":\"pyannote segmentation 3.0 int8 + NVIDIA TitaNet small\",\"modelVersion\":\"segmentation-3-0-int8+titanet-small-16k-SHA-fixed-capi1\",\"quantization\":null,\"licenseRef\":\"sherpa-onnx Apache-2.0: https://github.com/k2-fsa/sherpa-onnx/blob/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE ; segmentation MITは公式配布アーカイブ内。NVIDIA TitaNet small 1.19.0: https://catalog.ngc.nvidia.com/orgs/nvidia/nemo/models/titanet_small/1.19.0 （NeMo Toolkit Apache-2.0）。NeMo利用条件原文: https://raw.githubusercontent.com/NVIDIA/NeMo/2331b063d6f0282fa79c32e4e780db6cc7ef19f2/LICENSE ; ONNX変換: sherpa-onnx。ONNX Runtime 1.28.2 MIT/ThirdPartyNotices: https://github.com/microsoft/onnxruntime/tree/33ca9628233dc8f002435e868d4c2e9f82766ca1 ; 本文はnoticesに保持。容量・SHAは配布ファイルの照合値で、配布元署名の認証ではない。\",\"target\":\"macos_aarch64\",\"files\":[{\"relativePath\":\"bin/sherpa-onnx-offline-speaker-diarization\",\"role\":\"executable\",\"expectedSize\":405440,\"expectedHash\":\"e1170a93308867d8e343ac22a00b46b1d8e786c763c32a17caff07cf934ff66f\"},{\"relativePath\":\"lib/libonnxruntime.dylib\",\"role\":\"runtime_library\",\"expectedSize\":28775120,\"expectedHash\":\"3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b\"},{\"relativePath\":\"lib/libsherpa-onnx-c-api.dylib\",\"role\":\"runtime_library\",\"expectedSize\":2999920,\"expectedHash\":\"ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1\"},{\"relativePath\":\"models/segmentation.onnx\",\"role\":\"segmentation\",\"expectedSize\":1540506,\"expectedHash\":\"d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d\"},{\"relativePath\":\"models/embedding.onnx\",\"role\":\"speaker_embedding\",\"expectedSize\":40257283,\"expectedHash\":\"ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e\"},{\"relativePath\":\"notices/segmentation-MIT.txt\",\"role\":\"notice\",\"expectedSize\":1061,\"expectedHash\":\"14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba\"},{\"relativePath\":\"notices/sherpa-Apache-2.0.txt\",\"role\":\"notice\",\"expectedSize\":11358,\"expectedHash\":\"cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30\"},{\"relativePath\":\"notices/NeMo-Apache-2.0.txt\",\"role\":\"notice\",\"expectedSize\":11356,\"expectedHash\":\"43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1\"},{\"relativePath\":\"notices/onnxruntime-MIT.txt\",\"role\":\"notice\",\"expectedSize\":1073,\"expectedHash\":\"2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c\"},{\"relativePath\":\"notices/onnxruntime-ThirdPartyNotices.txt\",\"role\":\"notice\",\"expectedSize\":325054,\"expectedHash\":\"0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2\"}]},\"sources\":[{\"relativePath\":\"bin/sherpa-onnx-offline-speaker-diarization\",\"url\":\"https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2\",\"archive\":{\"format\":\"tar\",\"expectedSize\":18252168,\"expectedHash\":\"91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a\",\"memberPath\":\"sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/bin/sherpa-onnx-offline-speaker-diarization\"}},{\"relativePath\":\"lib/libonnxruntime.dylib\",\"url\":\"https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2\",\"archive\":{\"format\":\"tar\",\"expectedSize\":18252168,\"expectedHash\":\"91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a\",\"memberPath\":\"sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libonnxruntime.dylib\"}},{\"relativePath\":\"lib/libsherpa-onnx-c-api.dylib\",\"url\":\"https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts.tar.bz2\",\"archive\":{\"format\":\"tar\",\"expectedSize\":18252168,\"expectedHash\":\"91b96512c4fa1960f8a9ed5360a6c8dda53a4b5015d0590244f14086a234557a\",\"memberPath\":\"sherpa-onnx-v1.13.8-osx-arm64-shared-no-tts/lib/libsherpa-onnx-c-api.dylib\"}},{\"relativePath\":\"models/segmentation.onnx\",\"url\":\"https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2\",\"archive\":{\"format\":\"tar\",\"expectedSize\":6958444,\"expectedHash\":\"24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488\",\"memberPath\":\"sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx\"}},{\"relativePath\":\"models/embedding.onnx\",\"url\":\"https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx\"},{\"relativePath\":\"notices/segmentation-MIT.txt\",\"url\":\"https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2\",\"archive\":{\"format\":\"tar\",\"expectedSize\":6958444,\"expectedHash\":\"24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488\",\"memberPath\":\"sherpa-onnx-pyannote-segmentation-3-0/LICENSE\"}},{\"relativePath\":\"notices/sherpa-Apache-2.0.txt\",\"url\":\"https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE\"},{\"relativePath\":\"notices/NeMo-Apache-2.0.txt\",\"url\":\"https://raw.githubusercontent.com/NVIDIA/NeMo/2331b063d6f0282fa79c32e4e780db6cc7ef19f2/LICENSE\"},{\"relativePath\":\"notices/onnxruntime-MIT.txt\",\"url\":\"https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE\"},{\"relativePath\":\"notices/onnxruntime-ThirdPartyNotices.txt\",\"url\":\"https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt\"}]}",
+      "sha256": "b2ac4fcbd3527ffe7776601b28eb6198d922164cc383340cc67a9cec2e16ceb7",
+      "manifestCanonical": "{\"schemaVersion\":1,\"engine\":\"sherpa-onnx\",\"engineVersion\":\"v1.13.8\",\"modelName\":\"pyannote segmentation 3.0 int8 + NVIDIA TitaNet small\",\"modelVersion\":\"segmentation-3-0-int8+titanet-small-16k-SHA-fixed-capi1\",\"quantization\":null,\"licenseRef\":\"sherpa-onnx Apache-2.0: https://github.com/k2-fsa/sherpa-onnx/blob/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE ; segmentation MITは公式配布アーカイブ内。NVIDIA TitaNet small 1.19.0: https://catalog.ngc.nvidia.com/orgs/nvidia/nemo/models/titanet_small/1.19.0 （NeMo Toolkit Apache-2.0）。NeMo利用条件原文: https://raw.githubusercontent.com/NVIDIA/NeMo/2331b063d6f0282fa79c32e4e780db6cc7ef19f2/LICENSE ; ONNX変換: sherpa-onnx。ONNX Runtime 1.28.2 MIT/ThirdPartyNotices: https://github.com/microsoft/onnxruntime/tree/33ca9628233dc8f002435e868d4c2e9f82766ca1 ; 本文はnoticesに保持。容量・SHAは配布ファイルの照合値で、配布元署名の認証ではない。\",\"target\":\"macos_aarch64\",\"files\":[{\"relativePath\":\"bin/sherpa-onnx-offline-speaker-diarization\",\"role\":\"executable\",\"expectedSize\":405440,\"expectedHash\":\"e1170a93308867d8e343ac22a00b46b1d8e786c763c32a17caff07cf934ff66f\"},{\"relativePath\":\"lib/libonnxruntime.dylib\",\"role\":\"runtime_library\",\"expectedSize\":28775120,\"expectedHash\":\"3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b\"},{\"relativePath\":\"lib/libsherpa-onnx-c-api.dylib\",\"role\":\"runtime_library\",\"expectedSize\":2999920,\"expectedHash\":\"ae729669633008692c670d4e4c942db7ea5bdc38abc2f479516062d48849e9d1\"},{\"relativePath\":\"models/segmentation.onnx\",\"role\":\"segmentation\",\"expectedSize\":1540506,\"expectedHash\":\"d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d\"},{\"relativePath\":\"models/embedding.onnx\",\"role\":\"speaker_embedding\",\"expectedSize\":40257283,\"expectedHash\":\"ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e\"},{\"relativePath\":\"notices/segmentation-MIT.txt\",\"role\":\"notice\",\"expectedSize\":1061,\"expectedHash\":\"14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba\"},{\"relativePath\":\"notices/sherpa-Apache-2.0.txt\",\"role\":\"notice\",\"expectedSize\":11358,\"expectedHash\":\"cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30\"},{\"relativePath\":\"notices/NeMo-Apache-2.0.txt\",\"role\":\"notice\",\"expectedSize\":11356,\"expectedHash\":\"43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1\"},{\"relativePath\":\"notices/onnxruntime-MIT.txt\",\"role\":\"notice\",\"expectedSize\":1073,\"expectedHash\":\"2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c\"},{\"relativePath\":\"notices/onnxruntime-ThirdPartyNotices.txt\",\"role\":\"notice\",\"expectedSize\":325054,\"expectedHash\":\"0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2\"}]}",
+      "manifestSha256": "9e3a46dba37be83b344a4e9f04968de9faa67f4e8493b036799112868cede538"
     }
   ],
   "invalid": [

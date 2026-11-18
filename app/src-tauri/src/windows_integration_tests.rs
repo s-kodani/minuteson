@@ -1085,14 +1085,14 @@ fn windows_capture_stop_restores_current_audio_without_capture_history() {
 fn windows_bundled_model_catalog_is_complete_and_target_bound() {
     let root = crate::windows_runtime::resources().unwrap();
     let options = crate::model_official_catalog::options_windows(&root).unwrap();
-    assert_eq!(options.len(), 12);
+    assert_eq!(options.len(), 13);
     if let Some(path) = std::env::var_os("MON_WINDOWS_MODEL_OPTIONS") {
         // Feed the exact IPC shape and Rust digests to the production TS reader.
         fs::write(path, serde_json::to_vec(&options).unwrap()).unwrap();
     }
     let bytes = crate::windows_runtime::catalog(&root).unwrap();
     let choices: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(choices.len(), 12);
+    assert_eq!(choices.len(), 13);
     let mut engines = std::collections::BTreeMap::new();
     for choice in choices {
         let recipe =
@@ -1123,7 +1123,7 @@ fn windows_bundled_model_catalog_is_complete_and_target_bound() {
         [
             ("asr", 2),
             ("llama.cpp", 5),
-            ("sherpa-onnx", 2),
+            ("sherpa-onnx", 3),
             ("whisper.cpp", 3)
         ]
         .into_iter()
@@ -1164,6 +1164,7 @@ fn windows_real_models_download_place_check_and_apply() {
             "windows-whisper-194-medium",
             "windows-whisper-194-large-v3-turbo",
             "windows-sherpa-1138-pyannote3-eres2net-base",
+            "windows-sherpa-1138-pyannote3-int8-titanet-small",
             "windows-llama-b11533-qwen3-4b-q4km",
         ]
     };

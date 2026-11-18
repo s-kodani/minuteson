@@ -52,10 +52,14 @@ Windows・macOSとも、完了した取得操作の非公開管理領域に残�
 | 用途 | モデル系列 |
 | --- | --- |
 | 文字起こし | Whisper medium／large-v3／large-v3-turbo、ReazonSpeech-k2-v2 |
-| 話者分離 | Pyannote segmentationとERes2Net、標準／int8構成 |
+| 話者分離 | Pyannote segmentationとERes2Netの標準／int8構成、Pyannote int8＋TitaNet small |
 | 議事録 | Qwen 3／3.5、Gemma 4 E4B IT |
 
 実際に選択できる量子化形式・OS別候補・容量・取得元・SHA・利用条件の正本は[モデルカタログ](../../app/model-catalog/)です。利用条件の対応は`model-license-policy.json`でモデルデータと通知原文の容量・SHA・出典へ結び付け、既存の取得レシピとは分けて管理します。[同梱原文](../../third-party/model-licenses/README.md)はクレジットでも表示します。UIはその定義と同梱ランタイムから候補を構成します。候補総数や全ファイルのハッシュを文書へ複製しません。
+
+「Pyannote int8＋TitaNet small」はWindows x64・macOS Apple Silicon共通のCPU構成です。既存ERes2Netと並ぶ選択肢として追加し、使用中モデルや話者人数・統合閾値・声照合・話者補完の設定は自動変更しません。取得・検証・適用・取消・再試行は既存のモデル準備操作を使い、開始済みジョブは開始時のモデル条件を維持します。過去会議へ別モデルを適用するときは、既存の編集保護に従って明示的に再解析します。
+
+TitaNetの追加だけで音声品質や過剰分離の改善を保証しません。人手による品質・精度評価、推奨設定と既定モデルの変更判断は別途行います。CoreMLによる実行は提供しません。登録済みの声とモデルの関係は[声の登録仕様](analysis.md#登録した声)を参照してください。
 
 Whisperや議事録エンジンでは対応するGPUを試行し、条件に従ってCPUへ切り替えます。macOSはMetal、Windowsは同梱CPU／Vulkanワーカーを使います。ReazonSpeechはCPUで動作します。CPUでの導入確認はGPU動作や認識品質の保証ではありません。
 

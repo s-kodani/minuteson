@@ -116,8 +116,8 @@ fn all_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_change
 #[test]
 fn preserved_notice_bytes_and_sources_are_checked_and_complete() {
     let registry = registry().unwrap();
-    assert_eq!(registry.models.len(), 12);
-    assert_eq!(registry.notices.len(), 21);
+    assert_eq!(registry.models.len(), 13);
+    assert_eq!(registry.notices.len(), 22);
     for record in &registry.notices {
         let bytes = assets::embedded(&record.sha256).unwrap();
         let text = verify_notice(record, bytes).unwrap();
@@ -309,4 +309,40 @@ fn removing_one_official_model_policy_fails_closed_before_any_transfer() {
     .unwrap();
     incomplete["models"].as_array_mut().unwrap().pop();
     assert!(Registry::parse(&serde_json::to_vec(&incomplete).unwrap()).is_err());
+}
+
+#[test]
+fn titanet_terms_bind_nvidia_weights_and_keep_eres2net_disclosures_separate() {
+    let manifest = fixed()
+        .into_iter()
+        .find(|m| m.model_name == "pyannote segmentation 3.0 int8 + NVIDIA TitaNet small")
+        .unwrap();
+    for target in [Target::MacosAarch64, Target::WindowsX86_64] {
+        let mut manifest = manifest.clone();
+        manifest.target = target;
+        let disclosure = official(&manifest).unwrap().unwrap();
+        assert!(disclosure.summary.contains("NVIDIA TitaNet small"));
+        let notice = disclosure
+            .notices
+            .iter()
+            .find(|n| n.name == "NeMo-Apache-2.0.txt")
+            .unwrap();
+        assert!(notice
+            .source_url
+            .contains("NVIDIA/NeMo/2331b063d6f0282fa79c32e4e780db6cc7ef19f2"));
+        assert!(notice.text.contains("Apache License"));
+        assert!(!disclosure
+            .notices
+            .iter()
+            .any(|n| n.name == "3DSpeaker-Apache-2.0.txt"));
+        let mut changed = manifest.clone();
+        changed
+            .files
+            .iter_mut()
+            .find(|f| f.role == Role::SpeakerEmbedding)
+            .unwrap()
+            .expected_hash =
+            Some("1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b".into());
+        assert!(official(&changed).unwrap().is_none());
+    }
 }

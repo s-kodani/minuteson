@@ -52,11 +52,16 @@ mod tests {
     #[test]
     fn fixed_embedding_names_survive_package_removal_and_segmentation_variants() {
         let names = super::catalog().unwrap();
-        assert_eq!(names.len(), 1);
+        assert_eq!(names.len(), 2);
         assert_eq!(
             super::name("1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b")
                 .as_deref(),
             Some("3D-Speaker ERes2Net base")
+        );
+        assert_eq!(
+            super::name("ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e")
+                .as_deref(),
+            Some("NVIDIA TitaNet small")
         );
         assert!(super::name(&"f".repeat(64)).is_none());
     }

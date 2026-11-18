@@ -17,6 +17,7 @@ pub(super) fn embedded(sha256: &str) -> Option<&'static [u8]> {
         "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30" => Some(include_bytes!("../../../third-party/model-licenses/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt")),
         "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4" => Some(include_bytes!("../../../third-party/model-licenses/fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4.txt")),
         "a32167f7c566c9e9b4c9e9e85e420c7558e49bc45e949511c9922f8381b4a25b" => Some(include_bytes!("../../../third-party/model-licenses/a32167f7c566c9e9b4c9e9e85e420c7558e49bc45e949511c9922f8381b4a25b.txt")),
+        "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1" => Some(include_bytes!("../../../third-party/model-licenses/43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1.txt")),
         _ => None,
     }
 }
