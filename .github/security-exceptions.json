@@ -1,3 +1,13 @@
 {
-  "exceptions": []
+  "exceptions": [
+    {
+      "tool": "osv",
+      "id": "CVE-2026-112366",
+      "target": "npm:picomatch@4.0.7",
+      "reason": "2026-11-18に所有者s-kodaniが1.0.6公開のため期限付きリスク受容を承認。ロックファイル内の単一コピーはdev依存で、Vite・tinyglobby・fdir・json-schema-to-typescript経由の開発・ビルド・契約型生成で使用する。製品ソースからの直接参照はなく、Tauriは生成済みdistを同梱する。修正版は確認時点で未提供。細工されたglobによるビルド・開発処理の停止リスクは残り、到達不能や修正済みとは扱わない。上流の修正版を確認して更新・再検査し、この例外を除去する。",
+      "owner": "s-kodani",
+      "created": "2026-11-18",
+      "expires": "2026-11-25"
+    }
+  ]
 }
