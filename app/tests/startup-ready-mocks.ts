@@ -18,7 +18,7 @@ export const mockIPC: typeof nativeMockIPC = (callback, options) => nativeMockIP
   const windowState=(window as Window & {monWindowState?:{visible:boolean;minimized:boolean}}).monWindowState;
   if (command === "plugin:window|is_minimized") return windowState?.minimized??false;
   if (command === "plugin:window|is_visible") return windowState?.visible??true;
-  if (command === "get_recording_recovery" && !(window as Window & { recordingRecoveryFixture?: unknown }).recordingRecoveryFixture) return {runId:"fixture-idle",revision:0,phase:"completed",items:[],error:null};
+  if (command === "get_recording_recovery" && !(window as Window & { recordingRecoveryFixture?: unknown }).recordingRecoveryFixture && !(window as Window & {closeFixture?:{recovery?:unknown}}).closeFixture?.recovery) return {runId:"fixture-idle",revision:0,phase:"completed",origin:"startup",targetSessionId:null,items:[],error:null};
   return Promise.resolve().then(() => callback(command, args)).catch(cause => {
     // Legacy synthetic drivers predate the typed native error envelope.
     // Compatibility stays in this fixture transport, never in product logic.

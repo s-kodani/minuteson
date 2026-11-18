@@ -61,7 +61,10 @@ fn worker_imports_more_than_queue_capacity_and_coalesces_progress_before_persist
     let entries = (0..4200)
         .map(|id| entry(&format!("{id:05}"), "succeeded", time))
         .collect();
-    assert!(service.tx.try_send(Message::Backfill(entries)).is_ok());
+    assert!(service
+        .tx
+        .try_send(Message::Backfill(entries, None))
+        .is_ok());
     let page = service
         .query(
             Query {
@@ -234,6 +237,47 @@ fn cold_start_marks_unconfirmed_work_interrupted_and_preserves_confirmed_results
     let mut stale = entry("done", "running", 999);
     stale.finished_at = None;
     assert!(!upsert(&db, stale, 1001).unwrap());
+}
+
+#[test]
+fn recording_retry_updates_one_result_preserves_the_first_start_and_rejects_a_different_meeting() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path()).unwrap();
+    let mut first = Entry::new(
+        "recording_save",
+        "session",
+        "会議",
+        Some("meeting".into()),
+        "failed",
+    );
+    first.accepted_at = Some(10);
+    first.observed_at = 100;
+    first.finished_at = Some(100);
+    upsert(&db, first.clone(), 100).unwrap();
+    let mut retry = first.clone();
+    retry.state = "queued".into();
+    retry.accepted_at = Some(200);
+    retry.observed_at = 200;
+    upsert(&db, retry.clone(), 200).unwrap();
+    retry.state = "succeeded".into();
+    retry.observed_at = 300;
+    retry.finished_at = Some(300);
+    upsert(&db, retry.clone(), 300).unwrap();
+    let rows = query(
+        &db,
+        Query::default(),
+        &BTreeMap::from([("meeting".into(), "会議".into())]),
+        300,
+    )
+    .unwrap()
+    .items;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].accepted_at, Some(10));
+    assert_eq!(rows[0].finished_at, Some(300));
+    assert_eq!(rows[0].state, "succeeded");
+    retry.meeting_id = Some("different".into());
+    assert!(upsert(&db, retry, 300).is_err());
+    assert!(!upsert(&db, first, 300).unwrap());
 }
 #[test]
 fn new_defaults_are_used_only_when_not_saved_and_threshold_boundaries_are_inclusive() {

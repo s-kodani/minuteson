@@ -1,4 +1,4 @@
-export const historyKinds = ["recording_save","recording_recovery","model","audio_import","transcription","diarization","minutes_generation","voice_registration","voice_matching","speaker_completion","backup","restore","deletion","audio_deletion","model_deletion"] as const;
+export const historyKinds = ["recording_save","model","audio_import","transcription","diarization","minutes_generation","voice_registration","voice_matching","speaker_completion","backup","restore","deletion","audio_deletion","model_deletion"] as const;
 export const historyStates = { succeeded:"完了", failed:"失敗", cancelled:"取消済み", interrupted:"中断", attention:"要確認" } as const;
 export type HistoryState = keyof typeof historyStates;
 export interface JobHistoryEntry { id:string; kind:typeof historyKinds[number];target:string;meetingId:string|null;state:HistoryState;acceptedAt:number|null;finishedAt:number|null;observedAt:number;detail:string|null;relatedMeetingIds?:string[] }

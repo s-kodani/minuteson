@@ -10,11 +10,11 @@ use std::{
     time::Duration,
 };
 use tauri::{Emitter, Manager, WebviewWindow};
+mod migration;
 
 pub(crate) const RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 pub(crate) const KINDS: &[&str] = &[
     "recording_save",
-    "recording_recovery",
     "model",
     "audio_import",
     "transcription",
@@ -134,7 +134,7 @@ pub(crate) struct Page {
 }
 enum Message {
     Record(Entry),
-    Backfill(Vec<Entry>),
+    Backfill(Vec<Entry>, Option<mpsc::SyncSender<Result<(), String>>>),
     RemoveMeeting(String),
     Flush(mpsc::SyncSender<Result<(), String>>),
     Query(
@@ -149,6 +149,7 @@ struct Service {
     tx: mpsc::SyncSender<Message>,
     error: Arc<Mutex<Option<String>>>,
     last: Arc<Mutex<BTreeMap<String, Entry>>>,
+    recordings_backfilled: Arc<Mutex<bool>>,
 }
 static GLOBAL: OnceLock<Service> = OnceLock::new();
 
@@ -178,18 +179,16 @@ fn open(root: &Path) -> Result<Connection, String> {
     let version: i64 = db
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
-    if version != 0 && version != 1 {
+    if ![0, 1, 2].contains(&version) {
         return Err("ジョブ履歴の保存形式に対応していません。元の記録を保持しています。".into());
     }
     db.busy_timeout(Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
-    db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;
-        CREATE TABLE IF NOT EXISTS history(id TEXT PRIMARY KEY,kind TEXT NOT NULL,target TEXT NOT NULL,meeting_id TEXT,state TEXT NOT NULL,accepted_at INTEGER,finished_at INTEGER,observed_at INTEGER NOT NULL,detail TEXT,active INTEGER NOT NULL);
-        CREATE INDEX IF NOT EXISTS history_order ON history(active,coalesce(finished_at,observed_at) DESC,id DESC);
-        CREATE INDEX IF NOT EXISTS history_meeting ON history(meeting_id);
-        CREATE TABLE IF NOT EXISTS removed_meetings(id TEXT PRIMARY KEY,removed_at INTEGER NOT NULL);
-        PRAGMA user_version=1;
-        UPDATE history SET state='interrupted',finished_at=NULL,active=0,detail='前回の処理結果が未確定です。現在の状態を確認してください。' WHERE active=1;") .map_err(|e|e.to_string())?;
+    db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;")
+        .map_err(|e| e.to_string())?;
+    migration::initialize(&db, version)?;
+    db.execute_batch("UPDATE history SET state='interrupted',finished_at=NULL,active=0,detail='前回の処理結果が未確定です。現在の状態を確認してください。' WHERE active=1;")
+        .map_err(|e| e.to_string())?;
     Ok(db)
 }
 fn upsert(db: &Connection, mut entry: Entry, time: i64) -> Result<bool, String> {
@@ -208,13 +207,30 @@ fn upsert(db: &Connection, mut entry: Entry, time: i64) -> Result<bool, String> 
     }
     let old:Option<Entry>=db.query_row("SELECT id,kind,target,meeting_id,state,accepted_at,finished_at,observed_at,detail FROM history WHERE id=?1",[&entry.id],read).optional().map_err(|e|e.to_string())?;
     if let Some(old) = old {
+        if entry.kind == "recording_save" && entry.meeting_id != old.meeting_id {
+            return Err("録音の保存履歴の会議が一致しません。元の記録を保持しています。".into());
+        }
         if entry.observed_at < old.observed_at {
+            return Ok(false);
+        }
+        if entry.kind == "recording_save"
+            && entry.observed_at == old.observed_at
+            && (!old.active() && entry.state == "interrupted"
+                || old.state == "succeeded" && entry.active())
+        {
             return Ok(false);
         }
         if entry.target.is_empty() {
             entry.target = old.target.clone();
         }
-        entry.accepted_at = old.accepted_at.or(entry.accepted_at);
+        entry.accepted_at = if entry.kind == "recording_save" {
+            match (old.accepted_at, entry.accepted_at) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        } else {
+            old.accepted_at.or(entry.accepted_at)
+        };
         if entry.state == old.state {
             entry.finished_at = old.finished_at.or(entry.finished_at);
             entry.observed_at = old.observed_at;
@@ -357,7 +373,7 @@ impl Service {
                     last_prune = time;
                 }
                 match message {
-                    Some(Message::Backfill(entries)) => {
+                    Some(Message::Backfill(entries, reply)) => {
                         let result = database.as_ref().map_err(Clone::clone).and_then(|db| {
                             let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
                             for entry in entries {
@@ -365,8 +381,11 @@ impl Service {
                             }
                             tx.commit().map_err(|e| e.to_string())
                         });
-                        if let Err(error) = result {
-                            *worker_error.lock().unwrap() = Some(error);
+                        if let Err(error) = &result {
+                            *worker_error.lock().unwrap() = Some(error.clone());
+                        }
+                        if let Some(reply) = reply {
+                            let _ = reply.send(result);
                         }
                     }
                     Some(Message::Flush(reply)) => {
@@ -431,6 +450,7 @@ impl Service {
             tx,
             error,
             last: Arc::new(Mutex::new(BTreeMap::new())),
+            recordings_backfilled: Arc::new(Mutex::new(false)),
         }
     }
     fn record(&self, entry: Entry) {
@@ -536,11 +556,22 @@ pub(crate) fn analysis(job: &crate::storage::JobSnapshot) {
 }
 pub(crate) fn backfill(storage: &crate::storage::Storage) -> Result<(), String> {
     if let Some(service) = GLOBAL.get() {
-        let entries = storage.history_source_records(now() - RETENTION_MS)?;
+        // Full canonical-byte verification belongs to the first backfill, not
+        // every history page. New saves publish their verified lifecycle live.
+        let mut recordings = service
+            .recordings_backfilled
+            .lock()
+            .map_err(|_| "録音履歴の確認状態を取得できません")?;
+        let entries = storage
+            .history_source_records_including_recordings(now() - RETENTION_MS, !*recordings)?;
+        let (tx, rx) = mpsc::sync_channel(1);
         service
             .tx
-            .try_send(Message::Backfill(entries))
+            .try_send(Message::Backfill(entries, Some(tx)))
             .map_err(|_| "過去のジョブ履歴を取り込めません。再度取得してください")?;
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "過去のジョブ履歴の保存完了を確認できません。再度取得してください")??;
+        *recordings = true;
     }
     Ok(())
 }

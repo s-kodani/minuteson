@@ -1,9 +1,39 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertCloseContext, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, waitForImportStop, waitForRecordingSave, type CloseContext } from "../src/application-close.ts";
+import { assertCloseContext, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, waitForImportStop, waitForRecordingSave, waitForRecordingSaves, type CloseContext } from "../src/application-close.ts";
+import type { RecoverySnapshot } from "../src/recording-recovery-state.ts";
 const token = "11111111-1111-4111-8111-111111111111";
 const other = "21111111-1111-4111-8111-111111111111";
 const context = (): CloseContext => ({ recording: { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null }, importing: { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null }, data: { revision: 0, token: null, kind: null, phase: "idle", busy: false, backupPreview: null, restorePreview: null, backupReceipt: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, errorMessage: null, attentionRequired: false, retryAllowed: false }, activity: { analysisBusy: false, modelPreparationBusy: false } });
+
+const savingBatch = (): RecoverySnapshot => ({runId:"run",revision:3,origin:"startup",targetSessionId:null,phase:"running",error:null,items:[
+  {sessionId:token,meetingId:token,meetingTitle:"会議",phase:"running",startedAtMs:10,error:null},
+  {sessionId:other,meetingId:other,meetingTitle:"次の会議",phase:"queued",startedAtMs:null,error:null},
+]});
+test("startup saving waits for every target, and scanning transfers its discovered inventory", async () => {
+  const batch=savingBatch();let reads=0,waits=0;
+  const done={...batch,revision:5,phase:"completed" as const,items:batch.items.map(i=>({...i,phase:"succeeded" as const}))};
+  const result=await waitForRecordingSaves({...batch,phase:"scanning",items:[]},async()=>++reads<3?batch:done,async()=>{waits++;});
+  assert.equal(result,done);assert.equal(waits,2);
+});
+test("saving failures, stale replies, new targets, changed run and lost reads keep the app open", async () => {
+  const batch=savingBatch();
+  await assert.rejects(waitForRecordingSaves(batch,async()=>({...batch,revision:2})),/古い/);
+  await assert.rejects(waitForRecordingSaves(batch,async()=>({...batch,runId:"new"})),/変更/);
+  await assert.rejects(waitForRecordingSaves(batch,async()=>({...batch,items:batch.items.slice(0,1)})),/変更/);
+  await assert.rejects(waitForRecordingSaves(batch,async()=>({...batch,phase:"completed",items:batch.items.map(i=>({...i,phase:"failed",error:"保存失敗"}))})),/保存失敗/);
+  await assert.rejects(waitForRecordingSaves(batch,async()=>{throw Error("read lost");}),/read lost/);
+  let clock=0;
+  await assert.rejects(waitForRecordingSaves(batch,async()=>batch,async()=>{clock+=60_000;},()=>clock),/まだ完了/);
+});
+test("a successful retry checks its target without treating an older retained failure as current", async () => {
+  const batch=savingBatch();
+  const retry:RecoverySnapshot={...batch,origin:"retry",targetSessionId:token,items:batch.items.map(i=>({...i,phase:i.sessionId===token?"running":"failed",error:i.sessionId===token?null:"以前の失敗"}))};
+  const done:RecoverySnapshot={...retry,phase:"completed",revision:4,items:retry.items.map(i=>i.sessionId===token?{...i,phase:"succeeded"}:i)};
+  assert.equal(await waitForRecordingSaves(retry,async()=>done),done);
+  const c={...context(),recovery:done};
+  assert.throws(()=>assertCloseTargets(c,{...c,recovery:{...done,revision:5}}),/変更/);
+});
 test("close reviews validate native states instead of assuming unknown states are idle", () => {
   const c = context(); assertCloseContext(c);
   assert.throws(() => assertCloseContext({ ...c, recording: { ...c.recording, phase: "saving" } }), /録音状態/u);
@@ -70,8 +100,8 @@ test("recovery activity is validated and a newly started recovery invalidates ol
   const idle = context();
   const recovering = {...idle, activity:{...idle.activity, recordingRecoveryBusy:true}};
   assertCloseContext(recovering);
-  assert.equal(closeTarget(recovering), "録音の回復");
-  assert.throws(()=>assertCloseTargets(idle,recovering), /回復/);
-  assert.throws(()=>assertCloseContext({...idle,activity:{...idle.activity,recordingRecoveryBusy:"unknown" as unknown as boolean}}), /回復/);
+  assert.equal(closeTarget(recovering), "録音の保存");
+  assert.throws(()=>assertCloseTargets(idle,recovering), /保存/);
+  assert.throws(()=>assertCloseContext({...idle,activity:{...idle.activity,recordingRecoveryBusy:"unknown" as unknown as boolean}}), /保存/);
   assertCloseTargets(recovering,idle);
 });

@@ -633,6 +633,14 @@ impl AnalysisController {
         let state = self.state.lock().map_err(|_| "解析状態を取得できません")?;
         Ok((state.busy, state.model_preparation.is_some()))
     }
+    /// Call while holding the recorder transition lock, which also owns exit
+    /// admission. A save retry cannot start behind a successful exit check.
+    pub(crate) fn require_not_exiting(&self) -> Result<(), String> {
+        if self.shutdown.load(Ordering::SeqCst) {
+            return Err("終了処理中は録音の保存を再試行できません".into());
+        }
+        Ok(())
+    }
     fn begin_exit_inner(&self, cancel_work: bool) -> Result<(), String> {
         let state = self
             .state

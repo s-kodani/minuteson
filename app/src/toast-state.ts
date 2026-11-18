@@ -13,6 +13,8 @@ export interface ToastInput {
   historyOnly?: boolean;
   important?: boolean;
   eventId?: string;
+  /** Enrich one logical event without appending another history row. */
+  replaceEventHistory?: boolean;
   meetingId?: string;
   action?: ToastAction;
   onClose?: () => void;
@@ -27,6 +29,7 @@ interface Clock {
 interface Entry { toast: Toast; remaining: number; started: number | null; timer: unknown; pauses: Set<string>; rendered:boolean }
 const priority = (t: Toast) => t.important ? 0 : t.level === "error" ? 1 : t.level === "warning" ? 2 : 3;
 const signature = (t: ToastInput) => JSON.stringify([t.level, t.message, t.important ?? t.level === "error", t.eventId ?? null, t.details ?? null]);
+const historyStamp = (t: ToastInput) => JSON.stringify([t.key, t.replaceEventHistory && t.eventId ? JSON.stringify([t.level, "", t.important ?? t.level === "error", t.eventId, null]) : signature(t)]);
 export const toastKey = (scope: string, type: string) => JSON.stringify([scope, type]);
 
 /** Timers run only while a notice is visible and not being read/operated.
@@ -57,19 +60,20 @@ export class ToastController {
   getHistorySnapshot = () => this.historySnapshot;
   isActive = (key: string, id: number) => this.entries.get(key)?.toast.id === id;
   private recordHistory(input: ToastInput, id?: number) {
-    const stamp=JSON.stringify([input.key,signature(input)]), prior=this.historyIds.get(stamp);
+    const stamp=historyStamp(input), prior=this.historyIds.get(stamp);
     if(this.removedHistory.has(stamp))return;
     const identity=id??prior??++this.serial;
+    if(prior!==undefined&&prior!==identity)this.history.delete(prior);
     this.historyIds.set(stamp,identity);
     this.history.set(identity,{...input,id:identity,important:input.important??input.level==="error"});
     while(this.history.size>512){const oldest=this.history.keys().next().value!;this.history.delete(oldest);for(const [key,value]of this.historyIds)if(value===oldest)this.historyIds.delete(key);}
   }
   record(input:ToastInput) {
     if(!input.message.trim())return;
-    const stamp=JSON.stringify([input.key,signature(input)]), id=this.historyIds.get(stamp), old=id===undefined?null:this.history.get(id);
+    const stamp=historyStamp(input), id=this.historyIds.get(stamp), old=id===undefined?null:this.history.get(id);
     if(this.removedHistory.has(stamp))return;
     this.recordHistory(input);
-    if(!old||old.action?.disabled!==input.action?.disabled||old.action?.label!==input.action?.label)this.publish();
+    if(!old||signature(old)!==signature(input)||old.action?.disabled!==input.action?.disabled||old.action?.label!==input.action?.label)this.publish();
   }
   get pendingCount() { return Math.max(0, this.entries.size - this.snapshot.length); }
   setVisibleLimit(limit: number) {
@@ -102,12 +106,15 @@ export class ToastController {
   show(input: ToastInput) {
     if (!input.message.trim()) { this.resolve(input.key); return; }
     const old = this.entries.get(input.key), stamp = signature(input);
-    if(this.removedHistory.has(JSON.stringify([input.key,stamp])))return;
-    if (input.eventId && this.acknowledgedEvents.has(JSON.stringify([input.key, stamp]))) return;
+    if(this.removedHistory.has(historyStamp(input)))return;
+    if (input.eventId && this.acknowledgedEvents.has(historyStamp(input))) {
+      if(input.replaceEventHistory)this.record(input);
+      return;
+    }
     if (!old && this.acknowledged.get(input.key) === stamp) return;
-    if (old && signature(old.toast) === stamp) {
+    if (old && (signature(old.toast) === stamp || input.replaceEventHistory && historyStamp(old.toast) === historyStamp(input))) {
       // Do not restart a timer or repeat a live announcement on polling updates.
-      const changed = old.toast.action?.label !== input.action?.label || old.toast.action?.disabled !== input.action?.disabled || old.toast.action?.kind !== input.action?.kind;
+      const changed = signature(old.toast) !== stamp || old.toast.action?.label !== input.action?.label || old.toast.action?.disabled !== input.action?.disabled || old.toast.action?.kind !== input.action?.kind;
       old.toast = { ...input, id: old.toast.id, important: input.important ?? input.level === "error", actionBusy: old.toast.actionBusy };
       if (changed) this.publish();
       return;
@@ -157,7 +164,7 @@ export class ToastController {
     if (!entry || entry.toast.id !== id) return;
     this.stop(entry); this.acknowledged.set(key, signature(entry.toast)); this.entries.delete(key);
     if (entry.toast.eventId) {
-      const receipt = JSON.stringify([key, signature(entry.toast)]);
+      const receipt = historyStamp(entry.toast);
       this.acknowledgedEvents.delete(receipt);
       this.acknowledgedEvents.set(receipt, true);
       if (this.acknowledgedEvents.size > 512) this.acknowledgedEvents.delete(this.acknowledgedEvents.keys().next().value!);
@@ -169,7 +176,7 @@ export class ToastController {
     if(!notice||notice.actionBusy)return;
     // Delete this exact event, never a newer notification sharing its key.
     // Polling an old receipt must not recreate the removed history or toast.
-    const stamp=JSON.stringify([notice.key,signature(notice)]);
+    const stamp=historyStamp(notice);
     this.removedHistory.set(stamp,true);
     if(this.removedHistory.size>512)this.removedHistory.delete(this.removedHistory.keys().next().value!);
     this.history.delete(id);

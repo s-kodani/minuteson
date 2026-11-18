@@ -33,7 +33,7 @@ test("meeting deletion and safe stopping remain the foreground operation with me
   assert.equal(running.completed,null);
   assert.equal(running.total,null);
   assert.equal(operationElapsed(running,Date.now()),undefined);
-  const recovery = {id:"recovery",kind:"recording_recovery",state:"running"} as OperationProgress;
+  const recovery = {id:"recovery",kind:"recording_save",state:"running"} as OperationProgress;
   const analysis = {id:"analysis",kind:"transcription",state:"running"} as OperationProgress;
   const stopping = deletionProgress({...snapshot,phase:"cancelling"})!;
   assert.equal(stopping.label,"安全な停止を待機中");

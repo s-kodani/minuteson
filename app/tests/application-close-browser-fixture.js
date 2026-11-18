@@ -19,6 +19,7 @@ const archivedSeed=sessionStorage.getItem("MON_ARCHIVED_INPUT_FIXTURE");sessionS
 const f = window.closeFixture = {
   notificationHistory:()=>toasts.getHistorySnapshot(),
   recording, importing, vocabulary: {}, activity: { analysisBusy: false, modelPreparationBusy: false }, calls: [],
+  recovery:{runId:"close-fixture-idle",revision:0,phase:"completed",origin:"startup",targetSessionId:null,items:[],error:null},failRecoveryRead:false,
   uiPreferences:{id:"ui_preferences",lockVersion:0,payload:{schemaVersion:1,theme:"system", colorTheme:"monochrome"}},
   failFlush: false, flushDelay: 0, flushes: 0, mutateDuringFlush: null,
   startLost: false, startBeforeCommitFailure:false, cancelImportLost: false, cancelDataLost: false, finishLost: false, failRead: false,
@@ -45,6 +46,7 @@ const f = window.closeFixture = {
   testReady:()=>f.testChanged({phase:"ready",busy:false,microphone:{frames:240000,sampleRate:48000,channels:1,durationMs:5000,hasGaps:false},system:{frames:192000,sampleRate:48000,channels:2,durationMs:4000,hasGaps:true}}),
   request: quit => emit("main-close-requested", { quit }),
   recordChanged: async patch => { f.recording = { ...f.recording, ...patch, revision: f.recording.revision + 1 }; await emit("session-changed", clone(f.recording)); },
+  recoveryChanged:async patch=>{f.recovery={...f.recovery,...patch,revision:f.recovery.revision+1};await emit("recording-recovery-changed",null);},
   importChanged: async patch => { f.importing = { ...f.importing, ...patch, revision: f.importing.revision + 1 }; await emit("audio-import-changed", clone(f.importing)); },
   finishImport: saved => f.importChanged({ busy: false, phase: saved ? "saved" : "cancelled", saved: saved ? { id: crypto.randomUUID(), meetingId: data.meetings[0].id, state: "saved" } : null }),
   finishData: published => data.changed({ busy: false, phase: published ? "completed" : "cancelled", retryAllowed: false, backupPreview: null, backupReceipt: published ? { archiveId: crypto.randomUUID(), meetingCount: 1, assetCount: 0, deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, size: 1024, sha256: "a".repeat(64) } : null }),
@@ -79,6 +81,7 @@ mockIPC(async (command, args) => {
     await emit("ui-preferences-changed",clone(f.uiPreferences));return clone(f.uiPreferences);
   }
   if (command === "get_recording_snapshot") {if(f.failRecordingSnapshot)throw Error("模擬録音状態取得失敗");return clone(f.recording);}
+  if(command==="get_recording_recovery"){if(f.failRecoveryRead)throw Error("模擬保存状態取得失敗");return clone(f.recovery);}
   if(["get_capture_test_recovery","retry_capture_test_recovery"].includes(command))throw Error("removed cleanup UI command");
   if(command==="get_capture_test_snapshot"){
     if(f.testReadFailure)throw Error("模擬テスト状態読戻し失敗");
@@ -185,7 +188,7 @@ mockIPC(async (command, args) => {
     return snapshot;
   }
   if (command === "get_audio_import") { if (f.failRead) throw Error("模擬終了対象読戻し失敗"); return clone(f.importing); }
-  if (command === "get_application_close_activity") return clone(f.activity);
+  if (command === "get_application_close_activity") return {...clone(f.activity),recordingRecoveryBusy:!!f.activity.recordingRecoveryBusy||["scanning","running"].includes(f.recovery.phase)};
   if (command === "cancel_audio_import") {
     if (args.token !== f.importing.token) throw Error("模擬取り込み対象変更");
     await f.importChanged({ phase: f.importing.busy ? "cancelling" : "cancelled" });

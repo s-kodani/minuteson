@@ -77,6 +77,12 @@ impl Storage {
                 None,
                 "bytes",
             );
+            crate::operation_observation::stage_for(
+                "recording_save",
+                "verifying_audio",
+                None,
+                "bytes",
+            );
             self.verify_meeting_asset_cancellable(meeting, &c.asset_id, &c.hash, cancelled)?;
             let path = self.meeting_mix_path(meeting, track)?;
             let mut cleanup = Vec::new();
@@ -87,6 +93,12 @@ impl Storage {
             crate::operation_observation::stage_for(
                 "import",
                 "import_committing_audio",
+                None,
+                "files",
+            );
+            crate::operation_observation::stage_for(
+                "recording_save",
+                "committing_audio",
                 None,
                 "files",
             );
@@ -106,6 +118,12 @@ impl Storage {
         crate::operation_observation::stage_for(
             "import",
             "import_cleaning_intermediates",
+            None,
+            "files",
+        );
+        crate::operation_observation::stage_for(
+            "recording_save",
+            "cleaning_intermediates",
             None,
             "files",
         );

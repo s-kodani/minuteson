@@ -1,26 +1,31 @@
 // Synthetic IPC only. Never opens native storage or real recordings.
 import {mockIPC} from "./startup-ready-mocks.ts";
 import {emit} from "@tauri-apps/api/event";
+import {toasts} from "../src/toast";
 window.skipDataFixtureMain=true;
 const {dataSaveIPC}=await import("./data-save-browser-fixture.js");
 const f=window.dataFixture;
 const ids=["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"];
 f.meetings=ids.map((id,i)=>({...f.meetings[0],id,title:i?"回復待ちの会議":"回復中の会議",lifecycle:"recording",sourceType:"recording"}));
 Object.assign(f.snapshot,{deletionPreview:null,deletionReceipt:null,modelDeletionPreview:null,modelDeletionReceipt:null,audioDeletionPreview:null,audioDeletionReceipt:null});
-const initial={runId:"synthetic-recovery",revision:1,phase:"running",error:null,items:ids.map((meetingId,i)=>({meetingId,sessionId:`session-${i}`,meetingTitle:f.meetings[i].title,phase:i?"queued":"running",startedAtMs:i?null:Date.now()-5000,error:null}))};
+const initial={runId:"synthetic-recovery",revision:1,phase:"running",origin:"startup",targetSessionId:null,error:null,items:ids.map((meetingId,i)=>({meetingId,sessionId:`session-${i}`,meetingTitle:f.meetings[i].title,phase:i?"queued":"running",startedAtMs:i?null:Date.now()-5000,error:null}))};
 const r=window.recordingRecoveryFixture={snapshot:JSON.parse(sessionStorage.getItem("recovery-fixture")??"null")??initial,fail:false,stale:false,holds:[],hold:false,calls:[],
+  recording:{revision:0,phase:"idle",elapsedMs:0,microphoneConnected:false,systemAudioConnected:false,meetingId:null,sessionId:null,errorMessage:null},
+  notificationHistory:()=>toasts.getHistorySnapshot(),
+  recordChanged:async patch=>{r.recording={...r.recording,...patch,revision:r.recording.revision+1};await emit("session-changed",structuredClone(r.recording));},
   change:async patch=>{r.snapshot={...r.snapshot,...patch,revision:r.snapshot.revision+1};sessionStorage.setItem("recovery-fixture",JSON.stringify(r.snapshot));await emit("recording-recovery-changed",null);},
   finish:async()=>{for(const m of f.meetings)m.lifecycle="recorded";r.snapshot={...r.snapshot,revision:r.snapshot.revision+1,phase:"completed",items:r.snapshot.items.map(i=>({...i,phase:"succeeded"}))};sessionStorage.setItem("recovery-fixture",JSON.stringify(r.snapshot));},
 };
 mockIPC(async(command,args)=>{
   r.calls.push(command);
+  if(command==="get_recording_snapshot")return structuredClone(r.recording);
   if(command==="get_recording_recovery") {
     if(r.fail)throw Error("合成状態取得失敗");
     if(r.hold)return new Promise(resolve=>r.holds.push(()=>resolve(structuredClone(initial))));
     return structuredClone(r.stale?initial:r.snapshot);
   }
   if(command==="retry_recording_recovery") {
-    await r.change({phase:"running",items:r.snapshot.items.map(item=>item.sessionId===args.sessionId?{...item,phase:"running",startedAtMs:Date.now(),error:null}:item)});
+    await r.change({phase:"running",origin:"retry",targetSessionId:args.sessionId,error:null,items:r.snapshot.items.map(item=>item.sessionId===args.sessionId?{...item,phase:"running",startedAtMs:item.startedAtMs??Date.now(),error:null}:item)});
     return structuredClone(r.snapshot);
   }
   if(command==="get_application_close_activity")return {analysisBusy:false,modelPreparationBusy:false,recordingRecoveryBusy:r.snapshot.phase==="running"};

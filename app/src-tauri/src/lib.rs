@@ -2103,12 +2103,25 @@ async fn finish_main_close(
             }
             return window.hide().map_err(|error| error.to_string());
         }
+        window
+            .state::<recording_recovery::Recovery>()
+            .require_exit_ready(
+                expected
+                    .as_ref()
+                    .and_then(|target| target.recording_save.as_ref()),
+            )?;
         // Keep the exit epilogue alive too: a lost close response must neither
         // release running work nor leave the open app stranded behind an exit gate.
         tauri::async_runtime::spawn(async move {
             let app = window.app_handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
                 RecorderController::with_transition(&app, || {
+                    app.state::<recording_recovery::Recovery>()
+                        .require_exit_ready(
+                            expected
+                                .as_ref()
+                                .and_then(|target| target.recording_save.as_ref()),
+                        )?;
                     #[cfg(target_os = "macos")]
                     if updating {
                         app_updates::macos::require_idle(&app)?;

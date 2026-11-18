@@ -38,7 +38,7 @@ export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData,
     {publicationReadStatus && <p role="status">{publicationReadStatus}</p>}
     {data?.jobsError && <p role="status">バックアップ・復元の状態を再確認しています。表示は前回取得した状態です。</p>}
     {error && <p role="alert">{error}</p>}
-    {!items.length && read.state === "ready" && <div className="job-list-empty"><h2>進行中のジョブはありません</h2><p>録音の保存・回復、モデルの準備、音声取り込み、文字起こし、話者分離、議事録生成、バックアップ、復元がここに表示されます。</p></div>}
+    {!items.length && read.state === "ready" && <div className="job-list-empty"><h2>進行中のジョブはありません</h2><p>録音の保存、モデルの準備、音声取り込み、文字起こし、話者分離、議事録生成、バックアップ、復元がここに表示されます。</p></div>}
     {items.length > 0 && <><p className="job-list-count" role="status">
       <span className="job-chip job-chip-total">合計 <strong>{items.length}件</strong></span>{" "}
       <span className="job-chip job-chip-running">処理中 <strong>{runningCount}件</strong></span>{" "}

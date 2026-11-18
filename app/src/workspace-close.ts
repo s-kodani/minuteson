@@ -14,7 +14,8 @@ import { assertRecordingDecision } from "./recording-confirmation-state";
 import { waitForDataStop } from "./data-stop";
 import { stopAllPlayback } from "./playback-barrier";
 import { useAppName } from "./window-environment";
-import { assertCloseContext, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
+import { assertCloseContext, assertCloseRecording, assertCloseTargets, closeMessage, closeTarget, dataNeedsConsent, importNeedsConsent, recordingActive, recordingSavesBusy, recordingSaveReceipt, waitForRecordingSaves, waitForImportStop, waitForRecordingSave, type CloseActivity, type CloseContext } from "./application-close";
+import { acceptRecovery, type RecoverySnapshot } from "./recording-recovery-state";
 
 interface CloseDependencies {
   platform: "macos" | "windows" | "other";
@@ -28,11 +29,12 @@ interface CloseDependencies {
 }
 
 async function readCloseContext(): Promise<CloseContext> {
-    const [recording, importing, data, activity] = await Promise.all([
+    const [recording, importing, data, activity, recovery] = await Promise.all([
       invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),
       invoke<DataSnapshot>("get_data_operation"), invoke<CloseActivity>("get_application_close_activity"),
+      invoke<RecoverySnapshot>("get_recording_recovery"),
     ]);
-    const result = { recording, importing, data, activity }; assertCloseContext(result); return result;
+    const result = { recording, importing, data, activity, recovery }; assertCloseContext(result); return result;
   }
 
 /** Owns close/hide coordination without owning the workspace view. */
@@ -94,11 +96,17 @@ export function useWorkspaceClose(dependencies: CloseDependencies) {
         });
         return; // The native confirmation continues closing only after saved.
       }
-      if (recordingActive(recording)) {
-        const outcome = await closeConfirm({ title: "録音の保存完了後の終了を確認", target: meetings.find(meeting => meeting.id === recording.meetingId)?.title ?? "保存中の録音", confirmLabel: "保存完了を待って終了へ進む", message: "録音を停止・保存しています。保存が完了してからアプリを終了します。保存に失敗した場合や、完了を確認できない場合は終了せず、画面を残します。", action: () => waitForRecordingSave(recording, () => invoke("get_recording_snapshot")) });
+      const saving = acceptRecovery(null, await invoke<RecoverySnapshot>("get_recording_recovery"));
+      const saved: {snapshot: RecoverySnapshot | null} = {snapshot:null};
+      if (recordingActive(recording) || recordingSavesBusy(saving)) {
+        const outcome = await closeConfirm({ title: "録音の保存完了後の終了を確認", target: meetings.find(meeting => meeting.id === recording.meetingId)?.title ?? saving.items.find(i => i.phase === "running")?.meetingTitle ?? "保存中の録音", confirmLabel: "保存完了を待って終了へ進む", message: "録音を停止・保存しています。保存が完了してからアプリを終了します。保存に失敗した場合や、完了を確認できない場合は終了せず、画面を残します。", action: async () => {
+          if (recordingActive(recording)) await waitForRecordingSave(recording, () => invoke("get_recording_snapshot"));
+          saved.snapshot = await waitForRecordingSaves(saving, () => invoke("get_recording_recovery"));
+        } });
         if (outcome !== "completed") return;
       }
       const expected = await readCloseContext();
+      if (saved.snapshot && expected.recovery && saved.snapshot.revision !== expected.recovery.revision) throw Error("録音の保存対象や状態が変更されました。終了内容を再確認してください。");
       const finish = () => withConfirmedEdits(withSavedEdits, async () => {
         const current = await readCloseContext(); assertCloseTargets(expected, current);
         let importing = current.importing, data = current.data;
@@ -111,7 +119,7 @@ export function useWorkspaceClose(dependencies: CloseDependencies) {
           data = await waitForDataStop(data.token!, data.kind!, () => invoke("get_data_operation"));
         }
         const final = await readCloseContext(); assertCloseTargets({ ...current, importing, data }, final);
-        await invoke("finish_main_close", { quit, expected: { importToken: final.importing.token, dataToken: final.data.token } });
+        await invoke("finish_main_close", { quit, expected: { importToken: final.importing.token, dataToken: final.data.token, ...(saved.snapshot && final.recovery ? {recordingSave:recordingSaveReceipt(final.recovery)} : {}) } });
       });
       if (importNeedsConsent(expected.importing) || dataNeedsConsent(expected.data) || !coveredAnalysis && (expected.activity.analysisBusy || expected.activity.modelPreparationBusy)) {
         await closeConfirm({ title: "進行中の処理を停止して終了しますか？", target: closeTarget(expected, appName), confirmLabel: "安全な停止を待って終了する", message: closeMessage(expected), action: finish });

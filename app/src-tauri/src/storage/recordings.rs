@@ -303,6 +303,34 @@ impl Storage {
     pub(crate) fn recover_completed_recordings(&self) -> Result<Vec<String>, String> {
         self.recover_recordings_observed(&|_| {}, &|_| {})
     }
+
+    /// A saved session alone is not completion: publication may still be
+    /// pending. Verify the independently playable canonical WAV and the
+    /// completed retirement record, rechecking metadata after file I/O.
+    pub(crate) fn recording_save_complete(
+        &self,
+        session: &str,
+        meeting: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<bool, String> {
+        let complete = || -> Result<bool, String> {
+            let db = self
+                .connection
+                .lock()
+                .map_err(|_| "DBロックを取得できません")?;
+            if super::deletion::audio::source_deleted(&db, meeting)? {
+                return Ok(false);
+            }
+            db.query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions r JOIN meeting_audio_commits a ON a.meeting_id=r.meeting_id AND a.manifest_hash=r.audio_manifest_hash WHERE r.id=?1 AND r.meeting_id=?2 AND a.phase='cleaned')",
+                params![session, meeting], |r| r.get(0)).map_err(|e| e.to_string())
+        };
+        if !complete()? {
+            return Ok(false);
+        }
+        crate::operation_observation::stage_for("recording_save", "verifying_audio", None, "bytes");
+        self.verify_canonical_audio(meeting, cancelled)?;
+        complete()
+    }
     pub(crate) fn recover_recordings_observed(
         &self,
         inventory: &impl Fn(Vec<crate::recording_recovery::Item>),
@@ -324,7 +352,7 @@ impl Storage {
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;
-            let mut query = db.prepare("SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id LEFT JOIN meeting_audio_commits a ON a.meeting_id=m.id WHERE r.state IN ('interrupted','failed','saved') AND m.source_type='recording' AND ((r.audio_manifest_hash IS NULL AND m.lifecycle IN ('recording','draft')) OR (r.audio_manifest_hash IS NOT NULL AND m.lifecycle='recorded' AND (a.phase IS NULL OR a.phase!='cleaned'))) AND (?1 IS NULL OR r.id=?1) AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=m.id AND p.domain='meetings' AND p.entity_key=m.id) ORDER BY r.created_at,r.id").map_err(|e|e.to_string())?;
+            let mut query = db.prepare("SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id LEFT JOIN meeting_audio_commits a ON a.meeting_id=m.id WHERE r.state IN ('interrupted','failed','saved') AND m.source_type='recording' AND ((r.audio_manifest_hash IS NULL AND m.lifecycle IN ('recording','draft')) OR (r.audio_manifest_hash IS NOT NULL AND m.lifecycle='recorded' AND (?1 IS NOT NULL OR a.phase IS NULL OR a.phase!='cleaned'))) AND (?1 IS NULL OR r.id=?1) AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=m.id AND p.domain='meetings' AND p.entity_key=m.id) ORDER BY r.created_at,r.id").map_err(|e|e.to_string())?;
             let rows = query
                 .query_map([session_id], |r| {
                     Ok(crate::recording_recovery::Item {
@@ -369,7 +397,15 @@ impl Storage {
             item.started_at_ms = Some(now_ms()?);
             progress(item.clone());
             match crate::audio_finalization::complete(&|| self.data_write_blocked(), || {
-                self.finalize_available_recording(&item.session_id, &|| self.data_write_blocked())
+                let saved = self.finalize_available_recording(&item.session_id, &|| {
+                    self.data_write_blocked()
+                })?;
+                if !self.recording_save_complete(&item.session_id, &item.meeting_id, &|| {
+                    self.data_write_blocked()
+                })? {
+                    return Err("正式な録音音声の保存と整理が完了していません".into());
+                }
+                Ok(saved)
             }) {
                 Ok(_) => {
                     recovered.push(item.session_id.clone());

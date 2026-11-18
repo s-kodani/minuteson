@@ -1,20 +1,24 @@
 import { invoke, isTauri } from "./ipc.ts";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import { acceptRecovery, recoveryProgress, recoveryMeetingState, type RecoverySnapshot } from "./recording-recovery-state";
-import { usePublishJobReadStatus, usePublishProgress } from "./operation-progress";
+import { acceptRecovery, recoveryMeetingState, type RecoverySnapshot } from "./recording-recovery-state";
+import { usePublishJobReadStatus } from "./operation-progress";
 import { IssueNotice, ToastNotice } from "./toast";
 import type { RecoverySnapshot as Snapshot } from "./recording-recovery-state";
+import type { RecordingSnapshot } from "./session";
 
-export function RecordingRecoveryNotifications({ snapshot }: { snapshot: Snapshot | null; error: string | null }) {
+export function RecordingRecoveryNotifications({ snapshot, recording, recordingError }: { snapshot: Snapshot | null; recording: RecordingSnapshot | null; recordingError?: string | null }) {
+  const fallback = recording && !snapshot?.items.some(item => item.sessionId === recording.sessionId) ? recording.errorMessage || recordingError : null;
+  const representedError = snapshot?.items.some(item => item.phase === "failed" && item.error === snapshot.error && (snapshot.origin === "startup" || item.sessionId === snapshot.targetSessionId));
   return <>
-    <IssueNotice scope="recording-recovery" type="failure" label="録音の回復" message={snapshot?.error} />
-    {snapshot?.items.filter(item => item.phase === "failed" || item.phase === "succeeded").map(item =>
-      <ToastNotice key={item.sessionId} scope={item.sessionId} type="recording-recovery-result"
-        meetingId={item.meetingId} eventId={`${snapshot.runId}:${item.sessionId}:${item.phase}`}
+    <IssueNotice scope="recording-save" type="failure" label="録音の保存" message={representedError ? null : snapshot?.error} />
+    {fallback && <ToastNotice key={recording?.sessionId ?? "recording"} scope={recording?.sessionId ?? "recording"} type="recording-save-result" level="error" eventId={`recording_save:${recording?.sessionId}:failed`} replaceEventHistory message={fallback} />}
+    {snapshot?.items.map(item =>
+      <ToastNotice key={item.sessionId} scope={item.sessionId} type="recording-save-result"
+        meetingId={item.meetingId} eventId={`recording_save:${item.sessionId}:${item.phase}`} replaceEventHistory
         level={item.phase === "failed" ? "error" : "success"}
         action={item.phase === "failed" && !item.noAudio ? {kind:"retry", label:"保存を再試行", disabled:snapshot.phase === "running" || snapshot.phase === "scanning", run:async()=>{await invoke("retry_recording_recovery",{sessionId:item.sessionId});}} : undefined}
-        message={item.phase === "failed" ? item.noAudio ? `「${item.meetingTitle}」の録音に失敗しました。マイク・PC音声のどちらも音声を取得できませんでした。` : `「${item.meetingTitle}」の音声を保存できませんでした。元音声は保持しています。「保存を再試行」でやり直せます。${item.error ?? "詳細は内部ログで確認してください。"}` : `「${item.meetingTitle}」の録音を回復し、保存を完了しました。`} />)}
+        message={item.phase === "failed" ? item.noAudio ? `「${item.meetingTitle}」の録音に失敗しました。マイク・PC音声のどちらも音声を取得できませんでした。` : `「${item.meetingTitle}」の音声を保存できませんでした。元音声は保持しています。「保存を再試行」でやり直せます。${item.error ?? "詳細は内部ログで確認してください。"}` : item.phase === "succeeded" ? "録音を保存完了しました。" : null} />)}
   </>;
 }
 
@@ -37,7 +41,6 @@ export function useRecordingRecovery() {
   const latest = useRef<RecoverySnapshot | null>(null);
   const [snapshot, setSnapshot] = useState<RecoverySnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  usePublishProgress("recording-recovery", recoveryProgress(snapshot));
   usePublishJobReadStatus(error, "recording-recovery");
   useEffect(() => {
     if (!isTauri()) return;
