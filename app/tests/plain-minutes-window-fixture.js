@@ -36,8 +36,9 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "plugin:event|listen") { const id=++sequence; listeners.set(id,args); return id; }
         if (cmd === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
         if (cmd === "get_recording_snapshot") return {revision:1,phase:"idle",elapsedMs:0,microphoneConnected:false,systemAudioConnected:false,meetingId:null,sessionId:null,errorMessage:null};
+        if (cmd === "get_recording_recovery") return {runId:"fixture-idle",revision:0,phase:"completed",origin:"startup",targetSessionId:null,items:[],error:null};
         if (cmd === "get_capture_test_snapshot") return null;
-        if (cmd === "get_application_close_activity") return { analysisBusy:false, modelPreparationBusy:false };
+        if (cmd === "get_application_close_activity") return { analysisBusy:false, modelPreparationBusy:false, recordingRecoveryBusy:false };
         if (cmd === "get_capture_test_recovery") return {schemaVersion:1,revision:2,phase:"clear",runId:null,errorMessage:null};
         if (cmd === "get_recording_confirmation") return {revision:0,id:null,phase:"idle",sessionId:null,meetingId:null,meetingTitle:null,origin:null,preparing:false,quitAfterSave:false,errorMessage:null};
         if (cmd === "list_meetings") return [meeting("m1"),meeting("m2")];

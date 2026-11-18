@@ -5,7 +5,14 @@ async (page, capturePath, { approveModelLicense }) => {
   await field.waitFor();
   check(await page.getByRole("combobox").count() === 3, "model catalog did not load");
   // The select controls render before asynchronous catalog validation finishes.
-  await page.waitForFunction(() => document.querySelectorAll('select[aria-label$="のモデル"] option[value^="official:"]').length === 12);
+  await field.locator('option[value="official:llama-b11533-qwen35-4b-q4km"]').waitFor({ state: "attached" });
+  await field.locator('option[value="official:llama-b11533-qwen35-9b-q4km"]').waitFor({ state: "attached" });
+  const offered = await field.locator('option[value^="official:"]').evaluateAll(options => options.map(option => option.value));
+  check(JSON.stringify(offered) === JSON.stringify([
+    "official:llama-b11533-qwen3-8b-q4km", "official:llama-b11533-qwen3-4b-q4km",
+    "official:llama-b11533-qwen35-4b-q4km", "official:llama-b11533-qwen35-9b-q4km",
+    "official:llama-b11960-gemma4-e4b-it-q4km",
+  ]), "minutes model choices are missing, duplicated or reordered");
   const before = await field.locator("option").allTextContents();
   for (const size of ["4B", "9B"]) {
     const id = `official:llama-b11533-qwen35-${size.toLowerCase()}-q4km`;
@@ -36,5 +43,5 @@ async (page, capturePath, { approveModelLicense }) => {
     check(await row.evaluate(el => el.getBoundingClientRect().right <= innerWidth), "model controls overflow");
   }
   await page.screenshot({ path: "output/playwright/qwen35-models.png" });
-  return ["twelve catalog choices load; both Qwen3.5 sizes select without IO", "each Qwen3.5 download and global selection binds its own model bytes", "installed choices retain stable labels without duplicates at desktop and mobile widths"];
+  return ["five minutes model choices load; both Qwen3.5 sizes select without IO", "each Qwen3.5 download and global selection binds its own model bytes", "installed choices retain stable labels without duplicates at desktop and mobile widths"];
 }
