@@ -1,4 +1,54 @@
 use super::*;
+
+#[test]
+fn embedded_download_notice_requires_exact_role_source_size_and_hash() {
+    let record = &registry().unwrap().notices[0];
+    let file = PackageFile {
+        relative_path: "notices/provider.txt".into(),
+        role: Role::Notice,
+        expected_size: Some(record.bytes as u64),
+        expected_hash: Some(record.sha256.clone()),
+    };
+    let source = DownloadSource {
+        relative_path: file.relative_path.clone(),
+        url: record.source_url.clone(),
+        archive: None,
+    };
+    assert_eq!(
+        embedded_download_notice(&file, &source).unwrap().unwrap(),
+        assets::embedded(&record.sha256).unwrap()
+    );
+    for change in 0..6 {
+        let mut file = file.clone();
+        let mut source = source.clone();
+        match change {
+            0 => file.role = Role::RuntimeLibrary,
+            1 => source.url.push_str("/different-source"),
+            2 => file.expected_size = Some(record.bytes as u64 + 1),
+            3 => file.expected_hash = Some("f".repeat(64)),
+            4 => source.relative_path.push_str(".changed"),
+            _ => {
+                source.archive = Some(crate::model_download_recipe::ArchiveMember {
+                    format: "tar".into(),
+                    expected_size: 1000,
+                    expected_hash: "a".repeat(64),
+                    member_path: "notices/provider.txt".into(),
+                })
+            }
+        }
+        assert!(
+            embedded_download_notice(&file, &source).unwrap().is_none(),
+            "change {change}"
+        );
+    }
+    let mut corrupted = file.clone();
+    corrupted.expected_hash = Some("f".repeat(64));
+    assert!(registry()
+        .unwrap()
+        .validate_notice_sources(&[corrupted], &[source])
+        .is_err());
+}
+
 fn fixed() -> Vec<PackageManifest> {
     [
         include_str!("../../../model-catalog/macos.json"),

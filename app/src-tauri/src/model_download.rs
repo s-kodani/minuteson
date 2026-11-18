@@ -5,6 +5,7 @@
 use crate::model_download_recipe::RecipeExt;
 #[cfg(any(target_os = "macos", windows))]
 mod archive;
+mod archive_reuse;
 pub(crate) mod catalog;
 mod placement;
 mod reuse;
@@ -291,16 +292,6 @@ pub(crate) fn download_with_bundle_reuse(
     cancelled: &impl Fn() -> bool,
     progress: &mut impl FnMut(u64, u64),
 ) -> Result<DownloadReceipt, String> {
-    if !recipe.has_bundled() {
-        return download(
-            staging_root,
-            operation_id,
-            recipe,
-            expected_recipe_hash,
-            cancelled,
-            progress,
-        );
-    }
     if recipe.review()?.recipe_hash != expected_recipe_hash {
         return Err("同梱モデルの確認した取得定義と一致しません".into());
     }
@@ -523,18 +514,32 @@ fn stage(
                 let archives = operation.child("archives", false)?;
                 let name = format!("source-{index}.tar");
                 let (mut output, parent) = archives.create(&name)?;
-                fetch(
-                    &source.url,
-                    archive_source.expected_size,
-                    &archive_source.expected_hash,
-                    &mut output,
-                    cancelled,
-                    &mut |n| {
-                        if !crate::model_download_recipe::is_bundled(&source.url) {
-                            progress(completed + n, transfer_total);
-                        }
-                    },
-                )?;
+                let bundled = crate::model_download_recipe::is_bundled(&source.url);
+                let reused = !bundled
+                    && archive_reuse::try_copy(
+                        root.path(),
+                        operation_id,
+                        &source.url,
+                        archive_source.expected_size,
+                        &archive_source.expected_hash,
+                        &mut output,
+                        cancelled,
+                        &mut |n| progress(completed + n, transfer_total),
+                    )?;
+                if !reused {
+                    fetch(
+                        &source.url,
+                        archive_source.expected_size,
+                        &archive_source.expected_hash,
+                        &mut output,
+                        cancelled,
+                        &mut |n| {
+                            if !bundled {
+                                progress(completed + n, transfer_total);
+                            }
+                        },
+                    )?;
+                }
                 output
                     .sync_all()
                     .map_err(|_| "アーカイブを確定できません")?;
@@ -556,20 +561,30 @@ fn stage(
         }
         let (mut output, parent) = payload.create(&file.relative_path)?;
         let size = file.expected_size.unwrap();
-        fetch(
-            &source.url,
-            size,
-            file.expected_hash.as_ref().unwrap(),
-            &mut output,
-            cancelled,
-            &mut |n| progress(completed + n, transfer_total),
-        )?;
+        let embedded = crate::model_license::embedded_download_notice(file, source)?;
+        if let Some(bytes) = embedded {
+            check(cancelled)?;
+            output
+                .write_all(bytes)
+                .map_err(|_| "同梱ライセンス原文を配置できません")?;
+        } else {
+            fetch(
+                &source.url,
+                size,
+                file.expected_hash.as_ref().unwrap(),
+                &mut output,
+                cancelled,
+                &mut |n| progress(completed + n, transfer_total),
+            )?;
+        }
         output
             .sync_all()
             .map_err(|_| "ダウンロードファイルを確定できません")?;
         parent.sync()?;
         payload.verify()?;
-        completed += size;
+        if embedded.is_none() {
+            completed += size;
+        }
         progress(completed, transfer_total);
     }
     check(cancelled)?;
@@ -615,3 +630,11 @@ fn durable_file(directory: &Directory, relative: &str, bytes: &[u8]) -> Result<(
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests;
+
+#[cfg(test)]
+#[path = "model_download/embedded_notice_tests.rs"]
+mod embedded_notice_tests;
+
+#[cfg(test)]
+#[path = "model_download/archive_reuse_tests.rs"]
+mod archive_reuse_tests;

@@ -1,6 +1,6 @@
 //! Native-owned, offline disclosures. These records do not alter hashed recipes,
 //! package identities, readiness, jobs, or stored preferences.
-use crate::model_download_recipe::RecipeExt;
+use crate::model_download_recipe::{DownloadSource, Recipe, RecipeExt};
 use crate::model_inspection::{Engine, PackageFile, PackageManifest, Role, Target};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -176,6 +176,39 @@ fn verify_notice(record: &NoticeRecord, bytes: &[u8]) -> Result<String, String> 
     String::from_utf8(bytes.to_vec()).map_err(|_| "ライセンス原文をUTF-8で読み取れません".into())
 }
 impl Registry {
+    fn download_notice(
+        &self,
+        file: &PackageFile,
+        source: &DownloadSource,
+    ) -> Option<&NoticeRecord> {
+        if file.role != Role::Notice
+            || source.archive.is_some()
+            || file.relative_path != source.relative_path
+        {
+            return None;
+        }
+        self.notices.iter().find(|record| {
+            record.source_url == source.url
+                && Some(record.bytes as u64) == file.expected_size
+                && Some(&record.sha256) == file.expected_hash.as_ref()
+        })
+    }
+    fn validate_notice_sources(
+        &self,
+        files: &[PackageFile],
+        sources: &[DownloadSource],
+    ) -> Result<(), String> {
+        if files.len() != sources.len()
+            || files.iter().zip(sources).any(|(file, source)| {
+                file.role == Role::Notice
+                    && source.archive.is_none()
+                    && self.download_notice(file, source).is_none()
+            })
+        {
+            return Err("公式モデルの単独取得文書に一致する同梱原文がありません".into());
+        }
+        Ok(())
+    }
     fn parse(bytes: &[u8]) -> Result<Self, String> {
         let mut registry: Self =
             serde_json::from_slice(bytes).map_err(|_| "モデル利用条件の固定情報が不正です")?;
@@ -259,12 +292,13 @@ impl Registry {
             let choices: Vec<serde_json::Value> =
                 serde_json::from_str(source).map_err(|_| "公式カタログを読み取れません")?;
             for choice in choices {
-                let manifest: PackageManifest =
-                    serde_json::from_value(choice["recipe"]["manifest"].clone())
-                        .map_err(|_| "公式モデル定義が不正です")?;
+                let recipe: Recipe = serde_json::from_value(choice["recipe"].clone())
+                    .map_err(|_| "公式モデル定義が不正です")?;
+                let manifest = recipe.manifest;
                 if !self.covers(manifest.engine, &manifest.files) {
                     return Err("公式モデルの利用条件が欠けています".into());
                 }
+                self.validate_notice_sources(&manifest.files, &recipe.sources)?;
             }
         }
         let network: serde_json::Value =
@@ -273,6 +307,14 @@ impl Registry {
         let vad: serde_json::Value =
             serde_json::from_str(include_str!("../../model-catalog/whisper-vad-network.json"))
                 .map_err(|_| "VAD固定情報が不正です")?;
+        for definition in [&network, &vad] {
+            let files: Vec<PackageFile> = serde_json::from_value(definition["files"].clone())
+                .map_err(|_| "Whisper文書構成が不正です")?;
+            let sources: Vec<DownloadSource> =
+                serde_json::from_value(definition["sources"].clone())
+                    .map_err(|_| "Whisper文書の配布元が不正です")?;
+            self.validate_notice_sources(&files, &sources)?;
+        }
         let mut files: Vec<PackageFile> = serde_json::from_value(network["files"].clone())
             .map_err(|_| "Whisper構成が不正です")?;
         files.extend(
@@ -303,6 +345,24 @@ fn registry() -> Result<&'static Registry, String> {
         })
         .as_ref()
         .map_err(Clone::clone)
+}
+
+/// Reuse the exact publisher bytes already compiled into the app. The original
+/// HTTPS source stays in the recipe/provenance, just as for installed model reuse.
+/// A broken registry is an error, never permission to fall back to the network.
+pub(crate) fn embedded_download_notice(
+    file: &PackageFile,
+    source: &DownloadSource,
+) -> Result<Option<&'static [u8]>, String> {
+    if file.role != Role::Notice || source.archive.is_some() {
+        return Ok(None);
+    }
+    registry()?
+        .download_notice(file, source)
+        .map(|record| {
+            assets::embedded(&record.sha256).ok_or("同梱ライセンス原文がありません".into())
+        })
+        .transpose()
 }
 impl Disclosure {
     fn bind_hash(mut self) -> Result<Self, String> {

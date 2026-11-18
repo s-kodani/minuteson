@@ -216,7 +216,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const sherpa = options.find(o => o.id === "sherpa-1138-pyannote3-eres2net-base")!;
   assert.equal(sherpa.tokenLimits, null);
   assert.equal(sherpa.review.manifest.files.filter(f => f.role === "notice").length, 5);
-  assert.equal(sherpa.review.downloadBytes, 65_153_215);
+  assert.equal(sherpa.review.downloadBytes, 64_804_373);
   assert.equal(sherpa.review.archiveBytes, 25_210_612);
   assert.equal(sherpa.review.totalBytes, 78_117_057);
   assert.equal(sherpa.review.recipeHash, "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666");
