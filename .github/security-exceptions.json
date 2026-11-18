@@ -1,3 +1,13 @@
 {
-  "exceptions": []
+  "exceptions": [
+    {
+      "tool": "osv",
+      "id": "CVE-2026-112366",
+      "target": "npm:picomatch@4.0.7",
+      "reason": "Owner s-kodani explicitly accepted this temporary risk on 2026-11-18 to release 1.0.6. The single locked copy is a dev dependency used by Vite, tinyglobby, fdir and json-schema-to-typescript for development, builds and contract generation. No direct product-source reference was found; Tauri embeds generated dist files. No patched release was available at review. Crafted globs may still stall development or builds; this is not a fix or proof of unreachability. Update and rescan when an upstream fix is available, then remove this exception.",
+      "owner": "s-kodani",
+      "created": "2026-11-18",
+      "expires": "2026-11-25"
+    }
+  ]
 }

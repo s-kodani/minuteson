@@ -62,6 +62,12 @@ make check-security
 
 議事録処理は固定引数で起動し、継承環境を消去する境界を維持します。今後RPCを導入する場合は到達性を再評価します。更新時は取得元・実バイトの容量とSHA、レシピ、モデルデータの再利用、開始済みジョブの条件固定、両OSの互換性を確認します。代表モデルの実行検査は[テスト運用](testing.md#議事録ランタイムの実資材検証)を参照してください。
 
+### picomatchの期限付き例外
+
+1.0.6の公開に向け、所有者`s-kodani`が2026-11-18に[修正版未提供のCVE-2026-112366](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)の期限付きリスク受容を承認しました。[例外定義](../../.github/security-exceptions.json)は`npm:picomatch@4.0.7`の当該指摘だけに限定し、2026-11-25（UTC）に失効します。
+
+固定された単一コピーはVite・tinyglobby・fdir・json-schema-to-typescript経由の開発・ビルド・契約型生成用です。製品ソースからの直接参照は見つからず、Tauriは生成済み`dist`を同梱します。細工されたglobによる開発・ビルド処理の停止リスクは残り、到達不能や脆弱性修正を意味しません。上流の修正版を確認して依存更新と再検査を行い、例外を除去します。他の指摘・版・検査の停止条件は維持します。
+
 ### GLibの対象プラットフォーム
 
 `glib 0.18.5`の[RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429.html)は、`VariantStrIter`のC関数への出力ポインターの渡し方に関する未定義動作です。修正版は`0.20.0`以降ですが、現在のTauriのLinux向けGTK／WebKit2GTK依存は`glib 0.18`を要求するため、GLibだけを更新することはできません。
