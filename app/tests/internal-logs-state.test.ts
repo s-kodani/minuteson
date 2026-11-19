@@ -13,6 +13,39 @@ test("viewer keeps at most 1000 entries in the requested direction and signals r
   const older = mergeLogEntries(entries, [entry(0)], "older");
   assert.equal(older.entries[0].id, 0); assert.equal(older.entries.at(-1)!.id, 999); assert.equal(older.trimmed, true);
 });
+test("empty and repeated pages retain the collection and unchanged entry objects", () => {
+  const current = [entry(1), entry(2)];
+  for (const direction of ["older", "newer"] as const) {
+    assert.equal(mergeLogEntries(current, [], direction).entries, current);
+    assert.equal(mergeLogEntries(current, structuredClone(current), direction).entries, current);
+  }
+  assert.equal(mergeLogEntries(current, structuredClone(current), "initial").entries, current);
+  const replaced = mergeLogEntries(current, [structuredClone(current[1])], "initial").entries;
+  assert.deepEqual(replaced.map(row => row.id), [2]);
+  assert.equal(replaced[0], current[1]);
+  assert.deepEqual(mergeLogEntries(current, [], "initial").entries, []);
+});
+test("changed log fields replace their row while retaining every unchanged sibling", () => {
+  const current = [entry(1), entry(2)];
+  const changes: Partial<InternalLogEntry>[] = [
+    { timestamp: 1792159999999 }, { sessionId: "another-session" }, { kind: "engine" }, { level: "warn" },
+    { category: "playback" }, { meetingId: null }, { jobId: null }, { operationId: "operation-1" },
+    { state: "succeeded" }, { elapsedMs: null }, { message: "changed text" }, { stream: "stderr" }, { source: "/another/source" },
+  ];
+  for (const patch of changes) {
+    const changed = entry(2, patch);
+    const merged = mergeLogEntries(current, [changed], "newer").entries;
+    assert.notEqual(merged, current);
+    assert.equal(merged[0], current[0]);
+    assert.equal(merged[1], changed);
+  }
+});
+test("a page outside the retained cap signals trimming without replacing visible rows", () => {
+  const current = Array.from({ length: 1000 }, (_, index) => entry(index + 1));
+  const result = mergeLogEntries(current, [entry(0)], "newer");
+  assert.equal(result.entries, current);
+  assert.equal(result.trimmed, true);
+});
 test("copy keeps raw multiline content, identifiers and stream without interpreting markup", () => {
   const raw = "<script>window.bad = true</script>\n会議本文🦀\n";
   const text = copyLogText([entry(1, { kind: "engine", level: "raw", elapsedMs: null, stream: "stderr.log", message: raw })]);

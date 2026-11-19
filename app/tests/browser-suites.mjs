@@ -10,7 +10,7 @@ export const browserSuites = [
   ["canonical-playback", "canonical-playback-browser-fixture.tsx", "canonical-playback-browser-check.js"],
   ["meeting-deletion-scope", null, "meeting-deletion-scope-browser-check.js"],
   ["recording-recovery", null, "recording-recovery-browser-check.js"],
-  ...["controls", "history", "pagination", "live", "recovery"].map(scenario => [`internal-logs-${scenario}`, null, "internal-logs-browser-check.js"]),
+  ...["controls", "history", "pagination", "live", "recovery", "performance"].map(scenario => [`internal-logs-${scenario}`, null, "internal-logs-browser-check.js"]),
   ["speaker-count", "browser-fixture.js", "speaker-count-browser-check.js"],
   ["initial-speaker-count", null, "initial-speaker-count-browser-check.js"],
   ["meeting-mix-progress", "browser-fixture.js", "meeting-mix-progress-browser-check.js"],

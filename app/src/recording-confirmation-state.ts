@@ -15,5 +15,6 @@ export function acceptRecordingDecision(current: RecordingDecision | null, next:
   assertRecordingDecision(next);
   if (current && next.revision < current.revision) return current;
   if (current && next.revision === current.revision && (Object.keys(current) as (keyof RecordingDecision)[]).some(key => next[key] !== current[key])) throw Error(`同じ版の録音確認が変わっています (${next.revision}: ${current.phase} → ${next.phase})`);
+  if (current && next.revision === current.revision) return current;
   return next;
 }

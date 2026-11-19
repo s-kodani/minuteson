@@ -8,7 +8,8 @@ test("mini hide is authorized only for recorder and independent of recording loc
   assert.match(command,/window.label\(\) != "recorder"/);
   assert.match(command,/hide_recorder\(window.app_handle\(\)\)/);
   const hide=window.split("pub fn hide_recorder(")[1];
-  assert.doesNotMatch(hide,/RecorderController|SessionStore|session_changed|with_transition|request_recording_confirmation|decide_recording_confirmation/);
+  assert.doesNotMatch(hide,/RecorderController|session_changed|with_transition|request_recording_confirmation|decide_recording_confirmation|\.update(?:_if)?\(/);
+  assert.match(hide,/else if app.state::<SessionStore>\(\).snapshot\(\).is_active\(\)/);
   assert.match(hide,/recorder_panel::hide\(&panel\)/);
   assert.match(hide,/main\.show\(\)/);
   assert.doesNotMatch(lib,/recorder_close_requested|hide_recorder_preview/);

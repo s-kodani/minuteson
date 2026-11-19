@@ -1,7 +1,6 @@
 //! Native clipping follows physical size and monitor DPI. WebView CSS alone
 //! leaves rectangular transparent-window hit regions on Windows.
 use std::ffi::c_void;
-use tauri::{AppHandle, Manager};
 #[link(name = "dwmapi")]
 unsafe extern "system" {
     fn DwmSetWindowAttribute(
@@ -102,17 +101,12 @@ fn apply(window: *mut c_void, size: tauri::PhysicalSize<u32>, scale: f64) -> Res
     }
     Ok(())
 }
-pub(crate) fn configure(app: &AppHandle) -> Result<(), String> {
-    for label in ["recorder", "recording-confirmation"] {
-        if let Some(window) = app.get_webview_window(label) {
-            apply(
-                window.hwnd().map_err(|e| e.to_string())?.0,
-                window.outer_size().map_err(|e| e.to_string())?,
-                window.scale_factor().map_err(|e| e.to_string())?,
-            )?;
-        }
-    }
-    Ok(())
+pub(crate) fn configure_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    apply(
+        window.hwnd().map_err(|e| e.to_string())?.0,
+        window.outer_size().map_err(|e| e.to_string())?,
+        window.scale_factor().map_err(|e| e.to_string())?,
+    )
 }
 pub(crate) fn event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if target(window.label())

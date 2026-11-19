@@ -495,6 +495,14 @@ impl RecorderController {
             .map_err(|_| "録音状態の切替ロックに失敗しました")?;
         action()
     }
+
+    pub(crate) fn has_capture(app: &AppHandle) -> Result<bool, String> {
+        app.state::<Self>()
+            .0
+            .lock()
+            .map(|active| active.is_some())
+            .map_err(|_| "録音ロックを取得できません".into())
+    }
     pub fn available(app: &AppHandle) -> bool {
         probe_path(app).is_ok()
     }
@@ -1445,7 +1453,10 @@ fn notify_session(app: &AppHandle) {
         // phase too, so it cannot reopen the panel after stop.
         let _ = crate::recorder_panel::synchronize(&handle);
         crate::recording_confirmation_window::session_changed(&handle, &snapshot);
-        let _ = handle.emit("session-changed", snapshot);
+        let _ = handle.emit("session-changed", &snapshot);
+        // Destroy only after the terminal session and stop-decision result
+        // have been dispatched. Cleanup rechecks ownership off the UI thread.
+        crate::recording_windows::terminal_published(&handle, &snapshot);
     });
 }
 

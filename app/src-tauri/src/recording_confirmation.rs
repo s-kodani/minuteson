@@ -209,12 +209,16 @@ impl StopDecisionStore {
         }
         value.clone()
     }
+    #[cfg(test)]
     pub fn observe(&self, recording: &RecordingSnapshot) -> StopDecision {
+        self.observe_changed(recording).0
+    }
+    pub fn observe_changed(&self, recording: &RecordingSnapshot) -> (StopDecision, bool) {
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         // A read that started before a newer session event must not undo that
         // event or complete a decision for a subsequent recording.
         if recording.revision < state.recording_revision {
-            return state.decision.clone();
+            return (state.decision.clone(), false);
         }
         state.recording_revision = recording.revision;
         let value = &mut state.decision;
@@ -222,7 +226,7 @@ impl StopDecisionStore {
             value.phase,
             DecisionPhase::Confirming | DecisionPhase::Stopping
         ) {
-            return value.clone();
+            return (value.clone(), false);
         }
         let previous = value.clone();
         if recording.phase == RecordingPhase::Idle && recording.session_id.is_none() {
@@ -248,10 +252,11 @@ impl StopDecisionStore {
                 value.phase = DecisionPhase::Stopping;
             }
         }
-        if *value != previous {
+        let changed = *value != previous;
+        if changed {
             value.revision = value.revision.saturating_add(1);
         }
-        value.clone()
+        (value.clone(), changed)
     }
 }
 
@@ -554,6 +559,38 @@ mod tests {
         assert!(!s.observe(&r).preparing);
         assert!(s.claim(a.id.as_ref().unwrap(), true, &r).is_err());
         assert!(s.claim(a.id.as_ref().unwrap(), false, &r).is_ok());
+    }
+    #[test]
+    fn observations_only_report_meaningful_decision_changes() {
+        let s = StopDecisionStore::default();
+        assert!(!s.observe_changed(&RecordingSnapshot::default()).1);
+        let mut r = recording();
+        r.phase = RecordingPhase::Preparing;
+        s.request(&r, "main", "A".into()).unwrap();
+        assert!(!s.observe_changed(&r).1);
+        r.revision += 1;
+        r.elapsed_ms = 1000;
+        assert!(!s.observe_changed(&r).1);
+        r.revision += 1;
+        r.phase = RecordingPhase::Recording;
+        let (started, changed) = s.observe_changed(&r);
+        assert!(changed);
+        assert!(!started.preparing);
+        assert_eq!(s.observe_changed(&r), (started, false));
+        r.revision += 1;
+        r.phase = RecordingPhase::Stopping;
+        assert!(s.observe_changed(&r).1);
+        r.revision += 1;
+        r.phase = RecordingPhase::Saving;
+        assert!(!s.observe_changed(&r).1);
+        r = RecordingSnapshot {
+            revision: r.revision + 1,
+            ..Default::default()
+        };
+        let (completed, changed) = s.observe_changed(&r);
+        assert!(changed);
+        assert_eq!(completed.phase, DecisionPhase::Completed);
+        assert_eq!(s.observe_changed(&r), (completed, false));
     }
     #[test]
     fn stop_acceptance_and_saving_do_not_mean_completed() {
