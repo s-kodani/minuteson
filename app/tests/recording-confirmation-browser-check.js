@@ -137,11 +137,16 @@ async (page, capturePath = path => path)=>{
   const beforeRequestError=JSON.stringify((await state()).recording);
   const requestError="録音状態と保存結果を保持しています。新しい停止は送っていません: 合成確認ウィンドウの表示失敗";
   await Promise.all([page,mini].map(p=>p.evaluate(message=>window.__TAURI_INTERNALS__.invoke("plugin:event|emit",{event:"recording-confirmation-request-error",payload:message}),requestError)));
-  await page.getByRole("alert").filter({hasText:"合成確認ウィンドウ"}).waitFor();
+  await page.getByRole("alert").filter({hasText:"合成確認ウィンドウ"}).first().waitFor();
+  // The main request error and the mini's shared notice settle independently.
+  // Observe publication before retrying so a late relay cannot pass as recovery.
+  await page.waitForFunction(async()=>((await window.recordingFixture.read()).operations.find(entry=>entry.source==="confirmation"))?.message?.includes("合成確認ウィンドウ"));
   check(await mini.getByRole("button",{name:"録音パネルの説明を開く",exact:true}).count()===0&&await mini.locator(".mini-error").count()===0&&JSON.stringify((await state()).recording)===beforeRequestError&&!(await state()).calls.some(c=>c.command==="synthetic-stop")&&await closed()===0,"native close request error changed recording or was lost");
   await mini.getByRole("button",{name:"停止",exact:true}).click();await dialog().waitFor();
-  await page.getByRole("alert").filter({hasText:"合成確認ウィンドウ"}).waitFor({state:"hidden"});await mini.getByRole("alert").filter({hasText:"合成確認ウィンドウ"}).waitFor({state:"hidden"});
+  await page.waitForFunction(async()=>((await window.recordingFixture.read()).operations.find(entry=>entry.source==="confirmation"))?.message===null);
+  await Promise.all([page,mini].map(target=>target.waitForFunction(message=>![...document.querySelectorAll('[role="alert"]')].some(element=>element.textContent?.includes(message)&&element.getClientRects().length),requestError)));
   await modal.keyboard.press("Escape");await dialog().waitFor({state:"hidden"});
+  check(JSON.stringify((await state()).recording)===beforeRequestError&&!(await state()).calls.some(call=>call.command==="synthetic-stop")&&await closed()===0,"request error recovery changed recording or closed the app");
   results.push("native close request failure preserves canonical recording and reaches the main UI while the mini stays icon-only; a new explicit decision clears stale request error without stopping");
 
   // Hiding a panel is independent of a shared stop decision. Exercise the
