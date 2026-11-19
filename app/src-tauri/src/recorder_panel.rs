@@ -193,9 +193,14 @@ pub(crate) fn synchronize(app: &AppHandle) -> Result<(), String> {
             .store(false, Ordering::SeqCst);
     }
     let focused = main_focused(app);
-    let panel = app
-        .get_webview_window("recorder")
-        .ok_or("録音パネルがありません")?;
+    let Some(panel) = app.get_webview_window("recorder") else {
+        // Idle/startup/terminal cleanup deliberately owns no companion WebView.
+        return if snapshot.is_active() {
+            Err("録音パネルがありません".into())
+        } else {
+            Ok(())
+        };
+    };
     let decision = app.state::<StopDecisionStore>().snapshot();
     // Keep the panel behind a stop popup opened from its own stop button.
     // It still closes as soon as the recording enters stopping/saving.

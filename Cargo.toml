@@ -2,6 +2,12 @@
 resolver = "2"
 members = ["app/src-tauri", "crates/mon-contracts", "crates/mon-core", "crates/mon-native", "crates/mon-capture-ffi", "crates/mon-update-verify"]
 default-members = ["app/src-tauri"]
+exclude = ["third-party/vendor/flacenc-0.5.1"]
+
+[patch.crates-io]
+# Upstream 0.5.1 still requires affected heapless 0.8. This local compatibility
+# patch keeps its encoder unchanged while using fixed heapless 0.9.4.
+flacenc = { path = "third-party/vendor/flacenc-0.5.1" }
 
 [profile.release.package.mon-desktop]
 strip = "symbols"

@@ -13,6 +13,19 @@ test("capture polling and stopping dispatch lock waits and file reads off the na
   assert.match(confirmation,/pub async fn decide_recording_confirmation/);
   assert.match(confirmation,/spawn_blocking\(move \|\| \{\s*decide_recording_confirmation_blocking/);
 });
+test("recording recovery retries acquire the native window transition off the UI thread",()=>{
+  const recovery=readFileSync(new URL("../src-tauri/src/recording_recovery.rs",import.meta.url),"utf8");
+  const command=recovery.split("pub(crate) async fn retry_recording_recovery(")[1]?.split("fn retry_recording_recovery_blocking(")[0];
+  assert.ok(command,"recovery retry must dispatch asynchronously");
+  assert.match(command,/spawn_blocking\(move \|\| \{\s*retry_recording_recovery_blocking\(window, session_id\)/);
+  assert.doesNotMatch(command,/with_transition/);
+  const blocking=recovery.split("fn retry_recording_recovery_blocking(")[1]?.split("#[tauri::command]")[0];
+  assert.ok(blocking);
+  assert.match(blocking,/RecorderController::with_transition/);
+  assert.match(blocking,/window\.label\(\) != "main"/);
+  const registry=JSON.parse(readFileSync(new URL("../src-tauri/command_registry.json",import.meta.url),"utf8"));
+  assert.equal(registry.commands.find((command:{name:string})=>command.name==="retry_recording_recovery").signature.async,true);
+});
 test("input preparation has no permanent permission-help button or modal",()=>{
   const source=readFileSync(new URL("../src/capture-inputs.tsx",import.meta.url),"utf8");
   assert.doesNotMatch(source,/録音の権限を確認|OptionsModal|拒否されたとは判断できません/);

@@ -145,7 +145,7 @@
         "main"
       ],
       "signature": {
-        "async": false,
+        "async": true,
         "arguments": [
           {
             "name": "session_id",

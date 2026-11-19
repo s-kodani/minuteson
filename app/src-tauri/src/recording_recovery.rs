@@ -375,64 +375,81 @@ fn run_reserved(app: &tauri::AppHandle, session: Option<&str>, origin: &str) -> 
     error.map_or(Ok(()), Err)
 }
 #[tauri::command]
-pub(crate) fn retry_recording_recovery(
+pub(crate) async fn retry_recording_recovery(
     window: WebviewWindow,
     session_id: String,
 ) -> Result<Snapshot, mon_contracts::AppError> {
-    let result: Result<Snapshot, String> =
-        crate::recorder::RecorderController::with_transition(window.app_handle(), || {
-            if window.label() != "main" {
-                return Err("音声の保存はメイン画面だけで再試行できます".into());
-            }
-            if !window
-                .state::<crate::startup_attention::Startup>()
-                .ready_for_work()
-            {
-                return Err("起動処理の完了後に保存を再試行してください".into());
-            }
-            let recovery = window.state::<Recovery>();
-            window
-                .state::<crate::analysis_worker::AnalysisController>()
-                .require_not_exiting()?;
-            if window
-                .state::<crate::session::SessionStore>()
-                .snapshot()
-                .is_active()
-            {
-                return Err("録音終了後に音声の保存を再試行してください".into());
-            }
-            let reservation = recovery.reserve()?;
-            if !recovery.snapshot().items.iter().any(|item| {
-                item.session_id == session_id && item.phase == "failed" && !item.no_audio
-            }) {
-                return Err("再試行できる音声の保存処理がありません".into());
-            }
-            publish(window.app_handle(), |s| {
-                s.phase = "running".into();
-                s.origin = "retry".into();
-                s.target_session_id = Some(session_id.clone());
-                s.error = None;
-                if let Some(item) = s.items.iter_mut().find(|i| i.session_id == session_id) {
-                    item.phase = "queued".into();
-                    item.error = None;
-                    item.progress = None;
-                }
-            });
-            // Transfer the reservation to the owned background worker. Its guard
-            // releases the flag on normal completion and unwinding.
-            std::mem::forget(reservation);
-            let app = window.app_handle().clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                let recovery = app.state::<Recovery>();
-                let _reservation = Reservation(&recovery);
-                if let Err(error) = run_reserved(&app, Some(&session_id), "retry") {
-                    crate::internal_logs::report_error("recording_save", &error);
-                }
-            });
-            Ok(recovery.snapshot())
-        });
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        retry_recording_recovery_blocking(window, session_id)
+    })
+    .await
+    .map_err(|error| error.to_string())
+    .and_then(|result| result);
     result.map_err(|message| {
         mon_contracts::AppError::from_command("retry_recording_recovery", message)
+    })
+}
+
+fn retry_recording_recovery_blocking(
+    window: WebviewWindow,
+    session_id: String,
+) -> Result<Snapshot, String> {
+    // Native companion creation also owns this transition and can wait for UI
+    // work. Acquire it only on a blocking worker so retry cannot stop the UI
+    // thread that must finish that creation.
+    crate::recorder::RecorderController::with_transition(window.app_handle(), || {
+        if window.label() != "main" {
+            return Err("音声の保存はメイン画面だけで再試行できます".into());
+        }
+        if !window
+            .state::<crate::startup_attention::Startup>()
+            .ready_for_work()
+        {
+            return Err("起動処理の完了後に保存を再試行してください".into());
+        }
+        let recovery = window.state::<Recovery>();
+        window
+            .state::<crate::analysis_worker::AnalysisController>()
+            .require_not_exiting()?;
+        if window
+            .state::<crate::session::SessionStore>()
+            .snapshot()
+            .is_active()
+        {
+            return Err("録音終了後に音声の保存を再試行してください".into());
+        }
+        let reservation = recovery.reserve()?;
+        if !recovery
+            .snapshot()
+            .items
+            .iter()
+            .any(|item| item.session_id == session_id && item.phase == "failed" && !item.no_audio)
+        {
+            return Err("再試行できる音声の保存処理がありません".into());
+        }
+        publish(window.app_handle(), |s| {
+            s.phase = "running".into();
+            s.origin = "retry".into();
+            s.target_session_id = Some(session_id.clone());
+            s.error = None;
+            if let Some(item) = s.items.iter_mut().find(|i| i.session_id == session_id) {
+                item.phase = "queued".into();
+                item.error = None;
+                item.progress = None;
+            }
+        });
+        // Transfer the reservation to the owned background worker. Its guard
+        // releases the flag on normal completion and unwinding.
+        std::mem::forget(reservation);
+        let app = window.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let recovery = app.state::<Recovery>();
+            let _reservation = Reservation(&recovery);
+            if let Err(error) = run_reserved(&app, Some(&session_id), "retry") {
+                crate::internal_logs::report_error("recording_save", &error);
+            }
+        });
+        Ok(recovery.snapshot())
     })
 }
 #[tauri::command]

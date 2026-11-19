@@ -12,29 +12,31 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
   const [requestResolved,setRequestResolved]=useState(false);
   const current=useRef<RecordingDecision|null>(null), mounted=useRef(true), requesting=useRef(false), deciding=useRef(false), sent=useRef<string|null>(null), opener=useRef<HTMLElement|null>(null);
   const [requestBusy,setRequestBusy]=useState(false), [decisionBusy,setDecisionBusy]=useState(false);
-  const accept=(next:RecordingDecision)=>{
+  const apply=(next:RecordingDecision)=>{
     if(!mounted.current)return;
     const value=acceptRecordingDecision(current.current,next);
     if(current.current?.id!==value.id)setError("");
     current.current=value;setSnapshot(value);setConnected(true);setReadError("");
   };
-  const refresh=async()=>{
-    const before = current.current;
-    try{accept(await invoke<RecordingDecision>("get_recording_confirmation"));}
-    catch(cause){if(mounted.current && current.current === before){setConnected(false);setReadError(String(cause));}throw cause;}
+  const read=async()=>{
+    return invoke<RecordingDecision>("get_recording_confirmation");
   };
-  const refreshRef=useRef(refresh);refreshRef.current=refresh;
+  const readRef=useRef(read);readRef.current=read;
+  const observationRef=useRef<ReturnType<typeof observeSnapshots<RecordingDecision>>|null>(null);
+  const accept=(next:RecordingDecision)=>{if(observationRef.current)observationRef.current.accept(next);else apply(next);};
+  const refresh=async()=>{if(observationRef.current)await observationRef.current.refresh();else accept(await readRef.current());};
   useEffect(()=>{
     mounted.current=true;if(!isTauri())return;
     let disposed=false; const stops:(()=>void)[]=[];
     const observation = observeSnapshots<RecordingDecision>({
-      read: () => refreshRef.current(),
+      read: () => readRef.current(),
       subscribe: read => listen<RecordingDecision>("recording-confirmation-changed", event => read(event.payload)),
-      accept, error: cause => { setConnected(false); setReadError(String(cause)); },
-      intervalMs: 500, schedule: browserSchedule, focus: browserFocus,
+      accept: apply, error: cause => { setConnected(false); setReadError(String(cause)); },
+      intervalMs: 500, recoveryOnly: true, schedule: browserSchedule, focus: browserFocus,
     });
+    observationRef.current=observation;
     if(origin)void listen<string>("recording-confirmation-request-error",event=>{if(!disposed&&typeof event.payload==="string")setError(event.payload);}).then(stop=>{if(disposed)stop();else stops.push(stop);}).catch(cause=>{if(!disposed)setReadError(String(cause));});
-    return()=>{disposed=true;mounted.current=false;observation.stop();stops.forEach(stop=>stop());};
+    return()=>{disposed=true;mounted.current=false;observationRef.current=null;observation.stop();stops.forEach(stop=>stop());};
   },[]);
   useEffect(()=>{
     if(snapshot?.phase!=="cancelled"||snapshot.origin!==origin||!opener.current)return;
@@ -57,7 +59,7 @@ export function useRecordingConfirmation(origin: "main" | "recorder" | null) {
     const value=current.current;if(deciding.current||!value?.id||!connected||value.phase==="stopping"||(stop&&(value.phase!=="confirming"||sent.current===value.id)))return;
     deciding.current=true;setDecisionBusy(true);setError("");if(stop)sent.current=value.id;
     try{accept(await invoke<RecordingDecision>("decide_recording_confirmation",{id:value.id,stop,expectedPreparing:value.preparing}));}
-    catch(cause){if(mounted.current)setError(`受付状態を確認してください。停止は自動再送していません: ${String(cause)}`);try{await refreshRef.current();if(current.current?.id===value.id&&current.current.phase==="confirming"&&current.current.preparing!==value.preparing)sent.current=null;}catch{}}
+    catch(cause){if(mounted.current)setError(`受付状態を確認してください。停止は自動再送していません: ${String(cause)}`);try{await refresh();if(current.current?.id===value.id&&current.current.phase==="confirming"&&current.current.preparing!==value.preparing)sent.current=null;}catch{}}
     finally{deciding.current=false;if(mounted.current)setDecisionBusy(false);}
   };
   return {snapshot,connected,error,readError,request,decide,refresh,requestBusy,requestResolved,decisionBusy,visible:recordingDecisionVisible(snapshot),stopSent:sent.current===snapshot?.id};

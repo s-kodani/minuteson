@@ -48,11 +48,21 @@ export const logStates: Record<string, string> = {
   failed: "失敗", error: "エラー", pausing: "一時停止中", paused: "一時停止", cancelled: "取消済み",
   interrupted: "中断", stopped: "終了", verifying: "照合中", input: "入力処理中", generating: "生成中", output: "出力",
 };
-export function mergeLogEntries(current: InternalLogEntry[], incoming: InternalLogEntry[], direction: "older" | "newer") {
-  const unique = new Map(current.map(entry => [entry.id, entry]));
-  incoming.forEach(entry => unique.set(entry.id, entry));
-  const entries = [...unique.values()].sort((a, b) => a.id - b.id);
-  return { entries: direction === "older" ? entries.slice(0, 1000) : entries.slice(-1000), trimmed: entries.length > 1000 };
+const entryFields = ["id", "timestamp", "sessionId", "kind", "level", "category", "meetingId", "jobId", "operationId", "state", "elapsedMs", "message", "stream", "source"] as const satisfies readonly (keyof InternalLogEntry)[];
+export function mergeLogEntries(current: InternalLogEntry[], incoming: InternalLogEntry[], direction: "initial" | "older" | "newer") {
+  if (direction !== "initial" && !incoming.length) return { entries: current, trimmed: false };
+  const previous = new Map(current.map(entry => [entry.id, entry]));
+  const unique = direction === "initial" ? new Map<number, InternalLogEntry>() : new Map(previous);
+  incoming.forEach(entry => {
+    const prior = previous.get(entry.id);
+    unique.set(entry.id, prior && entryFields.every(field => prior[field] === entry[field]) ? prior : entry);
+  });
+  const ordered = [...unique.values()].sort((a, b) => a.id - b.id);
+  const entries = direction === "older" ? ordered.slice(0, 1000) : ordered.slice(-1000);
+  // Native pages deserialize into new objects even when nothing has changed.
+  // Keep both the collection and unchanged rows stable for the mounted viewer.
+  const unchanged = entries.length === current.length && entries.every((entry, index) => entry === current[index]);
+  return { entries: unchanged ? current : entries, trimmed: ordered.length > 1000 };
 }
 export function logElapsed(ms: number | null) {
   if (ms === null) return "—";

@@ -23,16 +23,20 @@ test("floating surfaces round every corner and do not use a thick square toast s
 });
 test("macOS clips only the two detached native windows using public selectors", () => {
   const native = source("../src-tauri/src/rounded_windows.rs");
-  assert.match(native, /\["recorder", "recording-confirmation"\]/);
+  const lifecycle = source("../src-tauri/src/recording_windows.rs");
+  assert.match(lifecycle, /const LABELS: \[&str; 2\] = \["recorder", "recording-confirmation"\]/);
+  assert.match(lifecycle, /for label in LABELS/);
+  assert.match(lifecycle, /find\(\|config\| config\.label == label\)/);
+  assert.match(lifecycle, /#\[cfg\(target_os = "macos"\)\]\s*let result = crate::rounded_windows::configure_window\(&window\)/);
   assert.match(native, /MainThreadMarker::new\(\)/);
   assert.match(native, /setCornerRadius: 12\.0_f64/);
   assert.match(native, /setMasksToBounds: true/);
   assert.match(native, /setOpaque: false/);
   assert.doesNotMatch(native, /setValue_forKey|setValue:.*forKey/);
-  const setup = source("../src-tauri/src/lib.rs");
-  assert.match(setup, /#\[cfg\(target_os = "macos"\)\]\s*rounded_windows::configure\(app.handle\(\)\)\?/);
   for (const file of ["tauri.conf.json", "tauri.qa.conf.json"]) {
-    assert.notEqual(JSON.parse(source(`../src-tauri/${file}`)).app.macOSPrivateApi, true);
+    const config = JSON.parse(source(`../src-tauri/${file}`));
+    assert.notEqual(config.app.macOSPrivateApi, true);
+    assert.deepEqual(config.app.windows.filter((window: { create?: boolean }) => window.create === false).map((window: { label: string }) => window.label).sort(), ["recorder", "recording-confirmation"]);
   }
 });
 test("model selectors keep button metrics without WebKit native sizing", () => {

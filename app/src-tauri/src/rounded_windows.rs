@@ -1,21 +1,10 @@
 //! Clip the native content too: CSS alone leaves an opaque rectangular window.
 //! Uses public AppKit/Core Animation APIs, not WKWebView's private drawsBackground key.
-use tauri::{AppHandle, Manager};
-
-pub(crate) fn configure(app: &AppHandle) -> Result<(), String> {
-    for label in ["recorder", "recording-confirmation"] {
-        if let Some(window) = app.get_webview_window(label) {
-            round(&window)?;
-        }
-    }
-    Ok(())
-}
-
-fn round(window: &tauri::WebviewWindow) -> Result<(), String> {
+pub(crate) fn configure_window(window: &tauri::WebviewWindow) -> Result<(), String> {
     use objc2::{class, msg_send, rc::Retained, runtime::AnyObject, MainThreadMarker};
     let _main = MainThreadMarker::new().ok_or("角丸の設定はメインスレッドで実行します")?;
     let native = window.ns_window().map_err(|error| error.to_string())?;
-    // SAFETY: setup runs on AppKit's main thread. Tauri owns the live NSWindow;
+    // SAFETY: the caller runs on AppKit's main thread. Tauri owns the live NSWindow;
     // the returned view/layer/color are retained while sending public setters.
     unsafe {
         let native = &*(native as *const AnyObject);

@@ -25,7 +25,8 @@
         "decorations": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "visible": false
+        "visible": false,
+        "create": false
       },
       {
         "label": "recording-confirmation",
@@ -37,7 +38,8 @@
         "decorations": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "visible": false
+        "visible": false,
+        "create": false
       }
     ]
   }

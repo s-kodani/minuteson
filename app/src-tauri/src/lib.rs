@@ -57,6 +57,7 @@ mod recording_confirmation_window;
 mod recording_recovery;
 #[cfg(any(unix, windows))]
 mod recording_segments;
+mod recording_windows;
 mod recording_writes;
 mod resampling;
 mod residency;
@@ -2752,26 +2753,38 @@ async fn start_recording(
                     inputs.require_automatic_microphone()?;
                 }
                 RecorderController::require_scope(&app, &capture_scope)?;
-                if let Some(title) = new_title {
-                    app.state::<Storage>()
-                        .create_recording_draft_with_vocabulary(
+                recording_windows::prepare(&app)?;
+                let result = (|| {
+                    if let Some(title) = new_title {
+                        app.state::<Storage>()
+                            .create_recording_draft_with_vocabulary(
+                                &meeting_id,
+                                &title,
+                                &meeting_vocabulary.unwrap_or_default(),
+                            )?;
+                    }
+                    ImportController::prepare_recording(&app)?;
+                    let result = AnalysisController::prepare_recording(&app).and_then(|_| {
+                        RecorderController::start(
+                            &app,
                             &meeting_id,
-                            &title,
-                            &meeting_vocabulary.unwrap_or_default(),
-                        )?;
-                }
-                ImportController::prepare_recording(&app)?;
-                let result = AnalysisController::prepare_recording(&app).and_then(|_| {
-                    RecorderController::start(
-                        &app,
-                        &meeting_id,
-                        microphone_uid.as_deref(),
-                        &capture_scope,
-                        &speaker_counts,
-                    )
-                });
+                            microphone_uid.as_deref(),
+                            &capture_scope,
+                            &speaker_counts,
+                        )
+                    });
+                    if result.is_err() {
+                        AnalysisController::recording_finished(&app);
+                    }
+                    result
+                })();
                 if result.is_err() {
-                    AnalysisController::recording_finished(&app);
+                    if let Err(error) = recording_windows::release_if_current(
+                        &app,
+                        &app.state::<SessionStore>().snapshot(),
+                    ) {
+                        internal_logs::report_error("recording_windows", &error);
+                    }
                 }
                 result
             })
@@ -3134,6 +3147,7 @@ pub fn run() {
         .manage(recording_recovery::Recovery::default())
         .manage(app_updates::Updates::default())
         .manage(SessionStore::default())
+        .manage(recording_windows::RecordingWindows::default())
         .manage(RecorderController::default())
         .manage(recorder_panel::PanelVisibility::default())
         .manage(input_status::archived::ArchivedInputs::default())
@@ -3180,12 +3194,6 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             macos_menu::install(app)?;
-            #[cfg(target_os = "macos")]
-            rounded_windows::configure(app.handle())?;
-            #[cfg(windows)]
-            if let Err(error) = windows_appearance::configure(app.handle()) {
-                internal_logs::report_error("windows_appearance", &error);
-            }
             let root = match app.path().app_data_dir() {
                 Ok(root) => root,
                 Err(error) => {

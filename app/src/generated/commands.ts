@@ -257,7 +257,7 @@ export const commandContracts = {
     }
   },
   "retry_recording_recovery": {
-    "async": false,
+    "async": true,
     "arguments": [
       {
         "name": "session_id",

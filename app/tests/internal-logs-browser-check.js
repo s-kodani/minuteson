@@ -322,7 +322,100 @@ async (page, _capturePath, detailUI) => {
     results.push("hover details close on automatic row eviction while preserving the existing keyboard focus");
   };
 
-  const scenarios={controls,history,pagination,live,recovery};
+  const performance = async () => {
+    // Instrument browser built-ins in this isolated fixture, not production
+    // render paths. Count actual formatting and layout work across idle reads.
+    await page.addInitScript(() => {
+      const metrics = window.internalLogMetrics = { dates: 0, messages: 0, detailSources: 0, scrollReads: 0, scrollWrites: 0 };
+      const trackDateFormat = formatter => {
+        // Playwright's virtual clock returns a formatter with its own format
+        // method, so instrument the returned instance instead of its prototype.
+        const format = formatter.format.bind(formatter), options = formatter.resolvedOptions();
+        Object.defineProperty(formatter, "format", { configurable: true, value: value => {
+          if (options.locale === "ja-JP" && options.year && options.second) metrics.dates++;
+          return format(value);
+        } });
+        return formatter;
+      };
+      Intl.DateTimeFormat = new Proxy(Intl.DateTimeFormat, {
+        construct: (target, args) => trackDateFormat(Reflect.construct(target, args)),
+        apply: (target, receiver, args) => trackDateFormat(Reflect.apply(target, receiver, args)),
+      });
+      const replace = String.prototype.replace;
+      String.prototype.replace = function (...args) {
+        const value = String(this);
+        if (value.startsWith("PERFORMANCE_LOG ")) metrics.messages++;
+        if (value.startsWith("PERFORMANCE_DETAIL_SOURCE ")) metrics.detailSources++;
+        return Reflect.apply(replace, this, args);
+      };
+    });
+    for (const count of [0, 200, 1000]) {
+      await reset();
+      await page.evaluate(count => {
+        const f = window.internalLogsFixture; f.entries = [];
+        for (let i = 0; i < Math.min(count, 200); i++) f.add({ message: `PERFORMANCE_LOG ${i} ${"会議の処理経過 ".repeat(50)}`, source: `PERFORMANCE_DETAIL_SOURCE ${i}` });
+      }, count);
+      await open(); await waitRows(Math.min(count, 200));
+      for (let loaded = 200; loaded < count; loaded += 200) {
+        await page.evaluate(() => {
+          const f = window.internalLogsFixture;
+          for (let i = 0; i < 200; i++) f.add({ message: `PERFORMANCE_LOG ${f.entries.length} ${"会議の処理経過 ".repeat(50)}`, source: `PERFORMANCE_DETAIL_SOURCE ${f.entries.length}` });
+        });
+        await page.clock.runFor(1100); await waitRows(loaded + 200);
+      }
+      await page.clock.runFor(100);
+      const before = await page.evaluate(() => {
+        const element = document.querySelector(".internal-logs-scroll"), metrics = window.internalLogMetrics;
+        window.internalLogRows = [...element.querySelectorAll("tbody tr")];
+        const height = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight"), top = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+        Object.defineProperty(element, "scrollHeight", { configurable: true, get() { metrics.scrollReads++; return height.get.call(this); } });
+        Object.defineProperty(element, "scrollTop", { configurable: true, get() { return top.get.call(this); }, set(value) { metrics.scrollWrites++; top.set.call(this, value); } });
+        return { ...metrics };
+      });
+      check(before.dates === count && before.messages === count && before.detailSources === 0, `${count} rows formatted repeatedly or prepared closed details: ${JSON.stringify(before)}`);
+      // No new rows: both automatic polling and unrelated application updates
+      // must preserve row objects, DOM, and the scroll anchor without formatting.
+      await page.clock.runFor(1100);
+      await page.evaluate(() => {
+        const f = window.internalLogsFixture, entries = f.entries.filter(entry => entry.kind === "process");
+        const skipped = f.add({ kind: "engine", level: "raw", message: "a newer record outside the current filter" });
+        f.pages.push({ entries: structuredClone(entries.slice(-200)), olderCursor: entries[0]?.id ?? 0, newerCursor: skipped.id, hasMore: false, expired: false, status: { ...f.status, droppedEntries: 7 } });
+      });
+      await page.clock.runFor(1100);
+      await logs.getByText(/7件のログを記録できませんでした/).waitFor();
+      await page.clock.runFor(1100);
+      const unchanged = await page.evaluate(() => {
+        const current = [...document.querySelectorAll(".internal-logs tbody tr")], f = window.internalLogsFixture;
+        return { ...window.internalLogMetrics, sameRows: current.length === window.internalLogRows.length && current.every((row, i) => row === window.internalLogRows[i]), after: f.calls.at(-1).query.after, expectedAfter: f.entries.at(-1).id };
+      });
+      check(unchanged.dates === before.dates && unchanged.messages === before.messages && unchanged.detailSources === 0 && unchanged.sameRows, `${count} idle/repeated rows were reformatted or replaced`);
+      check(unchanged.scrollReads === before.scrollReads && unchanged.scrollWrites === before.scrollWrites, `${count} unchanged rows reread or reset scrolling`);
+      check(unchanged.after === unchanged.expectedAfter, "an unchanged page did not advance its canonical cursor");
+      if (count) {
+        await logs.locator("tbody tr").last().locator(".info-trigger").focus(); await details.waitFor();
+        const opened = await page.evaluate(() => ({ ...window.internalLogMetrics }));
+        check(opened.detailSources === 1 && opened.messages === before.messages + 1 && opened.dates === before.dates, "details did not defer formatting or reuse the row timestamp");
+        await page.keyboard.press("Escape"); await details.waitFor({ state: "hidden" });
+        await toolbar.getByRole("button", { name: "更新", exact: true }).focus();
+        await page.evaluate(() => {
+          const f = window.internalLogsFixture, last = f.entries.filter(entry => entry.kind === "process").at(-1);
+          last.message = `PERFORMANCE_LOG changed ${last.message.slice("PERFORMANCE_LOG ".length)}`;
+          f.pages.push({ entries: [structuredClone(last)], olderCursor: last.id, newerCursor: f.entries.at(-1).id, hasMore: false, expired: false, status: structuredClone(f.status) });
+        });
+        await page.clock.runFor(1100);
+        await logs.locator("tbody tr").last().locator(".internal-log-message").getByText(/^PERFORMANCE_LOG changed /).waitFor();
+        const changed = await page.evaluate(() => ({ ...window.internalLogMetrics }));
+        check(changed.dates === before.dates + 1 && changed.messages === opened.messages + 1 && changed.detailSources === opened.detailSources, "changing one row reformatted unchanged siblings or closed details");
+      }
+      const departure = await page.evaluate(() => window.internalLogMetrics.dates);
+      await page.locator('.sidebar button[aria-label="設定"]').click();
+      await logs.waitFor({ state: "detached" });
+      check(await page.evaluate(() => window.internalLogMetrics.dates) === departure, `${count} rows were reformatted while leaving logs`);
+      results.push(`${count} rows retain DOM and formatting across idle/repeated reads, advance metadata/cursors, and leave without another row render`);
+    }
+  };
+
+  const scenarios={controls,history,pagination,live,recovery,performance};
   const selected=detailUI.internalLogsScenario ?? "all";
   if (selected !== "all" && !Object.hasOwn(scenarios,selected)) throw Error(`Unknown internal logs scenario: ${selected}`);
   try {

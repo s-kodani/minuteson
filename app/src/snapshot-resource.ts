@@ -88,7 +88,6 @@ export class SnapshotResource<T> {
 
 /** Shared non-React event/poll/focus lifecycle for domain readers with side reads. */
 export function observeSnapshots<T>(options: {
-  read: () => Promise<unknown>;
   subscribe: (accept: (value: T) => void) => Promise<() => void>;
   accept: (value: T) => void;
   error: (cause: unknown, source: "read" | "event" | "subscription") => void;
@@ -96,7 +95,8 @@ export function observeSnapshots<T>(options: {
   invalidations?: boolean;
   schedule: SnapshotTransport<T>["schedule"];
   focus: SnapshotTransport<T>["focus"];
-}) {
+} & ({ recoveryOnly: true; read: () => Promise<T> } | { recoveryOnly?: false; read: () => Promise<unknown> })) {
+  if (options.recoveryOnly) return observeEventSnapshots(options);
   let disposed = false, pending: Promise<unknown> | null = null, evidence = 0, again = false;
   const stops: (() => void)[] = [];
   const refresh = (): Promise<unknown> => {
@@ -128,7 +128,86 @@ export function observeSnapshots<T>(options: {
   }).then(stop => { if (disposed) stop(); else { stops.push(stop); poll(); } }).catch(cause => {
     if (!disposed) { options.error(cause, "subscription"); poll(); }
   });
-  return { refresh, ready: stopPromise, stop: () => { disposed = true; stops.splice(0).forEach(stop => stop()); } };
+  const accept = (value: T) => { if (!disposed) { options.accept(value); evidence++; } };
+  return { refresh, accept, ready: stopPromise, stop: () => { disposed = true; stops.splice(0).forEach(stop => stop()); } };
+}
+
+/** Healthy subscriptions need no timer. Only failed verification or subscription
+ * registration enables polling; focus can retry registration without a loop. */
+function observeEventSnapshots<T>(options: {
+  read: () => Promise<T>;
+  subscribe: (accept: (value: T) => void) => Promise<() => void>;
+  accept: (value: T) => void;
+  error: (cause: unknown, source: "read" | "event" | "subscription") => void;
+  intervalMs: number;
+  schedule: SnapshotTransport<T>["schedule"];
+  focus: SnapshotTransport<T>["focus"];
+}) {
+  let disposed = false, subscribed = false;
+  let evidence = 0, failure = 0, subscription = 0;
+  let pending: Promise<unknown> | null = null, subscribing: Promise<void> | null = null;
+  let stopEvents: (() => void) | null = null, stopPoll: (() => void) | null = null;
+  const accept = (value: T) => { if (!disposed) { options.accept(value); evidence++; } };
+  const recover = (cause: unknown, source: "read" | "event" | "subscription") => {
+    if (disposed) return;
+    failure++;
+    options.error(cause, source);
+    stopPoll ??= options.schedule(() => { void refresh(); }, options.intervalMs);
+  };
+  const refresh = (): Promise<unknown> => {
+    if (disposed) return Promise.resolve();
+    if (pending) return pending;
+    const readEvidence = evidence, readFailure = failure, readSubscription = subscription;
+    let verifyAgain = false;
+    pending = (async () => {
+      try {
+        const value = await options.read();
+        if (disposed) return;
+        // A reply begun before failed event validation or a new subscription
+        // cannot re-enable controls before the replacement verification.
+        if (readFailure !== failure || readSubscription !== subscription) {
+          verifyAgain = subscribed;
+          return;
+        }
+        accept(value);
+        if (subscribed) {
+          stopPoll?.(); stopPoll = null;
+        }
+      } catch (cause) {
+        if (!disposed && readEvidence === evidence) recover(cause, "read");
+      }
+    })().finally(() => {
+      pending = null;
+      if (verifyAgain && !disposed) void refresh();
+    });
+    return pending;
+  };
+  const subscribe = (): Promise<void> => {
+    if (disposed || subscribed) return Promise.resolve();
+    if (subscribing) return subscribing;
+    subscribing = options.subscribe(value => {
+      if (disposed) return;
+      try { accept(value); }
+      catch (cause) { recover(cause, "event"); void refresh(); }
+    }).then(stop => {
+      if (disposed) { stop(); return; }
+      stopEvents = stop; subscribed = true; subscription++;
+      void refresh();
+    }).catch(cause => {
+      recover(cause, "subscription"); void refresh();
+    }).finally(() => { subscribing = null; });
+    return subscribing;
+  };
+  const stopFocus = options.focus(() => {
+    if (subscribed) void refresh();
+    else void subscribe();
+  });
+  const ready = subscribe();
+  return { refresh, accept, ready, stop: () => {
+    if (disposed) return;
+    disposed = true; stopPoll?.(); stopEvents?.(); stopFocus();
+    stopPoll = null; stopEvents = null;
+  } };
 }
 
 /** Read-only invalidation events share polling, focus, teardown and queued reads.

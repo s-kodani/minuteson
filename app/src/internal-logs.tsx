@@ -1,7 +1,7 @@
 import { ErrorNotice, ToastNotice } from "./toast";
 import { displayNativePathsInText } from "./native-path";
 import { InfoPopover } from "./info-popover";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "./ipc.ts";
 import { copyLogText, logCategories, logElapsed, logStates, mergeLogEntries, type InternalLogEntry, type InternalLogFilter, type InternalLogPage } from "./internal-logs-state";
 import { IconButton } from "./action-icon";
@@ -9,9 +9,28 @@ import "./internal-logs.css";
 
 type Mode = "initial" | "newer" | "older";
 const levels: Record<string, string> = { info: "情報", warn: "警告", error: "エラー", raw: "生ログ" };
-const dateTime = (value: number) => new Date(value).toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+const dateTime = new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
-export function InternalLogs() {
+function LogDetails({ entry, timestamp }: { entry: InternalLogEntry; timestamp: string }) {
+  return <><dl><dt>日時</dt><dd>{timestamp}</dd><dt>会議ID</dt><dd>{entry.meetingId ?? "—"}</dd><dt>ジョブID</dt><dd>{entry.jobId ?? "—"}</dd><dt>操作ID</dt><dd>{entry.operationId ?? "—"}</dd><dt>起動ID</dt><dd>{entry.sessionId}</dd>
+    <dt>実行単位</dt><dd>{displayNativePathsInText(entry.source ?? "—")}</dd><dt>出力元</dt><dd>{entry.stream ?? "—"}</dd><dt>状態</dt><dd>{entry.state}</dd><dt>経過時間</dt><dd>{logElapsed(entry.elapsedMs)}</dd></dl><pre>{displayNativePathsInText(entry.message)}</pre></>;
+}
+
+const LogRow = memo(function LogRow({ entry }: { entry: InternalLogEntry }) {
+  const timestamp = dateTime.format(entry.timestamp);
+  return <tr data-log-id={entry.id}>
+    <td><time dateTime={new Date(entry.timestamp).toISOString()}>{timestamp}</time></td>
+    <td>{logCategories[entry.category] ?? entry.category}</td>
+    <td>{entry.kind === "engine" ? entry.stream : <>{logStates[entry.state] ?? entry.state}<small className={`internal-log-level internal-log-level-${entry.level}`}>{levels[entry.level] ?? entry.level}</small></>}</td>
+    <td>{logElapsed(entry.elapsedMs)}</td>
+    <td className="internal-log-message"><pre>{displayNativePathsInText(entry.message).slice(0, 240)}</pre></td>
+    <td><InfoPopover label="ログ詳細" triggerText="詳細" triggerLabel={`${timestamp}のログ詳細 ${entry.id}`} popupClassName="internal-log-detail" maxWidth={680} openOnFocus lazy>
+      <LogDetails entry={entry} timestamp={timestamp} />
+    </InfoPopover></td>
+  </tr>;
+});
+
+export const InternalLogs = memo(function InternalLogs() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersId = useId();
   const tabsId = useId();
@@ -73,14 +92,15 @@ export function InternalLogs() {
           const page = await invoke<InternalLogPage>("get_internal_logs", { query: { filter: queryFilter, limit: 200, ...(mode === "older" ? { before } : mode === "newer" && initialized ? { after: newer } : {}) } });
           if (!current() || automatic && pausedRef.current) return;
           if (mode === "older" && page.hasMore && page.olderCursor >= before) throw Error("古いログの読み込み位置が進みませんでした。更新ボタンで再試行してください。");
-          setError(""); failedMode.current = null; setPageStatus(page.status); setGap(value => value || page.expired);
-          if (mode === "older" || !followingRef.current) preservePosition();
-          else scrollUpdate.current = { bottom: true };
+          setError(""); failedMode.current = null;
+          setPageStatus(current => current?.storageError === page.status.storageError && current?.droppedEntries === page.status.droppedEntries && current?.historyTruncated === page.status.historyTruncated ? current : page.status);
+          setGap(value => value || page.expired);
+          const previous = buffer;
+          const result = mergeLogEntries(buffer, page.entries, mode === "initial" || !initialized ? "initial" : mode);
+          buffer = result.entries;
           if (mode === "initial" || !initialized) {
-            buffer = page.entries; older = page.olderCursor; newer = page.newerCursor; more = page.hasMore; initialized = true;
+            older = page.olderCursor; newer = page.newerCursor; more = page.hasMore; initialized = true;
           } else {
-            const result = mergeLogEntries(buffer, page.entries, mode === "older" ? "older" : "newer");
-            buffer = result.entries;
             if (result.trimmed) setTrimmed(true);
             if (mode === "older") { older = page.olderCursor; more = page.hasMore; }
             else {
@@ -88,7 +108,12 @@ export function InternalLogs() {
               if (result.trimmed) { older = buffer[0]?.id ?? older; more = true; }
             }
           }
-          setEntries([...buffer]); setHasOlder(more);
+          if (buffer !== previous) {
+            if (mode === "older" || !followingRef.current) preservePosition();
+            else scrollUpdate.current = { bottom: true };
+            setEntries(buffer);
+          }
+          setHasOlder(more);
           // A bounded native scan can return an empty page with more history.
           // Continue by cursor, never by the number of matching rows.
           if (mode === "newer" || page.entries.length || !more) break;
@@ -128,6 +153,9 @@ export function InternalLogs() {
   }, [entries, loading, hasOlder, error, invalidDate, filterKey, activeFilter]);
   const latest = () => {
     pausedRef.current = false; setPaused(false); followingRef.current = true; setFollowing(true); setTrimmed(false);
+    // Explicitly returning to the latest row still scrolls when its page is
+    // unchanged; automatic empty acknowledgements leave the viewport alone.
+    if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
     void request.current("initial");
   };
   const unavailable = loading || invalidDate || filterKey !== activeFilter;
@@ -190,20 +218,10 @@ export function InternalLogs() {
     }}>
       <div className="internal-logs-history-status" role="status">{loadingOlder ? "古いログを読み込んでいます…" : failedMode.current === "older" ? "古いログを読み込めませんでした。更新ボタンで再試行できます。" : loading ? "ログを取得しています…" : hasOlder ? "上端までスクロールすると古いログを読み込みます。" : "これより古いログはありません。"}</div>
       <table className="internal-logs-table"><thead><tr><th>日時</th><th>処理</th><th>{kind === "process" ? "状態／重要度" : "出力元"}</th><th>経過時間</th><th>メッセージ</th><th>詳細</th></tr></thead>
-        <tbody>{entries.map(entry => <tr key={entry.id} data-log-id={entry.id}>
-          <td><time dateTime={new Date(entry.timestamp).toISOString()}>{dateTime(entry.timestamp)}</time></td>
-          <td>{logCategories[entry.category] ?? entry.category}</td>
-          <td>{entry.kind === "engine" ? entry.stream : <>{logStates[entry.state] ?? entry.state}<small className={`internal-log-level internal-log-level-${entry.level}`}>{levels[entry.level] ?? entry.level}</small></>}</td>
-          <td>{logElapsed(entry.elapsedMs)}</td>
-          <td className="internal-log-message"><pre>{displayNativePathsInText(entry.message).slice(0, 240)}</pre></td>
-          <td><InfoPopover label="ログ詳細" triggerText="詳細" triggerLabel={`${dateTime(entry.timestamp)}のログ詳細 ${entry.id}`} popupClassName="internal-log-detail" maxWidth={680} openOnFocus lazy>
-            <dl><dt>日時</dt><dd>{dateTime(entry.timestamp)}</dd><dt>会議ID</dt><dd>{entry.meetingId ?? "—"}</dd><dt>ジョブID</dt><dd>{entry.jobId ?? "—"}</dd><dt>操作ID</dt><dd>{entry.operationId ?? "—"}</dd><dt>起動ID</dt><dd>{entry.sessionId}</dd>
-            <dt>実行単位</dt><dd>{displayNativePathsInText(entry.source ?? "—")}</dd><dt>出力元</dt><dd>{entry.stream ?? "—"}</dd><dt>状態</dt><dd>{entry.state}</dd><dt>経過時間</dt><dd>{logElapsed(entry.elapsedMs)}</dd></dl><pre>{displayNativePathsInText(entry.message)}</pre>
-          </InfoPopover></td>
-        </tr>)}</tbody>
+        <tbody>{entries.map(entry => <LogRow key={entry.id} entry={entry} />)}</tbody>
       </table>
       {!entries.length && !loading && !error && !invalidDate && <p className="internal-logs-empty">条件に一致するログはありません。収集開始前のログは表示されません。</p>}
     </div>
     </div>
   </section>;
-}
+});

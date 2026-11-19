@@ -1,0 +1,21 @@
+MinutesOn modifications to flacenc 0.5.1 (2026-11-19)
+
+Upstream: https://github.com/yotarok/flacenc-rs/
+Original package: https://static.crates.io/crates/flacenc/flacenc-0.5.1.crate
+Original package SHA-256: 74c892c2b5fa08f967e8b5ad29121570b4762202f2402033ce08479ec65eccd0
+Published package VCS commit: 4e9e73ae9a5072bd3de904c4a516401f425fde07
+Upstream license: Apache-2.0; the original LICENSE and source notices are retained.
+
+This is a locally modified copy, not an unmodified upstream release.
+Cargo.toml pins heapless to 0.9.4 to remove the dependency on affected heapless
+0.8.0 (RUSTSEC-2026-0574 through RUSTSEC-2026-0582).
+src/component/datatype.rs changes two error patterns from |()| to |_| because
+heapless 0.9 returns CapacityError from Vec::from_slice. Error messages and
+validation behavior are unchanged. No encoding algorithm is changed.
+
+The independent upstream Cargo.lock, upstream Cargo configuration, and repository
+maintenance files are omitted. The application workspace Cargo.lock defines the
+actual dependency resolution. Cargo.toml.orig is retained verbatim as provenance
+and is not the build manifest. Cargo.toml package metadata records provenance,
+the two modified files, and the reasons for their changes. The dependency notice
+inventory records the actual SHA-256 of those modified files.

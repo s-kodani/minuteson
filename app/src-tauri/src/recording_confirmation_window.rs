@@ -75,10 +75,12 @@ fn restore_current(app: &AppHandle, value: &StopDecision, cancelled: bool) {
     }
 }
 pub fn session_changed(app: &AppHandle, recording: &RecordingSnapshot) -> StopDecision {
-    let value = app.state::<StopDecisionStore>().observe(recording);
-    emit(app, &value);
-    if !value.visible() {
-        restore(app, &value, false);
+    let (value, changed) = app.state::<StopDecisionStore>().observe_changed(recording);
+    if changed {
+        emit(app, &value);
+        if !value.visible() {
+            restore(app, &value, false);
+        }
     }
     value
 }
@@ -133,7 +135,6 @@ pub fn request_recording_confirmation(
             store.request(&recording, window.label(), title)?
         };
         if !value.visible() {
-            emit(app, &value);
             return Ok(value);
         }
         let present = || -> Result<(), String> {
@@ -179,25 +180,21 @@ pub fn request_recording_confirmation(
             Ok(())
         };
         if let Err(error) = present() {
-            if created {
-                if let Some(id) = value.id.as_deref() {
-                    let _ = app.state::<StopDecisionStore>().dismiss(id);
-                }
-            }
-            let current = app.state::<StopDecisionStore>().snapshot();
-            emit(app, &current);
-            if created {
+            if let Some(current) = created
+                .then(|| value.id.as_deref().and_then(|id| store.dismiss(id).ok()))
+                .flatten()
+            {
+                emit(app, &current);
                 restore(app, &current, false);
             }
             return Err(format!(
             "録音確認を表示できません。新しい停止は送っていません。確認ウィンドウの状態を再確認してください: {error}"
         ));
         }
-        let current = session_changed(app, &app.state::<SessionStore>().snapshot());
-        if !current.visible() {
-            restore(app, &current, false);
+        if created {
+            emit(app, &value);
         }
-        emit(app, &current);
+        let current = session_changed(app, &app.state::<SessionStore>().snapshot());
         Ok(current)
     })();
     result.map_err(|message| {
@@ -270,12 +267,13 @@ pub fn close_requested(app: &AppHandle) {
 }
 
 pub fn hide_recorder(app: &AppHandle) -> Result<(), String> {
-    // Visibility only: no recorder lock, state read, stop, save or decision.
+    // Visibility only: never stops, saves or decides a recording.
     crate::recorder_panel::dismiss(app);
-    let panel = app
-        .get_webview_window("recorder")
-        .ok_or("録音パネルがありません")?;
-    crate::recorder_panel::hide(&panel)?;
+    if let Some(panel) = app.get_webview_window("recorder") {
+        crate::recorder_panel::hide(&panel)?;
+    } else if app.state::<SessionStore>().snapshot().is_active() {
+        return Err("録音パネルがありません".into());
+    }
     if let Some(main) = app.get_webview_window("main") {
         if !main.is_visible().map_err(|e| e.to_string())? {
             main.show().map_err(|e| e.to_string())?;
