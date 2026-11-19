@@ -48,6 +48,47 @@ def cargo_packages(metadata):
     return [packages[key] for key in sorted(reached - set(metadata.get("workspace_members", [root])))]
 
 
+def cargo_provenance(repository, package, locked):
+    """Identify upstream archives separately from locally modified vendor files."""
+    vendor = ((package.get("metadata") or {}).get("minuteson") or {}).get("vendor")
+    if vendor is None:
+        return (({"url": f"https://static.crates.io/crates/{package['name']}/{package['name']}-{package['version']}.crate",
+                  "sha256": locked[(package["name"], package["version"], REGISTRY)]["checksum"],
+                  "state": "source_reference_not_download_verified"}
+                 if package.get("source") == REGISTRY else None), None)
+    base = Path(package["manifest_path"]).parent
+    archive_url = f"https://static.crates.io/crates/{package['name']}/{package['name']}-{package['version']}.crate"
+    if (not isinstance(vendor, dict) or package.get("source") is not None
+            or not base.is_relative_to(repository / "third-party/vendor")
+            or base.is_symlink() or base.resolve() != base
+            or vendor.get("archiveUrl") != archive_url
+            or not isinstance(vendor.get("archiveSha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", vendor["archiveSha256"])
+            or not isinstance(vendor.get("vcsCommit"), str)
+            or not re.fullmatch(r"[0-9a-f]{40}", vendor["vcsCommit"])):
+        raise ValueError("modified vendor origin must identify its exact upstream crate and commit")
+    modifications, files = vendor.get("modifications"), vendor.get("modifiedFiles")
+    if (not isinstance(modifications, list) or not modifications
+            or not all(isinstance(item, str) and item.strip() for item in modifications)
+            or not isinstance(files, list) or not files
+            or not all(isinstance(item, str) and item.strip() for item in files)
+            or len(files) != len(set(files))):
+        raise ValueError("modified vendor must describe its changes and modified files")
+    modified = []
+    for name in files:
+        relative = Path(name)
+        path = base / relative
+        if (relative.is_absolute() or ".." in relative.parts or "\\" in name
+                or path.is_symlink() or path.resolve() != path or not path.is_file()):
+            raise ValueError("modified vendor file is missing, linked or outside its package")
+        data = path.read_bytes()
+        modified.append({"path": relative.as_posix(), "bytes": len(data), "sha256": sha(data)})
+    return ({"url": archive_url, "sha256": vendor["archiveSha256"],
+             "state": "upstream_source_reference_for_modified_vendor"},
+            {"path": base.relative_to(repository).as_posix(), "upstreamCommit": vendor["vcsCommit"],
+             "modifications": modifications, "modifiedFiles": modified})
+
+
 def notice_files(base, declared=None):
     """Never follow package symlinks, including an explicit license-file."""
     if base.is_symlink() or not base.is_dir() or base.resolve() != base:
@@ -136,14 +177,12 @@ def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
     dependencies = []
     for package in cargo_packages(metadata):
         base = Path(package["manifest_path"]).parent
+        source, vendor = cargo_provenance(repository, package, locked)
         dependencies.append(("cargo", package["name"], package["version"],
                              package.get("license"), package.get("repository"),
                              notice_files(base, package.get("license_file")),
                              supplemental_files(repository, package, index, locked),
-                             ({"url": f"https://static.crates.io/crates/{package['name']}/{package['name']}-{package['version']}.crate",
-                               "sha256": locked[(package["name"], package["version"], REGISTRY)]["checksum"],
-                               "state": "source_reference_not_download_verified"}
-                              if package.get("source") == REGISTRY else None)))
+                             source, vendor))
     for location, package in sorted(lock["packages"].items()):
         if not location or package.get("dev") is True:
             continue
@@ -157,7 +196,7 @@ def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
         if installed["version"] != package["version"] or installed["name"] != expected_name:
             raise ValueError("installed npm name/version differs from the lockfile")
         dependencies.append(("npm", installed["name"], package["version"],
-                             package.get("license"), None, notice_files(base), [], None))
+                             package.get("license"), None, notice_files(base), [], None, None))
     dependencies.sort(key=lambda item: item[:3])
     inventory = {"schemaVersion": 1, "target": target,
                  "scope": "resolved Cargo normal/build dependencies and npm production dependencies",
@@ -174,11 +213,13 @@ def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
               b"See third-party-inventory.json for scope, missing texts and exact versions.\n"
               b"Source availability, additional notices and model/engine licenses need review.\n\n"]
     total = 0
-    for ecosystem, name, version, license_id, repository_url, texts, supplements, source in dependencies:
+    for ecosystem, name, version, license_id, repository_url, texts, supplements, source, vendor in dependencies:
         key = f"{ecosystem}:{name}@{version}"
         entry = {"ecosystem": ecosystem, "name": name, "version": version,
                  "declaredLicense": license_id, "repository": repository_url, "noticeFiles": [],
                  "supplementalFiles": [record for record, _ in supplements], "sourceArchive": source}
+        if vendor:
+            entry["modifiedVendor"] = vendor
         supplement = next((p for p in index["packages"]
                            if ecosystem == "cargo" and (p["name"], p["version"]) == (name, version)), {})
         selected = supplement.get("selectedLicense")
@@ -199,6 +240,15 @@ def collect(repository, metadata, lock, target="aarch64-apple-darwin"):
             if supplements:
                 inventory["referenceOnlyPackages"].append(key)
         chunks.append(f"{'=' * 72}\n{key}\nDeclared license: {license_id or 'not supplied'}\n\n".encode())
+        if vendor:
+            chunks.append((f"Modified vendored dependency: {vendor['path']}\n"
+                           f"Upstream archive before local modifications: {source['url']}\n"
+                           f"Upstream archive SHA-256: {source['sha256']}\n"
+                           f"Upstream VCS commit: {vendor['upstreamCommit']}\n"
+                           + "Local modifications:\n" + "\n".join(vendor["modifications"])
+                           + "\nModified file SHA-256 values:\n"
+                           + "\n".join(f"{item['path']}: {item['sha256']}" for item in vendor["modifiedFiles"])
+                           + "\n\n").encode())
         if selected:
             chunks.append(f"Selected license: {selected}\n".encode())
         if review:

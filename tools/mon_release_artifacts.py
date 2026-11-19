@@ -30,7 +30,22 @@ def sbom(inventory, flavor, commit):
     for package in inventory["packages"]:
         ecosystem = "cargo" if package["ecosystem"] == "cargo" else "npm"
         purl = f"pkg:{ecosystem}/{quote(package['name'], safe='/')}@{quote(package['version'], safe='')}"
-        components.append({"type": "library", "bom-ref": purl, "name": package["name"], "version": package["version"], "purl": purl})
+        component = {"type": "library", "bom-ref": purl, "name": package["name"], "version": package["version"], "purl": purl}
+        vendor = package.get("modifiedVendor")
+        if vendor:
+            # The original crate checksum is provenance, not a hash of the
+            # modified component being shipped. Retain the actual changed files.
+            source = package["sourceArchive"]
+            component["properties"] = [
+                {"name": "mon:modified-vendor", "value": "true"},
+                {"name": "mon:vendor-path", "value": vendor["path"]},
+                {"name": "mon:upstream-archive-url", "value": source["url"]},
+                {"name": "mon:upstream-archive-sha256", "value": source["sha256"]},
+                {"name": "mon:upstream-vcs-commit", "value": vendor["upstreamCommit"]},
+                {"name": "mon:vendor-modifications", "value": json.dumps(vendor["modifications"], ensure_ascii=False)},
+                {"name": "mon:vendor-modified-files", "value": json.dumps(vendor["modifiedFiles"], ensure_ascii=False, sort_keys=True)},
+            ]
+        components.append(component)
     for index, item in enumerate(native_dependencies()):
         components.append({"type": "library", "bom-ref": f"native-{index}", "name": item["repository"],
                            "version": item.get("commit", item.get("tag")), "externalReferences": [{"type": "vcs", "url": "https://github.com/" + item["repository"]}],

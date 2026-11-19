@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -9,6 +10,8 @@ SPEC = importlib.util.spec_from_file_location(
     "notices", Path(__file__).resolve().parents[1] / "tools/mon_third_party_notices.py")
 notices = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(notices)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import mon_release_artifacts as artifacts
 
 
 class NoticeTests(unittest.TestCase):
@@ -94,6 +97,83 @@ class NoticeTests(unittest.TestCase):
         self.assertNotIn("Apple SDK/system frameworks", inventory["excluded"])
         with self.assertRaises(ValueError):
             notices.collect(self.root, self.metadata, self.lock, "unreviewed-target")
+
+    def vendor(self):
+        base = "third-party/vendor/crate-1.0"
+        self.file(f"{base}/Cargo.toml", "modified dependency manifest\n")
+        self.file(f"{base}/src/lib.rs", "modified source\n")
+        self.file(f"{base}/LICENSE", "Vendored license remains verbatim\n")
+        self.file(f"{base}/NOTICE", "Vendored upstream attribution\n")
+        package = next(p for p in self.metadata["packages"] if p["id"] == "crate")
+        package.update(source=None, manifest_path=str(self.root / base / "Cargo.toml"), metadata={"minuteson": {"vendor": {
+            "archiveUrl": "https://static.crates.io/crates/crate/crate-1.0.crate",
+            "archiveSha256": "1" * 64, "vcsCommit": "a" * 40,
+            "modifications": ["Update a dependency and adapt its changed error type."],
+            "modifiedFiles": ["Cargo.toml", "src/lib.rs"],
+        }}})
+        return package, package["metadata"]["minuteson"]["vendor"]
+
+    def test_modified_vendor_keeps_upstream_origin_actual_file_hashes_and_verbatim_notices(self):
+        package, origin = self.vendor()
+        text, inventory = notices.collect(self.root, self.metadata, self.lock)
+        entry = next(p for p in inventory["packages"] if p["name"] == "crate")
+        self.assertEqual(entry["sourceArchive"], {"url": origin["archiveUrl"], "sha256": origin["archiveSha256"],
+                                                 "state": "upstream_source_reference_for_modified_vendor"})
+        vendor = entry["modifiedVendor"]
+        self.assertEqual(vendor["path"], "third-party/vendor/crate-1.0")
+        self.assertEqual(vendor["upstreamCommit"], origin["vcsCommit"])
+        self.assertEqual(vendor["modifications"], origin["modifications"])
+        for record in vendor["modifiedFiles"]:
+            data = (Path(package["manifest_path"]).parent / record["path"]).read_bytes()
+            self.assertEqual(record["sha256"], notices.sha(data))
+            self.assertEqual(record["bytes"], len(data))
+        self.assertIn(b"Vendored license remains verbatim\n", text)
+        self.assertIn(b"Vendored upstream attribution\n", text)
+        self.assertIn(b"Upstream archive before local modifications:", text)
+        self.assertIn(origin["modifications"][0].encode(), text)
+        self.assertNotIn(str(self.root), json.dumps(inventory))
+        self.assertFalse(inventory["distributionReady"])
+        self.assertEqual(inventory["licenseReview"], "not_verified")
+        source = Path(package["manifest_path"]).parent / "src/lib.rs"
+        source.write_text("another local source change\n", encoding="utf8")
+        _, changed = notices.collect(self.root, self.metadata, self.lock)
+        changed_entry = next(p for p in changed["packages"] if p["name"] == "crate")
+        self.assertEqual(changed_entry["sourceArchive"], entry["sourceArchive"])
+        self.assertNotEqual(changed_entry["modifiedVendor"]["modifiedFiles"][1]["sha256"], vendor["modifiedFiles"][1]["sha256"])
+
+    def test_sbom_distinguishes_modified_vendor_from_original_archive_without_relabeling_its_hash(self):
+        self.vendor()
+        self.file("app/package.json", json.dumps({"version": "1.0"}))
+        _, inventory = notices.collect(self.root, self.metadata, self.lock)
+        with patch.object(artifacts, "ROOT", self.root), patch.object(artifacts, "native_dependencies", return_value=[]):
+            bom = artifacts.sbom(inventory, "macos", "b" * 40)
+        component = next(p for p in bom["components"] if p["name"] == "crate")
+        properties = {p["name"]: p["value"] for p in component["properties"]}
+        self.assertEqual(properties["mon:modified-vendor"], "true")
+        self.assertEqual(properties["mon:vendor-path"], "third-party/vendor/crate-1.0")
+        self.assertEqual(properties["mon:upstream-archive-url"], "https://static.crates.io/crates/crate/crate-1.0.crate")
+        self.assertEqual(properties["mon:upstream-archive-sha256"], "1" * 64)
+        self.assertEqual(properties["mon:upstream-vcs-commit"], "a" * 40)
+        self.assertEqual(json.loads(properties["mon:vendor-modifications"]), ["Update a dependency and adapt its changed error type."])
+        records = json.loads(properties["mon:vendor-modified-files"])
+        self.assertEqual(records[1]["sha256"], notices.sha(b"modified source\n"))
+        self.assertNotIn("hashes", component)
+        self.assertTrue(all("properties" not in p for p in bom["components"] if p["name"] != "crate"))
+
+    def test_modified_vendor_origin_or_changed_file_inventory_cannot_be_silently_omitted(self):
+        _, origin = self.vendor()
+        for change in ({"archiveUrl": "https://example.invalid/other.crate"}, {"archiveSha256": "invalid"},
+                       {"vcsCommit": "invalid"}, {"modifications": []}, {"modifiedFiles": []},
+                       {"modifiedFiles": ["../LICENSE"]}, {"modifiedFiles": ["missing.rs"]},
+                       {"modifiedFiles": ["Cargo.toml", "Cargo.toml"]}):
+            with self.subTest(change=change), patch.dict(origin, change), self.assertRaises(ValueError):
+                notices.collect(self.root, self.metadata, self.lock)
+
+    def test_null_cargo_metadata_is_an_unmodified_dependency(self):
+        for package in self.metadata["packages"]:
+            package["metadata"] = None
+        _, inventory = notices.collect(self.root, self.metadata, self.lock)
+        self.assertTrue(all("modifiedVendor" not in package for package in inventory["packages"]))
 
     def test_missing_text_is_explicit_not_license_success_or_generic_replacement(self):
         (self.root / "crate/LICENSE").unlink()
