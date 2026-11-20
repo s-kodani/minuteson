@@ -21,6 +21,7 @@ pub(in crate::storage) struct Pending {
     directory: Directory,
     plan: Plan,
     stamp: Stamp,
+    verified: Option<Stamp>,
 }
 impl Pending {
     pub fn open(path: &Path, key: &str, frames: u64) -> Result<Self, String> {
@@ -58,10 +59,11 @@ impl Pending {
         {
             return Err("WAV保存予約と入力音声が一致しません".into());
         }
-        let pending = Self {
+        let mut pending = Self {
             directory,
             plan,
             stamp,
+            verified: None,
         };
         if pending.plan.hash.is_some() {
             pending.verify_completed()?;
@@ -86,9 +88,10 @@ impl Pending {
         file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         Ok(Some(file))
     }
-    fn verify_file(&self, file: &mut File, expected: &str) -> Result<(), String> {
+    fn verify_file(&self, file: &mut File, expected: &str) -> Result<Stamp, String> {
         use sha2::{Digest, Sha256};
         use std::io::Read;
+        let stamp = Stamp::read(file)?;
         self.plan.identity.require(file)?;
         let size = file.metadata().map_err(|e| e.to_string())?.len();
         let layout = crate::audio::wave::inspect(file, size)?;
@@ -108,19 +111,22 @@ impl Pending {
         if format!("{:x}", hash.finalize()) != expected {
             return Err("保存WAVのPCMチェックサムが一致しません".into());
         }
-        self.plan.identity.require(file)
+        stamp.require(file)?;
+        Ok(stamp)
     }
-    fn verify_completed(&self) -> Result<(), String> {
+    fn verify_completed(&mut self) -> Result<(), String> {
         let final_file = self.directory.optional(&self.plan.name, false)?;
         let part = self.directory.optional(&self.part(), false)?;
         if final_file.is_some() && part.is_some() {
             return Err("保存WAVの途中名と最終名が重複しています".into());
         }
         let mut file = final_file.or(part).ok_or("保存WAVの実体がありません")?;
-        self.verify_file(
+        let stamp = self.verify_file(
             &mut file,
             self.plan.hash.as_deref().ok_or("WAV確定証拠がありません")?,
-        )
+        )?;
+        self.verified = Some(stamp);
+        Ok(())
     }
     pub fn complete(&mut self, hash: String) -> Result<(), String> {
         if let Some(old) = &self.plan.hash {
@@ -146,7 +152,70 @@ impl Pending {
     pub fn completed_hash(&self) -> Option<&str> {
         self.plan.hash.as_deref()
     }
+    /// Bind a reopened final descriptor to the exact bytes already checked by
+    /// completion. Never adopt a fresh stamp from an unverified replacement.
+    pub fn completed_file(&self) -> Result<File, String> {
+        let stamp = self
+            .verified
+            .as_ref()
+            .ok_or("保存WAVの検証結果がありません")?;
+        let file = self.directory.required(&self.plan.name, false)?;
+        stamp.require(&file)?;
+        Ok(file)
+    }
     pub fn path(&self) -> PathBuf {
         self.directory.path.join(&self.plan.name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+
+    fn completed() -> (tempfile::TempDir, Pending, Vec<u8>) {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().canonicalize().unwrap();
+        let mut pending = Pending::open(&directory, "owned-wav", 2).unwrap();
+        let mut bytes = crate::audio::wave::streaming_header(2).unwrap().to_vec();
+        bytes.extend([1, 0, 2, 0]);
+        let mut file = pending.begin().unwrap().unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        pending
+            .complete(format!("{:x}", Sha256::digest(&bytes)))
+            .unwrap();
+        (root, pending, bytes)
+    }
+
+    #[test]
+    fn completed_descriptor_remains_bound_after_reopen_but_not_after_payload_change() {
+        let (root, pending, _) = completed();
+        pending.completed_file().unwrap();
+        let resumed = Pending::open(&root.path().canonicalize().unwrap(), "owned-wav", 2).unwrap();
+        resumed.completed_file().unwrap();
+        let mut changed = std::fs::OpenOptions::new()
+            .append(true)
+            .open(pending.path())
+            .unwrap();
+        changed.write_all(&[3]).unwrap();
+        changed.sync_all().unwrap();
+        drop(changed);
+        assert!(pending.completed_file().is_err());
+        assert!(resumed.completed_file().is_err());
+    }
+
+    #[test]
+    fn completed_descriptor_does_not_adopt_an_identical_replacement() {
+        let (_root, pending, bytes) = completed();
+        let path = pending.path();
+        std::fs::rename(&path, path.with_extension("held")).unwrap();
+        let mut replacement = pending.directory.create(&pending.plan.name).unwrap();
+        replacement.write_all(&bytes).unwrap();
+        replacement.sync_all().unwrap();
+        drop(replacement);
+        assert!(pending.completed_file().is_err());
     }
 }

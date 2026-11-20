@@ -71,6 +71,76 @@ final class LiveWavSessionTests: XCTestCase {
     XCTAssertTrue(names.contains("single-wav-owner.json"))
   }
 
+  func testFinalMetadataFailureStillCommitsTheAcceptedShortTail() throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let writer = try LiveWavSession(
+      output: root, owner: UUID().uuidString.lowercased(), commits: RawSegmentCommitWorker())
+    try append(writer, lane: "microphone", value: 3200, frames: 16000, start: 1_000_000_000)
+    try writer.closeLane("microphone")
+    try writer.closeLane("system")
+    let diagnostic = try CaptureSession.finishSharedWav(writer) {
+      throw ProbeError.capture("injected final clock failure")
+    }
+    XCTAssertTrue(try XCTUnwrap(diagnostic).contains("injected final clock failure"))
+    XCTAssertEqual(writer.snapshot().frames, 16000)
+    XCTAssertTrue(writer.snapshot().producerClosed)
+    let data = try Data(contentsOf: root.appendingPathComponent("recording.wav"))
+    XCTAssertEqual(data.count, 80 + 32000)
+    XCTAssertEqual(data.prefix(80), try VoicePCM.wavHeader(frames: 16000))
+    XCTAssertTrue(
+      FileManager.default.fileExists(atPath: root.appendingPathComponent("wav-00000001.json").path))
+  }
+
+  func testUnprovenStopPreservesAcceptedTailWithoutPublishingClosure() throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let writer = try LiveWavSession(
+      output: root, owner: UUID().uuidString.lowercased(), commits: RawSegmentCommitWorker())
+    try append(writer, lane: "microphone", value: 1200, frames: 16000, start: 1_000_000_000)
+    XCTAssertThrowsError(try writer.finish())
+    try writer.preserveAcceptedPrefix()
+    try writer.preserveAcceptedPrefix()
+    XCTAssertEqual(writer.snapshot().frames, 16000)
+    XCTAssertFalse(writer.snapshot().producerClosed)
+    let data = try Data(contentsOf: root.appendingPathComponent("recording.wav"))
+    XCTAssertEqual(data.count, 80 + 32000)
+    let tip = try XCTUnwrap(
+      JSONSerialization.jsonObject(
+        with: Data(contentsOf: root.appendingPathComponent("single-wav.json"))) as? [String: Any])
+    XCTAssertEqual(tip["producerClosed"] as? Bool, false)
+  }
+
+  func testAuxiliaryClockCapacityDoesNotRejectSharedWavPCM() throws {
+    let root = try directory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let commits = RawSegmentCommitWorker()
+    let writer = try LiveWavSession(
+      output: root, owner: UUID().uuidString.lowercased(), commits: commits)
+    let owner = writer.snapshot().ownerId
+    let source = try RawRecordingSegments(
+      output: root, owner: owner, lane: "microphone", maximumTotalClockSegments: 1,
+      commits: commits, wavSession: writer)
+    let format = try XCTUnwrap(
+      AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false))
+    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600))
+    buffer.frameLength = 1600
+    for index in 0..<1600 { buffer.floatChannelData![0][index] = 0.25 }
+    try source.enqueue(buffer, observation: .timestamp(1_000_000_000), sourceFrame: nil)
+    try source.enqueue(
+      buffer, observation: .timestamp(1_200_000_000), sourceFrame: nil, sourceEpoch: 1)
+    try source.finish()
+    try writer.closeLane("system")
+    try writer.finish()
+    let stats = source.applyingSavedAudio(to: TrackStats())
+    XCTAssertEqual(stats.frames, 3200)
+    XCTAssertNotNil(stats.auxiliaryClockFailure)
+    XCTAssertNoThrow(try stats.requireWritable())
+    XCTAssertEqual(writer.snapshot().frames, 4800)
+    XCTAssertTrue(writer.snapshot().producerClosed)
+  }
+
   func testTestInputUsesOnlyItsShortWavAndNoRecoveryJournal() throws {
     let root = try directory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -105,6 +175,7 @@ final class LiveWavSessionTests: XCTestCase {
     try writer.closeLane("microphone")
     try writer.closeLane("system")
     XCTAssertThrowsError(try writer.finish())
+    XCTAssertThrowsError(try writer.preserveAcceptedPrefix())
     XCTAssertEqual(try Data(contentsOf: destination), replacement)
   }
 

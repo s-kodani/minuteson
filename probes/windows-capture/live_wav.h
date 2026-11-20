@@ -171,6 +171,14 @@ class LiveWav {
   void advance(unsigned lane,std::int64_t through){through=std::max(frontiers_.at(lane),through);if(!mon_wav_mixer_advance(mixer_.get(),lane,sequence_.at(lane),through))throw std::runtime_error("録音音声の確定順序が不正です");frontiers_[lane]=through;}
   void drain(std::int64_t through){check();Sink sink{this,{}};const auto ok=mon_wav_mixer_drain(mixer_.get(),through,&sink,Sink::write);if(sink.error)std::rethrow_exception(sink.error);if(!ok)throw std::runtime_error("録音音声の合成に失敗しました");}
   void finish(){if(closed_)return;Sink sink{this,{}};const auto ok=mon_wav_mixer_finish(mixer_.get(),&sink,Sink::write);if(sink.error)std::rethrow_exception(sink.error);if(!ok)throw std::runtime_error("録音音声の合成を終了できません");seal(true);wait();closed_=true;}
+  // Commit accepted mixed PCM after a non-storage failure without advertising
+  // acquisition closure. A poisoned mixer may still have a valid active block.
+  void preserve_prefix(){
+    check();if(closed_)return;Sink sink{this,{}};
+    mon_wav_mixer_finish(mixer_.get(),&sink,Sink::write);
+    if(sink.error)std::rethrow_exception(sink.error);
+    seal();wait();
+  }
   void wait(){std::unique_lock lock(mutex_);changed_.wait(lock,[&]{return error_||(!working_&&jobs_.empty());});if(error_)std::rethrow_exception(error_);}
   void stop(){{std::lock_guard lock(mutex_);stopping_=true;changed_.notify_all();}if(worker_.joinable())worker_.join();}
   Json status(){std::lock_guard lock(mutex_);return Json::parse(tip(durable_,closed_));}
@@ -188,20 +196,27 @@ class WavInput {
   std::uint64_t epoch_=0,submitted_=0,source_base_=0,converted_=0;
   std::int64_t last_end_=0;
   bool boundary_=false;
-  PacketClock clock_{PacketClock::recording_capacity,16000};
+  PacketClock clock_;
+  std::string clock_error_;
   void converted(const std::int16_t* pcm,std::size_t count,std::int64_t start,std::int64_t end){
-    if(!count)return;clock_.append(frames,static_cast<std::uint32_t>(count),static_cast<std::uint64_t>(start)/100,boundary_,static_cast<std::uint64_t>(end)/100);boundary_=false;
+    if(!count)return;
     converted_+=count;const auto source_end=std::min(submitted_,source_base_+converted_*3);
     if(recording_)recording_->push(lane_,epoch_,pcm,count,start,end,source_end);
     else{
       if(test_file_.value==INVALID_HANDLE_VALUE){test_file_.value=CreateFileW(path_.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(test_file_.value==INVALID_HANDLE_VALUE)throw std::runtime_error("テストWAVを新規作成できません");auto h=VoicePCM::wave_header(0);write_all(test_file_.value,h.data(),h.size());}
       write_all(test_file_.value,pcm,count*2);
     }
-    frames+=count;last_end_=end;
+    // This full normalized-track map is auxiliary to the shared WAV's own
+    // ordered sample timeline. Its capacity must not reject accepted PCM.
+    if(clock_error_.empty()){
+      try{clock_.append(frames,static_cast<std::uint32_t>(count),static_cast<std::uint64_t>(start)/100,boundary_,static_cast<std::uint64_t>(end)/100);}
+      catch(const std::exception& error){if(!recording_)throw;clock_error_=error.what();}
+    }
+    boundary_=false;frames+=count;last_end_=end;
   }
  public:
   std::uint64_t frames=0;
-  WavInput(fs::path path,unsigned lane,UINT32 channels,std::shared_ptr<LiveWav> recording={}):path_(std::move(path)),lane_(lane),channels_(channels),recording_(std::move(recording)){}
+  WavInput(fs::path path,unsigned lane,UINT32 channels,std::shared_ptr<LiveWav> recording={},std::size_t clock_capacity=PacketClock::recording_capacity):path_(std::move(path)),lane_(lane),channels_(channels),recording_(std::move(recording)),clock_(clock_capacity,16000){}
   std::shared_ptr<StoragePending> pending()const{return recording_?recording_->pending():nullptr;}
   unsigned lane_index()const{return lane_;}
   void drain_converter(){if(converter_){converter_->finish([&](auto pcm,auto count,auto start,auto end){converted(pcm,count,start,end);});converter_.reset();}}
@@ -218,5 +233,6 @@ class WavInput {
   }
   void finish(){drain_converter();if(test_file_.value!=INVALID_HANDLE_VALUE){auto h=VoicePCM::wave_header(frames);LARGE_INTEGER zero{};if(!SetFilePointerEx(test_file_.value,zero,nullptr,FILE_BEGIN))throw std::runtime_error("テストWAVの確定位置が不正です");write_all(test_file_.value,h.data(),h.size());if(!capture_flush(test_file_.value,"test_wav_sync"))throw std::runtime_error("テストWAVを同期できません");CloseHandle(test_file_.value);test_file_.value=INVALID_HANDLE_VALUE;}}
   std::int64_t normalized_through()const{return last_end_;}
-  Json timeline(std::uint64_t origin)const{Json result=Json::array();for(const auto& p:clock_.parts)result.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});return result;}
+  const std::string& clock_error()const{return clock_error_;}
+  Json timeline(std::uint64_t origin)const{Json result=Json::array();if(!clock_error_.empty())return result;for(const auto& p:clock_.parts)result.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});return result;}
 };

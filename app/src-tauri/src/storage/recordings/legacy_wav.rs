@@ -466,7 +466,10 @@ pub(super) fn save(
     let mut retired = Vec::new();
     let mut corrupt_assets: Vec<(String, String, i64, String, Stamp)> = Vec::new();
     for prefix in prefixes {
-        for entry in prefix.entries() {
+        // A partial rescue preserves the complete original workspace, including
+        // verified entries and the unreadable/unadvertised suffix. The new WAV
+        // is independently usable; source retirement is not a save condition.
+        for entry in prefix.entries().filter(|_| !partial) {
             let path = base.join(format!(
                 "raw-{}-{:08}.caf",
                 prefix.lane().name(),
@@ -752,6 +755,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn damaged_legacy_suffix_saves_only_healthy_leading_audio_and_keeps_every_source() {
+        for problem in ["receipt", "pcm", "clock"] {
+            let fixture = super::super::partial_test_fixture();
+            for lane in ["microphone", "system"] {
+                let receipt = fixture.base.join(format!("raw-{lane}-00000002.json"));
+                match problem {
+                    "receipt" => std::fs::write(&receipt, b"{broken").unwrap(),
+                    "pcm" => std::fs::write(
+                        fixture.base.join(format!("raw-{lane}-00000002.caf")),
+                        b"corrupt audio",
+                    )
+                    .unwrap(),
+                    "clock" => {
+                        let mut entry: serde_json::Value =
+                            serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+                        entry["clockNanoseconds"][0]["endNanoseconds"] = 0.into();
+                        std::fs::write(&receipt, serde_json::to_vec(&entry).unwrap()).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            let originals: Vec<_> = std::fs::read_dir(&fixture.base)
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    let bytes = std::fs::read(&path).unwrap();
+                    (path, bytes)
+                })
+                .collect();
+            let reviewed = fixture
+                .storage
+                .review_partial_recording(&fixture.session.id)
+                .unwrap();
+            assert!(reviewed.document()["partialRecovery"]["truncated"] == true);
+            assert_eq!(reviewed.summary.duration_us, 4_050_000);
+            assert!(reviewed
+                .summary
+                .lanes
+                .iter()
+                .all(|lane| lane.frames == 32_000));
+            let saved = fixture
+                .storage
+                .recover_partial_recording(&reviewed, true)
+                .unwrap();
+            assert_eq!(saved.state, "interrupted");
+            assert_eq!(saved.ended_at_utc_ms, None);
+            assert_eq!(saved.duration_us, 4_050_000);
+            let first = fixture
+                .storage
+                .verify_canonical_audio(&saved.meeting_id, &|| false)
+                .unwrap();
+            assert_eq!(first.tracks[0].chunks[0].frames, 64_800);
+            for (path, bytes) in originals {
+                assert_eq!(std::fs::read(path).unwrap(), bytes, "{problem}");
+            }
+            fixture
+                .storage
+                .finalize_available_recording(&saved.id, &|| false)
+                .unwrap();
+            assert_eq!(
+                fixture
+                    .storage
+                    .canonical_audio_plan(&saved.meeting_id)
+                    .unwrap(),
+                first
+            );
+        }
+    }
+
+    #[test]
+    fn restored_legacy_session_cannot_mint_native_prefix_recovery_authority() {
+        let fixture = super::super::partial_test_fixture();
+        fixture.storage.connection.lock().unwrap().execute(
+            "INSERT INTO restore_provenance(id,meeting_id,domain,entity_key,source_archive,source_scope,source_key,restore_batch,restored_at) VALUES(?1,?2,'meetings',?2,'archive','meetings','original-meeting','batch',0)",
+            params![Uuid::new_v4().to_string(), fixture.session.meeting_id],
+        ).unwrap();
+        assert!(fixture
+            .storage
+            .review_partial_recording(&fixture.session.id)
+            .err()
+            .unwrap()
+            .contains("復元した会議"));
+        assert!(fixture.base.join("raw-microphone-00000001.caf").exists());
+    }
+
+    #[test]
     fn failed_partial_new_source_generation_keeps_previous_pending_wav_unchanged() {
         use std::os::unix::fs::OpenOptionsExt;
         let fixture = super::super::partial_test_fixture();
@@ -1013,7 +1102,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_legacy_prefix_goes_directly_to_wav_with_old_gain_and_owned_cleanup() {
+    fn partial_legacy_prefix_goes_directly_to_wav_with_old_gain_and_keeps_originals() {
         let fixture = super::super::partial_test_fixture();
         let reviewed = fixture
             .storage
@@ -1056,16 +1145,16 @@ mod tests {
         assert!(!fixture.base.join("partial-flac.json").exists());
         assert!(!fixture.base.join(".final-flac.lock").exists());
         for lane in ["microphone", "system"] {
-            assert!(!fixture
+            assert!(fixture
                 .base
                 .join(format!("raw-{lane}-00000001.caf"))
                 .exists());
-            assert!(!fixture
+            assert!(fixture
                 .base
                 .join(format!("raw-{lane}-00000002.caf"))
                 .exists());
-            // The malformed, unadvertised tail and continuous working file
-            // are not authority to delete unrescued audio.
+            // Rescue retains both adopted segments and the malformed,
+            // unadvertised tail, together with the continuous working file.
             assert!(fixture
                 .base
                 .join(format!("raw-{lane}-00000003.caf"))

@@ -44,6 +44,7 @@ final class LiveWavSession: @unchecked Sendable {
   private var closed = [false, false]
   private var emittedFrames: UInt64 = 0
   private var origin: Int64?
+  private var firstInputStart: Int64?
   private var active = Data()
   private var activeFirst: UInt64 = 0
   private var activeCredits: [Credit] = []
@@ -130,6 +131,7 @@ final class LiveWavSession: @unchecked Sendable {
       guard accepted else {
         throw ProbeError.capture("WAV input order or capture clock is invalid")
       }
+      firstInputStart = firstInputStart.map { min($0, start) } ?? start
       ends[Int(lane)] = end
       credits.append(
         Credit(
@@ -173,32 +175,32 @@ final class LiveWavSession: @unchecked Sendable {
   }
 
   func finish(endNanoseconds: Int64? = nil) throws {
-    do {
-      try dsp.sync {
-        try requireHealthy()
-        if finished { return }
-        if let onlyLane { closed[Int(1 - onlyLane)] = true }
-        guard closed.allSatisfy({ $0 }) else {
-          throw ProbeError.capture("both WAV acquisitions must close before finalization")
-        }
-        if let endNanoseconds {
-          for lane in UInt32(0)...UInt32(1) {
-            let end = max(endNanoseconds, ends[Int(lane)])
-            guard mon_wav_mixer_advance(mixer, lane, sequence[Int(lane)], end) else {
-              throw ProbeError.capture("WAV closure frontier is invalid")
-            }
-            ends[Int(lane)] = end
-          }
-          try drain(through: min(ends[0], ends[1]))
-        }
-        callbackError = nil
-        let success = mon_wav_mixer_finish(
-          mixer, Unmanaged.passUnretained(self).toOpaque(), Self.receive)
-        if let callbackError { throw callbackError }
-        guard success else { throw ProbeError.capture("WAV mixer finalization failed") }
-        try flush()
-        finished = true
+    try dsp.sync {
+      try requireHealthy()
+      if let onlyLane { closed[Int(1 - onlyLane)] = true }
+      guard closed.allSatisfy({ $0 }) else {
+        throw ProbeError.capture("both WAV acquisitions must close before finalization")
       }
+      if finished { return }
+      if let endNanoseconds {
+        for lane in UInt32(0)...UInt32(1) {
+          let end = max(endNanoseconds, ends[Int(lane)])
+          guard mon_wav_mixer_advance(mixer, lane, sequence[Int(lane)], end) else {
+            throw ProbeError.capture("WAV closure frontier is invalid")
+          }
+          ends[Int(lane)] = end
+        }
+        try drain(through: min(ends[0], ends[1]))
+      }
+      callbackError = nil
+      let success = mon_wav_mixer_finish(
+        mixer, Unmanaged.passUnretained(self).toOpaque(), Self.receive)
+      if let callbackError { throw callbackError }
+      guard success else { throw ProbeError.capture("WAV mixer finalization failed") }
+      try flush()
+      finished = true
+    }
+    do {
       commits.drain(lane: "system")
       try requireHealthy()
       if emittedFrames == 0 { return }
@@ -215,6 +217,30 @@ final class LiveWavSession: @unchecked Sendable {
       failed(error)
       throw error
     }
+  }
+
+  /// Geometry belongs to the accepted shared PCM, not an auxiliary lane map.
+  func captureGeometry() -> (origin: Int64?, microphoneEnd: Int64, systemEnd: Int64) {
+    dsp.sync { (origin ?? firstInputStart, ends[0], ends[1]) }
+  }
+
+  /// Retire accepted PCM after acquisition/metadata failure without claiming
+  /// that either native acquisition closed. Never retry a failed disk owner.
+  func preserveAcceptedPrefix() throws {
+    try dsp.sync {
+      try requireHealthy()
+      if finished { return }
+      callbackError = nil
+      _ = mon_wav_mixer_finish(
+        mixer, Unmanaged.passUnretained(self).toOpaque(), Self.receive)
+      if let callbackError { throw callbackError }
+      // A rejected later input can poison the mixer while already emitted
+      // PCM is still valid. Its active block remains eligible for a receipt.
+      try flush()
+      finished = true
+    }
+    commits.drain(lane: "system")
+    try requireHealthy()
   }
 
   private func drain(through: Int64) throws {

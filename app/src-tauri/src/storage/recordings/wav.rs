@@ -72,22 +72,6 @@ fn identity_matches(file: &File, reservation: &Reservation) -> Result<(), String
     Ok(())
 }
 
-fn read_manifest(directory: &Directory, name: &str) -> Result<Option<(Vec<u8>, Stamp)>, String> {
-    let Some(mut file) = directory.optional(name, false)? else {
-        return Ok(None);
-    };
-    let stamp = Stamp::read(&file)?;
-    let mut bytes = Vec::new();
-    (&mut file)
-        .take(crate::capture_manifest::MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    crate::capture_manifest::validate_size(&bytes)?;
-    stamp.require(&file)?;
-    stamp.require(&directory.required(name, false)?)?;
-    Ok(Some((bytes, stamp)))
-}
-
 /// Incremental read-only telemetry. Each newly committed PCM range is checked
 /// once, independently of mutable manifest statistics or the producer's header.
 #[derive(Default)]
@@ -101,21 +85,9 @@ pub(crate) struct Cursor {
     pub(crate) coverage_modified: [Option<SystemTime>; 2],
     owner: Option<String>,
     identity: Option<Identity>,
-    file_stamp: Option<Stamp>,
     metadata_bytes: usize,
-    pcm_hash: Sha256,
-    complete_hash: Option<String>,
-    #[cfg(any(target_os = "macos", windows))]
-    aliases: Option<std::sync::Arc<crate::storage::backup::relocation::wav::Aliases>>,
 }
 impl Cursor {
-    fn for_storage(storage: &Storage) -> Self {
-        Self {
-            #[cfg(any(target_os = "macos", windows))]
-            aliases: storage.wav_history.clone(),
-            ..Self::default()
-        }
-    }
     pub(crate) fn read(
         &mut self,
         path: &Path,
@@ -152,7 +124,7 @@ impl Cursor {
         let (reservation_bytes, reservation_stamp) = directory
             .read_json("single-wav-owner.json")?
             .ok_or("録音WAVの所有予約がありません")?;
-        let mut reservation: Reservation =
+        let reservation: Reservation =
             serde_json::from_slice(&reservation_bytes).map_err(|e| e.to_string())?;
         if reservation.schema_version != 1
             || reservation.owner_id != owner
@@ -160,22 +132,6 @@ impl Cursor {
             || reservation.birth_nanoseconds < 0
         {
             return Err("録音WAVの所有予約が不正です".into());
-        }
-        #[cfg(any(target_os = "macos", windows))]
-        if let Some(aliases) = &self.aliases {
-            if let Some((device, inode, birth)) = aliases.effective_identity(
-                owner,
-                &format!("{:x}", Sha256::digest(&reservation_bytes)),
-                (
-                    reservation.device,
-                    reservation.inode,
-                    reservation.birth_nanoseconds,
-                ),
-            )? {
-                reservation.device = device;
-                reservation.inode = inode;
-                reservation.birth_nanoseconds = birth;
-            }
         }
         let file = directory.required(&tip.file_name, false)?;
         identity_matches(&file, &reservation)?;
@@ -191,14 +147,6 @@ impl Cursor {
         let mut coverage = self.coverage;
         let mut coverage_modified = self.coverage_modified;
         let mut metadata = self.metadata_bytes;
-        let mut pcm_hash = self.pcm_hash.clone();
-        let mut complete_hash = if self.sequence == 0 {
-            let mut hash = Sha256::new();
-            hash.update(crate::audio::wave::streaming_header(tip.frames)?);
-            Some(hash)
-        } else {
-            None
-        };
         for sequence in self.sequence + 1..=tip.checkpoints {
             if cancelled() {
                 return Err("録音WAVの照合を停止しました".into());
@@ -216,7 +164,7 @@ impl Cursor {
                 || receipt.sequence != sequence
                 || receipt.frame_start != frames
                 || receipt.frames == 0
-                || receipt.frames > 68096
+                || receipt.frames > mon_core::capture::wav::MAX_CHECKPOINT_FRAMES
                 || receipt.capture_origin_nanoseconds < 0
                 || origin.is_some_and(|v| v != receipt.capture_origin_nanoseconds)
                 || receipt.previous_entry_sha256 != chain
@@ -242,23 +190,20 @@ impl Cursor {
             if format!("{:x}", Sha256::digest(&pcm)) != receipt.pcm_sha256 {
                 return Err("録音WAVの確定PCMが変更されています".into());
             }
-            pcm_hash.update(&pcm);
-            if let Some(hash) = &mut complete_hash {
-                hash.update(&pcm);
-            }
-            stamp.require(&directory.required(&format!("wav-{sequence:08}.json"), false)?)?;
+            let receipt_file = directory.required(&format!("wav-{sequence:08}.json"), false)?;
+            stamp.require(&receipt_file)?;
+            let modified = receipt_file
+                .metadata()
+                .map_err(|error| error.to_string())?
+                .modified()
+                .ok();
             origin = Some(receipt.capture_origin_nanoseconds);
             chain = Some(format!("{:x}", Sha256::digest(&bytes)));
             frames = end;
             for (lane, count) in receipt.coverage_frames.into_iter().enumerate() {
                 coverage[lane] += count;
                 if count > 0 {
-                    coverage_modified[lane] = directory
-                        .required(&format!("wav-{sequence:08}.json"), false)?
-                        .metadata()
-                        .map_err(|e| e.to_string())?
-                        .modified()
-                        .ok();
+                    coverage_modified[lane] = modified;
                 }
             }
             missing.extend(receipt.missing_ranges);
@@ -283,11 +228,95 @@ impl Cursor {
         self.missing.extend(missing);
         self.coverage = coverage;
         self.coverage_modified = coverage_modified;
-        self.pcm_hash = pcm_hash;
-        self.complete_hash = complete_hash.map(|hash| format!("{:x}", hash.finalize()));
-        self.file_stamp = Some(file_stamp);
         Ok(Some(tip))
     }
+}
+
+mod recovery;
+
+/// Same-invocation evidence, never serialized or reused across process starts.
+/// Completion checks the committed DB reference and stable files, not PCM again.
+pub(super) struct CommittedAudio {
+    directory: PathBuf,
+    audio_name: String,
+    audio_stamp: Stamp,
+    manifest_directory: PathBuf,
+    manifest_name: String,
+    manifest_stamp: Stamp,
+    manifest_hash: String,
+    hash: String,
+    frames: u64,
+}
+impl CommittedAudio {
+    pub(super) fn complete(
+        &self,
+        storage: &Storage,
+        session: &RecordingSession,
+    ) -> Result<bool, String> {
+        let plan = storage.canonical_audio_plan(&session.meeting_id)?;
+        let chunk = &plan.tracks[0].chunks[0];
+        if plan.manifest_hash != self.manifest_hash
+            || chunk.hash != self.hash
+            || chunk.frames as u64 != self.frames
+        {
+            return Err("録音WAVの登録結果が変更されています".into());
+        }
+        let paths = || -> Result<_, String> {
+            let audio = storage.meeting_mix_path(&session.meeting_id, &plan.tracks[0])?;
+            let manifest: String = storage.connection.lock().map_err(|_| "DBロックを取得できません")?.query_row("SELECT relative_path FROM file_assets WHERE id=?1 AND meeting_id=?2 AND content_hash=?3 AND state='ready'",params![plan.manifest_asset_id,session.meeting_id,self.manifest_hash],|row|row.get(0)).map_err(|error|error.to_string())?;
+            Ok((audio, storage.managed_path(Path::new(&manifest))?))
+        };
+        let expected_paths = (
+            self.directory.join(&self.audio_name),
+            self.manifest_directory.join(&self.manifest_name),
+        );
+        if paths()? != expected_paths {
+            return Err("録音WAVの登録先が変更されています".into());
+        }
+        let directory = Directory::open(&self.directory)?;
+        self.audio_stamp
+            .require(&directory.required(&self.audio_name, false)?)?;
+        self.manifest_stamp.require(
+            &Directory::open(&self.manifest_directory)?.required(&self.manifest_name, false)?,
+        )?;
+        if storage.canonical_audio_plan(&session.meeting_id)? != plan || paths()? != expected_paths
+        {
+            return Err("録音WAVの登録結果が変更されています".into());
+        }
+        storage.recording_save_committed(&session.id, &session.meeting_id)
+    }
+}
+
+fn valid_clock(document: &serde_json::Value) -> Option<i64> {
+    let clock = &document["captureClock"];
+    if !matches!(
+        clock["domain"].as_str(),
+        Some("mach_continuous_time" | "query_performance_counter")
+    ) || clock["uncertaintyNs"]
+        .as_i64()
+        .is_none_or(|n| !(0..=9_007_199_254_740_991).contains(&n))
+    {
+        return None;
+    }
+    clock["originUtcMs"]
+        .as_i64()
+        .filter(|n| (0..=8_640_000_000_000_000).contains(n))
+}
+fn valid_ending(document: &serde_json::Value, duration: i64) -> bool {
+    let end = &document["captureEnd"];
+    let (Some(microphone), Some(system), Some(ending)) = (
+        end["microphoneClosedUs"].as_i64(),
+        end["systemClosedUs"].as_i64(),
+        end["endUs"].as_i64(),
+    ) else {
+        return false;
+    };
+    end["method"] == "acquisition_closed"
+        && microphone >= 0
+        && system >= 0
+        && ending > 0
+        && ending == microphone.max(system)
+        && ending.abs_diff(duration) <= 63
 }
 
 impl Storage {
@@ -298,15 +327,16 @@ impl Storage {
             .join(&session.meeting_id)
             .join("audio")
             .join(&session.id);
-        let directory = Directory::open(&base)?;
-        Ok(directory.optional("single-wav.json", false)?.is_some())
+        Ok(Directory::open(&base)?
+            .optional("single-wav.json", false)?
+            .is_some())
     }
 
     pub(super) fn finalize_single_wav_recording(
         &self,
         session: &RecordingSession,
         cancelled: &impl Fn() -> bool,
-    ) -> Result<RecordingSession, String> {
+    ) -> Result<(RecordingSession, CommittedAudio), String> {
         self.require_data_writable()?;
         crate::operation_observation::stage("checking_audio", None, "bytes");
         let _owner = self.begin_meeting_work(&session.meeting_id, "recording", None)?;
@@ -315,279 +345,335 @@ impl Storage {
             .join("audio")
             .join(&session.id);
         let base = self.managed_path(&relative)?;
-        let mut cursor = Cursor::for_storage(self);
-        let tip = cursor
-            .read(&base, &session.id, cancelled)?
-            .ok_or("録音WAVの確定範囲がありません")?;
-        if tip.frames == 0 {
-            return Err(NO_CAPTURED_AUDIO.into());
-        }
         let directory = Directory::open(&base)?;
-        let mut file = directory.required("recording.wav", true)?;
-        cursor
-            .identity
-            .as_ref()
-            .ok_or("録音WAVの検証実体がありません")?
-            .require(&file)?;
-        cursor
-            .file_stamp
-            .as_ref()
-            .ok_or("録音WAVの検証時点がありません")?
-            .require(&file)?;
-        let identity = Identity::file(&file)?;
-        let (manifest_bytes, manifest_stamp) =
-            read_manifest(&directory, "manifest.json")?.ok_or("録音manifestがありません")?;
-        crate::capture_manifest::validate_size(&manifest_bytes)?;
-        let mut document: serde_json::Value =
-            serde_json::from_slice(&manifest_bytes).map_err(|e| e.to_string())?;
-        if document.get("captureTest").is_some() {
-            return Err("録音テストの音声を会議へ登録できません".into());
+        let source = recovery::inspect(self, &directory, &session.id, cancelled)?;
+        let original = recovery::document(&directory, "manifest.json")?;
+        let source_document = original.as_ref().and_then(|(value, _, _)| value.as_ref());
+        if let Some(document) = source_document {
+            if document.get("captureTest").is_some() {
+                return Err("録音テストの音声を会議へ登録できません".into());
+            }
+            if document
+                .get("recordingOwnerId")
+                .is_some_and(|owner| owner != &session.id)
+            {
+                return Err("録音manifestの所属が一致しません".into());
+            }
         }
-        let (config_text, initial_state, initial_version): (String, String, i64) = self
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません")?
-            .query_row(
-                "SELECT r.capture_config_json,m.lifecycle,m.lock_version FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND m.source_type='recording'",
-                params![session.id, session.meeting_id],
-                |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-            )
-            .map_err(|e| e.to_string())?;
+        let (config_text, initial_state): (String, String) = self.connection.lock()
+            .map_err(|_| "DBロックを取得できません")?.query_row(
+                "SELECT r.capture_config_json,m.lifecycle FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND m.source_type='recording' AND r.audio_manifest_hash IS NULL AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=m.id AND p.domain='meetings' AND p.entity_key=m.id)",
+                params![session.id, session.meeting_id], |row| Ok((row.get(0)?,row.get(1)?)))
+            .map_err(|error| error.to_string())?;
         if !matches!(initial_state.as_str(), "recording" | "draft") {
             return Err("録音WAVを確定できる会議状態ではありません".into());
         }
         let config: RecordingConfig =
-            serde_json::from_str(&config_text).map_err(|e| e.to_string())?;
+            serde_json::from_str(&config_text).map_err(|error| error.to_string())?;
         config.validate()?;
-        if document["schemaVersion"] != 5
-            || document["audioFormat"] != "wav"
-            || document["clockMappingSource"] != "single_wav_v1"
-            || document["recordingOwnerId"] != session.id
-            || document["captureMode"] != config.mode
-            || document["backend"] != config.backend
-            || document["targetPIDs"] != serde_json::json!(config.target_pids)
-            || config
-                .microphone_device_uid
-                .as_deref()
-                .is_some_and(|uid| document["microphoneDeviceUID"].as_str() != Some(uid))
-            || config
-                .target_application_identity
-                .as_ref()
-                .is_some_and(|v| {
-                    serde_json::to_value(v).ok().as_ref()
-                        != Some(&document["targetApplicationIdentity"])
-                })
-        {
-            return Err("録音WAVと開始条件が一致しません".into());
-        }
-        let clock = &document["captureClock"];
-        if !clock.is_null()
-            && (!matches!(
-                clock["domain"].as_str(),
-                Some("mach_continuous_time" | "query_performance_counter")
-            ) || clock["originUtcMs"]
-                .as_i64()
-                .is_none_or(|n| !(0..=8_640_000_000_000_000).contains(&n))
-                || clock["uncertaintyNs"]
-                    .as_i64()
-                    .is_none_or(|n| !(0..=9_007_199_254_740_991).contains(&n)))
-        {
-            return Err("録音WAVの共通時計が不正です".into());
-        }
-        let normal = tip.producer_closed
-            && document["state"] == "saved"
-            && document["errors"].as_array().is_some_and(|v| v.is_empty());
-        if normal
-            && (document["singleWav"] != serde_json::to_value(&tip).map_err(|e| e.to_string())?
-                || document["captureEnd"]["method"] != "acquisition_closed"
-                || !matches!(
-                    document["captureClock"]["domain"].as_str(),
-                    Some("mach_continuous_time" | "query_performance_counter")
-                )
-                || document["captureClock"]["originUtcMs"]
-                    .as_i64()
-                    .is_none_or(|n| !(0..=8_640_000_000_000_000).contains(&n)))
-        {
-            return Err("録音WAVの終了・共通時計の証拠が不正です".into());
-        }
-        if normal {
-            let end = &document["captureEnd"];
-            let microphone = end["microphoneClosedUs"]
-                .as_i64()
-                .filter(|n| *n >= 0)
-                .ok_or("マイクの取得終了時刻が不正です")?;
-            let system = end["systemClosedUs"]
-                .as_i64()
-                .filter(|n| *n >= 0)
-                .ok_or("PC音声の取得終了時刻が不正です")?;
-            if end["endUs"]
-                .as_i64()
-                .is_none_or(|n| n <= 0 || n != microphone.max(system))
-            {
-                return Err("両入力の取得終了時刻が一致しません".into());
-            }
-        }
+        let tip = &source.tip;
         let size = tip
             .frames
             .checked_mul(2)
             .and_then(|n| n.checked_add(80))
             .ok_or("録音WAVが大きすぎます")?;
-        if file.metadata().map_err(|e| e.to_string())?.len() < size {
-            return Err("録音WAVが確定範囲より短くなっています".into());
-        }
-        let header = crate::audio::wave::streaming_header(tip.frames)?;
-        if tip.producer_closed {
-            let mut actual = [0; 80];
-            crate::native_fs::read_exact_at(&file, &mut actual, 0).map_err(|e| e.to_string())?;
-            if actual.as_slice() != header
-                || file.metadata().map_err(|e| e.to_string())?.len() != size
-            {
-                return Err("録音WAVの終了ヘッダーと確定範囲が一致しません".into());
-            }
-        } else {
-            // Reader has verified all committed bytes and the original inode.
-            // Only its unadvertised suffix and mutable header may be repaired.
-            identity.require(&directory.required("recording.wav", false)?)?;
-            file.set_len(size).map_err(|e| e.to_string())?;
-            file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-            file.write_all(&header).map_err(|e| e.to_string())?;
-            file.sync_all().map_err(|e| e.to_string())?;
-        }
-        crate::operation_observation::stage("verifying_audio", None, "bytes");
-        let (audio_stamp, hash) = if tip.producer_closed {
-            // The fresh cursor hashed the exact final header and every
-            // receipt-verified PCM byte together. The closed file has the same
-            // header/length and still the original stamp: no second PCM scan.
-            (
-                cursor
-                    .file_stamp
-                    .clone()
-                    .ok_or("録音WAVの検証時点がありません")?,
-                cursor
-                    .complete_hash
-                    .clone()
-                    .ok_or("録音WAVの全体照合がありません")?,
-            )
-        } else {
-            // Repair changed our header/length. Bind the post-repair scan to
-            // the exact prefix verified before mutation, not a new payload.
-            let stamp = Stamp::read(&file)?;
-            let expected_pcm = format!("{:x}", cursor.pcm_hash.clone().finalize());
-            let (_, checked_size, hash) = crate::audio::inspect_recorded_wav_bound(
-                file.try_clone().map_err(|e| e.to_string())?,
-                cancelled,
-                &expected_pcm,
-            )?;
-            stamp.require(&file)?;
-            if checked_size != size {
-                return Err("録音WAVの検証容量が変わりました".into());
-            }
-            (stamp, hash)
-        };
-        audio_stamp.require(&file)?;
         let duration = i64::try_from(
             tip.frames
                 .checked_mul(1_000_000)
                 .ok_or("録音時間が大きすぎます")?
                 / 16000,
         )
-        .map_err(|e| e.to_string())?;
-        if normal
-            && document["captureEnd"]["endUs"]
-                .as_i64()
-                .is_none_or(|end| end.abs_diff(duration) > 63)
-        {
-            return Err("録音WAVの長さと実際の取得終了時刻が一致しません".into());
-        }
-        let started = document["captureClock"]["originUtcMs"].as_i64();
-        let ended = if normal {
-            Some(
-                started
-                    .and_then(|v| v.checked_add(duration / 1000))
-                    .filter(|v| (0..=8_640_000_000_000_000).contains(v))
-                    .ok_or("録音終了のUTC時刻が範囲外です")?,
+        .map_err(|error| error.to_string())?;
+        let started = source_document
+            .filter(|document| {
+                document["singleWav"]["captureOriginNanoseconds"].as_i64()
+                    == tip.capture_origin_nanoseconds
+            })
+            .and_then(valid_clock)
+            .filter(|_| tip.capture_origin_nanoseconds.is_some());
+        let normal = source.original_closed
+            && source_document.is_some_and(|document| {
+                document["singleWav"] == serde_json::to_value(tip).unwrap_or_default()
+                    && valid_ending(document, duration)
+            })
+            && started
+                .and_then(|value| value.checked_add(duration / 1000))
+                .is_some_and(|value| (0..=8_640_000_000_000_000).contains(&value));
+        let header = crate::audio::wave::streaming_header(tip.frames)?;
+        let (audio_relative, audio_stamp, hash) = if source.truncated {
+            // The only source includes potentially rescuable later audio: retain
+            // it byte-for-byte and materialize only the independently proven prefix.
+            let key = format!(
+                "{:x}",
+                Sha256::digest(
+                    format!("{}:{}:{}", session.id, tip.frames, source.pcm_hash).as_bytes()
+                )
+            );
+            let leaf = format!("wav-recovery-{key}");
+            let output = if base.join(&leaf).exists() {
+                Directory::open(&base.join(&leaf))?
+            } else {
+                directory.create_child(&leaf)?
+            };
+            let mut pending = crate::storage::audio_publication::writer::Pending::open(
+                &output.path,
+                &key,
+                tip.frames,
+            )?;
+            let produced_hash = if let Some(mut file) = pending.begin()? {
+                source
+                    .stamp
+                    .require(&directory.required("recording.wav", false)?)?;
+                file.write_all(&header).map_err(|error| error.to_string())?;
+                let mut hasher = Sha256::new();
+                hasher.update(&header);
+                let mut pcm_hasher = Sha256::new();
+                let mut offset = 0_u64;
+                let mut buffer = [0_u8; 65536];
+                while offset < tip.frames * 2 {
+                    if cancelled() {
+                        return Err("録音WAVの救出を停止しました".into());
+                    }
+                    let count = (tip.frames * 2 - offset).min(buffer.len() as u64) as usize;
+                    crate::native_fs::read_exact_at(
+                        &source.file,
+                        &mut buffer[..count],
+                        80 + offset,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    file.write_all(&buffer[..count])
+                        .map_err(|error| error.to_string())?;
+                    hasher.update(&buffer[..count]);
+                    pcm_hasher.update(&buffer[..count]);
+                    offset += count as u64;
+                }
+                file.sync_all().map_err(|error| error.to_string())?;
+                source
+                    .stamp
+                    .require(&directory.required("recording.wav", false)?)?;
+                if format!("{:x}", pcm_hasher.finalize()) != source.pcm_hash {
+                    return Err("録音WAVの救出中にPCMが変更されました".into());
+                }
+                Some(format!("{:x}", hasher.finalize()))
+            } else {
+                None
+            };
+            let hash = produced_hash
+                .or_else(|| pending.completed_hash().map(str::to_owned))
+                .ok_or("救出WAVの確定証拠がありません")?;
+            pending.complete(hash.clone())?;
+            let path = pending.path();
+            let file = pending.completed_file()?;
+            (
+                path.strip_prefix(&self.root)
+                    .map_err(|error| error.to_string())?
+                    .to_owned(),
+                Stamp::read(&file)?,
+                hash,
             )
+        } else {
+            source
+                .stamp
+                .require(&directory.required("recording.wav", false)?)?;
+            let mut file = directory.required("recording.wav", true)?;
+            source.stamp.require(&file)?;
+            let mut actual = [0; 80];
+            crate::native_fs::read_exact_at(&file, &mut actual, 0)
+                .map_err(|error| error.to_string())?;
+            let repair = actual.as_slice() != header
+                || file.metadata().map_err(|error| error.to_string())?.len() != size;
+            if repair {
+                file.set_len(size).map_err(|error| error.to_string())?;
+                file.seek(SeekFrom::Start(0))
+                    .map_err(|error| error.to_string())?;
+                file.write_all(&header).map_err(|error| error.to_string())?;
+                file.sync_all().map_err(|error| error.to_string())?;
+            }
+            let stamp = Stamp::read(&file)?;
+            // Header repair deliberately requires a bound readback. A normal
+            // save already computed the final digest in the receipt scan.
+            let hash = if repair || source.full_hash.is_none() {
+                crate::audio::inspect_recorded_wav_bound(
+                    file.try_clone().map_err(|error| error.to_string())?,
+                    cancelled,
+                    &source.pcm_hash,
+                )?
+                .2
+            } else {
+                source.full_hash.clone().unwrap()
+            };
+            stamp.require(&directory.required("recording.wav", false)?)?;
+            (relative.join("recording.wav"), stamp, hash)
+        };
+        crate::operation_observation::stage("verifying_audio", None, "bytes");
+        let key = format!("{:x}",Sha256::digest(serde_json::to_vec(&serde_json::json!({"owner":session.id,"config":config_text,"frames":tip.frames,"lastReceipt":tip.last_entry_sha256,"pcm":source.pcm_hash})).map_err(|error|error.to_string())?));
+        let mut metadata_issues = Vec::new();
+        if source_document.is_none() {
+            metadata_issues.push("manifest_unavailable");
+        }
+        if started.is_none() {
+            metadata_issues.push("capture_clock_unconfirmed");
+        }
+        if !normal {
+            metadata_issues.push("capture_end_unconfirmed");
+        }
+        if !source.diagnostics_known {
+            metadata_issues.push("receipt_diagnostics_unconfirmed");
+        }
+        if source_document.is_some_and(|document| {
+            document["captureMode"] != config.mode
+                || document["backend"] != config.backend
+                || document["targetPIDs"] != serde_json::json!(config.target_pids)
+                || document["audioFormat"] != "wav"
+        }) {
+            metadata_issues.push("capture_description_mismatch");
+        }
+        if !metadata_issues.is_empty() {
+            crate::internal_logs::detail(
+                crate::internal_logs::current_context("recording"),
+                "metadata_unconfirmed",
+                "info",
+                std::time::Duration::ZERO,
+                &serde_json::json!({"issues":metadata_issues}).to_string(),
+            );
+        }
+        let mut document = serde_json::json!({"schemaVersion":5,"audioFormat":"wav","clockMappingSource":"single_wav_v1",
+            "inputDiagnosticsState":source_document.and_then(|document|document["inputDiagnosticsState"].as_str()).filter(|state|matches!(*state,"reported"|"unconfirmed"|"unavailable")).unwrap_or("unavailable"),
+            "recordingOwnerId":session.id,"captureMode":config.mode,"backend":config.backend,"targetPIDs":config.target_pids,
+            "microphoneDeviceUID":config.microphone_device_uid,"targetApplicationIdentity":config.target_application_identity,
+            "state":if normal {"saved"}else{"interrupted"},"errors":[],"singleWav":tip,
+            "captureClock":if started.is_some() {source_document.map(|value|value["captureClock"].clone()).unwrap_or_default()}else{serde_json::Value::Null},
+            "captureEnd":if normal {source_document.map(|value|value["captureEnd"].clone()).unwrap_or_default()}else{serde_json::Value::Null},
+            "wavPublication":{"schemaVersion":1,"policy":"meeting_live_wav_interval_gain_v1","frames":tip.frames,"sha256":hash,"missingRanges":source.missing,"acquisitionEndKnown":normal},
+            "wavRecovery":{"schemaVersion":1,"inputHash":key,"partial":source.truncated,"diagnosticsKnown":source.diagnostics_known,"metadataIssues":metadata_issues,"failure":source.fault}});
+        let recovery_result = document["wavRecovery"].clone();
+        // Descriptive metadata is frozen only after selecting the same audio
+        // evidence. Earlier unregistered documents never block another result.
+        let mut manifest_name = "canonical-wav.json".to_owned();
+        let mut previous = recovery::document(&directory, &manifest_name)?;
+        if previous.as_ref().is_some_and(|(value, _, _)| {
+            value
+                .as_ref()
+                .is_none_or(|value| value["wavRecovery"]["inputHash"] != key)
+        }) {
+            manifest_name = format!("recovered-wav-{key}.json");
+            previous = recovery::document(&directory, &manifest_name)?;
+        }
+        let (canonical_stamp, canonical_bytes) = if let Some((value, stamp, bytes)) = previous {
+            let value = value.ok_or("録音WAVの公開文書を確認できません")?;
+            if value["recordingOwnerId"] != session.id
+                || value["wavRecovery"]["inputHash"] != key
+                || value["wavPublication"]["frames"] != tip.frames
+                || value["wavPublication"]["sha256"] != hash
+            {
+                return Err("録音WAVの公開対象が変更されています".into());
+            }
+            document = value;
+            (stamp, bytes)
+        } else {
+            directory.capture_json(&manifest_name, &document, None)?;
+            let (value, stamp, bytes) = recovery::document(&directory, &manifest_name)?
+                .ok_or("録音WAVの公開証拠がありません")?;
+            if value.as_ref() != Some(&document) {
+                return Err("録音WAVの公開証拠が変更されています".into());
+            }
+            (stamp, bytes)
+        };
+        let normal = source.original_closed
+            && !source.truncated
+            && document["singleWav"] == serde_json::to_value(tip).unwrap_or_default()
+            && document["wavPublication"]["acquisitionEndKnown"] == true
+            && valid_ending(&document, duration);
+        let started = valid_clock(&document);
+        let ended = if normal {
+            started
+                .and_then(|value| value.checked_add(duration / 1000))
+                .filter(|value| (0..=8_640_000_000_000_000).contains(value))
         } else {
             None
         };
-        document["singleWav"] = serde_json::to_value(&tip).map_err(|e| e.to_string())?;
-        document["wavPublication"] = serde_json::json!({"schemaVersion":1,"policy":"meeting_live_wav_interval_gain_v1","frames":tip.frames,"sha256":hash,"missingRanges":cursor.missing,"acquisitionEndKnown":normal});
-        if !normal {
-            document["state"] = "interrupted".into();
-            document["captureEnd"] = serde_json::Value::Null;
-        }
-        let canonical_bytes = serde_json::to_vec(&document).map_err(|e| e.to_string())?;
-        let canonical_stamp =
-            if let Some((previous, stamp)) = read_manifest(&directory, "canonical-wav.json")? {
-                if previous != canonical_bytes {
-                    return Err("録音WAVの公開条件が変更されています".into());
-                }
-                stamp
-            } else {
-                directory.capture_json("canonical-wav.json", &document, None)?;
-                let (saved, stamp) = read_manifest(&directory, "canonical-wav.json")?
-                    .ok_or("録音WAVの公開証拠がありません")?;
-                if saved != canonical_bytes {
-                    return Err("録音WAVの公開証拠が変更されています".into());
-                }
-                stamp
-            };
+        let normal = normal && ended.is_some();
         let proof = CapturedFile {
-            relative: relative.join("canonical-wav.json"),
+            relative: relative.join(&manifest_name),
             size_bytes: canonical_bytes.len() as i64,
             hash: format!("{:x}", Sha256::digest(&canonical_bytes)),
         };
         let audio_proof = CapturedFile {
-            relative: relative.join("recording.wav"),
+            relative: audio_relative.clone(),
             size_bytes: size as i64,
-            hash,
+            hash: hash.clone(),
         };
         if cancelled() {
             return Err("録音WAVの登録を停止しました".into());
         }
         crate::operation_observation::stage("committing_audio", None, "files");
-        manifest_stamp.require(&directory.required("manifest.json", false)?)?;
-        identity.require(&directory.required("recording.wav", false)?)?;
-        audio_stamp.require(&directory.required("recording.wav", false)?)?;
-        canonical_stamp.require(&directory.required("canonical-wav.json", false)?)?;
+        let audio_directory = Directory::open(
+            &self
+                .root
+                .join(audio_relative.parent().ok_or("録音WAVの保存先が不正です")?),
+        )?;
+        let audio_name = audio_relative
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("録音WAVの名前が不正です")?
+            .to_owned();
+        audio_stamp.require(&audio_directory.required(&audio_name, false)?)?;
+        canonical_stamp.require(&directory.required(&manifest_name, false)?)?;
         let mut db = self
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        let tx = db.transaction().map_err(|e| e.to_string())?;
+        let tx = db.transaction().map_err(|error| error.to_string())?;
         if load_session(&tx, &session.id)?.as_ref() != Some(session) {
             return Err("録音WAVの検証中に状態が変更されました".into());
         }
-        let current: (String, String, i64) = tx.query_row(
-            "SELECT r.capture_config_json,m.lifecycle,m.lock_version FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND m.source_type='recording'",
-            params![session.id,session.meeting_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?;
-        if current != (config_text, initial_state, initial_version) {
+        let current:(String,String)=tx.query_row(
+            "SELECT r.capture_config_json,m.lifecycle FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.id=?1 AND r.meeting_id=?2 AND m.source_type='recording' AND r.audio_manifest_hash IS NULL",
+            params![session.id,session.meeting_id],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|error.to_string())?;
+        if current != (config_text, initial_state) {
             return Err("録音WAVの検証中に設定・会議状態が変更されました".into());
         }
+        super::super::deletion::audio::require_source(&tx, &session.meeting_id)?;
         let now = now_ms()?;
         let manifest_id =
             insert_capture_asset(&tx, &session.meeting_id, &proof, "application/json", now)?;
         let audio_id =
             insert_capture_asset(&tx, &session.meeting_id, &audio_proof, "audio/wav", now)?;
         let track = Uuid::new_v4().to_string();
-        tx.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'processed','wav',16000,1,'ready',?4,?5,?5)",params![track,session.meeting_id,session.id,serde_json::json!({"policy":super::super::meeting_audio::POLICY,"liveMixPolicy":"interval_gain_v1"}).to_string(),now]).map_err(|e|e.to_string())?;
-        tx.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES(?1,?2,?3,?4,0,0,?5,?6,16000,1,'ready',?7)",params![Uuid::new_v4().to_string(),session.meeting_id,track,audio_id,duration,tip.frames as i64,now]).map_err(|e|e.to_string())?;
-        for range in &cursor.missing {
+        tx.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'processed','wav',16000,1,'ready',?4,?5,?5)",params![track,session.meeting_id,session.id,serde_json::json!({"policy":super::super::meeting_audio::POLICY,"liveMixPolicy":"interval_gain_v1","wavRecovery":recovery_result}).to_string(),now]).map_err(|error|error.to_string())?;
+        tx.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES(?1,?2,?3,?4,0,0,?5,?6,16000,1,'ready',?7)",params![Uuid::new_v4().to_string(),session.meeting_id,track,audio_id,duration,tip.frames as i64,now]).map_err(|error|error.to_string())?;
+        for range in &source.missing {
             let start = (range[0] * 1_000_000 / 16000) as i64;
             let end = (range[1] * 1_000_000 / 16000) as i64;
             if end > start {
-                tx.execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code,recovered) VALUES(?1,?2,?3,?4,'meeting_input_missing',0)",params![Uuid::new_v4().to_string(),track,start,end]).map_err(|e|e.to_string())?;
+                tx.execute("INSERT INTO audio_gaps(id,track_id,start_us,end_us,reason_code,recovered) VALUES(?1,?2,?3,?4,'meeting_input_missing',0)",params![Uuid::new_v4().to_string(),track,start,end]).map_err(|error|error.to_string())?;
             }
         }
-        tx.execute("UPDATE recording_sessions SET state=?7,duration_us=?2,last_committed_us=?2,audio_manifest_hash=?3,started_at_utc_ms=?4,ended_at_utc_ms=?5,updated_at=?6 WHERE id=?1",params![session.id,duration,proof.hash,started,ended,now,if normal {"saved"}else{"interrupted"}]).map_err(|e|e.to_string())?;
-        if tx.execute("UPDATE meetings SET lifecycle='recorded',duration_us=?2,started_at_utc_ms=?3,lock_version=lock_version+1,updated_at=?4 WHERE id=?1 AND source_type='recording' AND lifecycle IN ('recording','draft') AND lock_version=?5",params![session.meeting_id,duration,started,now,initial_version]).map_err(|e|e.to_string())? != 1 {
-            return Err("録音WAVの会議状態を確定できません".into());
-        }
-        tx.execute("INSERT INTO meeting_audio_commits(meeting_id,track_id,manifest_asset_id,manifest_hash,frames,source_json,cleanup_json,phase,created_at) VALUES(?1,?2,?3,?4,?5,?6,'[]','cleaned',?7)",params![session.meeting_id,track,manifest_id,proof.hash,tip.frames as i64,serde_json::json!({"singleWav":tip,"liveMixPolicy":"interval_gain_v1"}).to_string(),now]).map_err(|e|e.to_string())?;
+        tx.execute("UPDATE recording_sessions SET state=?7,duration_us=?2,last_committed_us=?2,audio_manifest_hash=?3,started_at_utc_ms=?4,ended_at_utc_ms=?5,updated_at=?6 WHERE id=?1",params![session.id,duration,proof.hash,started,ended,now,if normal{"saved"}else{"interrupted"}]).map_err(|error|error.to_string())?;
+        if tx.execute("UPDATE meetings SET lifecycle='recorded',duration_us=?2,started_at_utc_ms=?3,lock_version=lock_version+1,updated_at=?4 WHERE id=?1 AND source_type='recording' AND lifecycle IN ('recording','draft')",params![session.meeting_id,duration,started,now]).map_err(|error|error.to_string())?!=1 {return Err("録音WAVの会議状態を確定できません".into());}
+        tx.execute("INSERT INTO meeting_audio_commits(meeting_id,track_id,manifest_asset_id,manifest_hash,frames,source_json,cleanup_json,phase,created_at) VALUES(?1,?2,?3,?4,?5,?6,'[]','cleaned',?7)",params![session.meeting_id,track,manifest_id,proof.hash,tip.frames as i64,serde_json::json!({"singleWav":tip,"liveMixPolicy":"interval_gain_v1","wavRecovery":recovery_result}).to_string(),now]).map_err(|error|error.to_string())?;
         super::super::analysis_flows::ensure_flow(&tx, &session.meeting_id)?;
         let saved = load_session(&tx, &session.id)?.ok_or("録音セッションがありません")?;
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(saved)
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok((
+            saved,
+            CommittedAudio {
+                directory: audio_directory.path,
+                audio_name,
+                audio_stamp,
+                manifest_directory: base,
+                manifest_name: proof
+                    .relative
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                manifest_stamp: canonical_stamp,
+                manifest_hash: proof.hash,
+                hash,
+                frames: tip.frames,
+            },
+        ))
     }
 }
 
@@ -595,7 +681,7 @@ impl Storage {
 mod tests {
     use super::*;
 
-    fn fixture(closed: bool) -> (tempfile::TempDir, Storage, RecordingSession, PathBuf) {
+    pub(super) fn fixture(closed: bool) -> (tempfile::TempDir, Storage, RecordingSession, PathBuf) {
         let root = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().join("store")).unwrap();
         let meeting = storage.create_meeting("WAV直接保存").unwrap();
@@ -723,17 +809,15 @@ mod tests {
     }
 
     #[test]
-    fn contradictory_closure_and_out_of_range_utc_never_publish_audio() {
-        for invalid in ["closure", "utc", "format", "test_marker"] {
+    fn foreign_manifest_and_capture_test_never_publish_audio() {
+        for invalid in ["test_marker", "owner"] {
             let (_root, storage, session, base) = fixture(true);
             let path = base.join("manifest.json");
             let mut value: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             match invalid {
-                "closure" => value["captureEnd"]["systemClosedUs"] = 3_000_000.into(),
-                "utc" => value["captureClock"]["originUtcMs"] = 8_640_000_000_000_000_i64.into(),
-                "format" => value["audioFormat"] = "caf".into(),
                 "test_marker" => value["captureTest"] = serde_json::Value::Null,
+                "owner" => value["recordingOwnerId"] = Uuid::new_v4().to_string().into(),
                 _ => unreachable!(),
             }
             std::fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
@@ -869,3 +953,9 @@ mod tests {
             .unwrap());
     }
 }
+
+#[cfg(test)]
+mod recovery_tests;
+
+#[cfg(test)]
+mod compatibility_tests;

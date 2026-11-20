@@ -16,9 +16,9 @@ export function RecordingRecoveryNotifications({ snapshot, recording, recordingE
     {snapshot?.items.map(item =>
       <ToastNotice key={item.sessionId} scope={item.sessionId} type="recording-save-result"
         meetingId={item.meetingId} eventId={`recording_save:${item.sessionId}:${item.phase}`} replaceEventHistory
-        level={item.phase === "failed" ? "error" : "success"}
+        level={item.phase === "failed" ? "error" : item.phase === "succeeded" && item.warning ? "warning" : "success"}
         action={item.phase === "failed" && !item.noAudio ? {kind:"retry", label:"保存を再試行", disabled:snapshot.phase === "running" || snapshot.phase === "scanning", run:async()=>{await invoke("retry_recording_recovery",{sessionId:item.sessionId});}} : undefined}
-        message={item.phase === "failed" ? item.noAudio ? `「${item.meetingTitle}」の録音に失敗しました。マイク・PC音声のどちらも音声を取得できませんでした。` : `「${item.meetingTitle}」の音声を保存できませんでした。元音声は保持しています。「保存を再試行」でやり直せます。${item.error ?? "詳細は内部ログで確認してください。"}` : item.phase === "succeeded" ? "録音を保存完了しました。" : null} />)}
+        message={item.phase === "failed" ? item.noAudio ? `「${item.meetingTitle}」の録音に失敗しました。マイク・PC音声のどちらも音声を取得できませんでした。` : `「${item.meetingTitle}」の音声を保存できませんでした。元音声は保持しています。「保存を再試行」でやり直せます。${item.error ?? "詳細は内部ログで確認してください。"}` : item.phase === "succeeded" ? item.warning ? `「${item.meetingTitle}」: ${item.warning}` : "録音を保存完了しました。" : null} />)}
   </>;
 }
 

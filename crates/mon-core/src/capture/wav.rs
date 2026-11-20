@@ -16,6 +16,7 @@ pub const TIP_NAME: &str = "single-wav.json";
 pub const MIX_POLICY: &str = "meeting_live_wav_pcm16_16000_interval_gain_v1";
 const INVALID: &str = "invalid single WAV recording evidence";
 const MAX_BLOCK: usize = 4096;
+pub const MAX_CHECKPOINT_FRAMES: u64 = RATE as u64 * 4 + MAX_BLOCK as u64;
 const MAX_HALO: usize = 1100;
 
 /// Reserve ds64's complete footprint from the start, keeping PCM at offset 80
@@ -186,7 +187,7 @@ impl WavPrefix {
             || receipt.sequence != self.checkpoints + 1
             || receipt.frame_start != self.frames
             || receipt.frames == 0
-            || receipt.frames > u64::from(RATE) * 4 + MAX_BLOCK as u64
+            || receipt.frames > MAX_CHECKPOINT_FRAMES
             || frames > limits::SAFE_INTEGER
             || receipt.capture_origin_nanoseconds < 0
             || receipt

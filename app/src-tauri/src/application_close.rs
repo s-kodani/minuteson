@@ -108,6 +108,7 @@ mod tests {
             phase: phase.into(),
             started_at_ms: Some(100),
             error: None,
+            warning: None,
             progress: None,
             no_audio: false,
         };

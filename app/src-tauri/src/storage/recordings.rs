@@ -334,6 +334,25 @@ impl Storage {
         Ok(result)
     }
 
+    pub(crate) fn recording_save_warning(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, String> {
+        let source: Option<String> = self.connection.lock().map_err(|_| "DBロックを取得できません")?
+            .query_row("SELECT a.source_json FROM recording_sessions r JOIN meeting_audio_commits a ON a.meeting_id=r.meeting_id AND a.manifest_hash=r.audio_manifest_hash WHERE r.id=?1",[session_id],|row|row.get(0)).optional().map_err(|error|error.to_string())?;
+        let Some(source) = source else {
+            return Ok(None);
+        };
+        let document: serde_json::Value =
+            serde_json::from_str(&source).map_err(|error| error.to_string())?;
+        Ok((document["wavRecovery"]["partial"] == true
+            || document["partialRecovery"]["truncated"] == true)
+            .then(|| {
+                "録音の一部だけを保存しました。確認できなかった部分の元データは保持しています。"
+                    .into()
+            }))
+    }
+
     pub(crate) fn recover_completed_recordings(&self) -> Result<Vec<String>, String> {
         self.recover_recordings_observed(&|_| {}, &|_| {})
     }
@@ -341,23 +360,29 @@ impl Storage {
     /// A saved session alone is not completion: publication may still be
     /// pending. Verify the independently playable canonical WAV and the
     /// completed retirement record, rechecking metadata after file I/O.
+    pub(super) fn recording_save_committed(
+        &self,
+        session: &str,
+        meeting: &str,
+    ) -> Result<bool, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        if super::deletion::audio::source_deleted(&db, meeting)? {
+            return Ok(false);
+        }
+        db.query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions r JOIN meeting_audio_commits a ON a.meeting_id=r.meeting_id AND a.manifest_hash=r.audio_manifest_hash WHERE r.id=?1 AND r.meeting_id=?2 AND a.phase='cleaned')",
+                params![session, meeting], |r| r.get(0)).map_err(|e| e.to_string())
+    }
+
     pub(crate) fn recording_save_complete(
         &self,
         session: &str,
         meeting: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<bool, String> {
-        let complete = || -> Result<bool, String> {
-            let db = self
-                .connection
-                .lock()
-                .map_err(|_| "DBロックを取得できません")?;
-            if super::deletion::audio::source_deleted(&db, meeting)? {
-                return Ok(false);
-            }
-            db.query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions r JOIN meeting_audio_commits a ON a.meeting_id=r.meeting_id AND a.manifest_hash=r.audio_manifest_hash WHERE r.id=?1 AND r.meeting_id=?2 AND a.phase='cleaned')",
-                params![session, meeting], |r| r.get(0)).map_err(|e| e.to_string())
-        };
+        let complete = || self.recording_save_committed(session, meeting);
         if !complete()? {
             return Ok(false);
         }
@@ -398,6 +423,7 @@ impl Storage {
                         error: None,
                         progress: None,
                         no_audio: false,
+                        warning: None,
                     })
                 })
                 .map_err(|e| e.to_string())?
@@ -431,12 +457,18 @@ impl Storage {
             item.started_at_ms = Some(now_ms()?);
             progress(item.clone());
             match crate::audio_finalization::complete(&|| self.data_write_blocked(), || {
-                let saved = self.finalize_available_recording(&item.session_id, &|| {
-                    self.data_write_blocked()
-                })?;
-                if !self.recording_save_complete(&item.session_id, &item.meeting_id, &|| {
-                    self.data_write_blocked()
-                })? {
+                let (saved, verified) = self
+                    .finalize_available_recording_checked(&item.session_id, &|| {
+                        self.data_write_blocked()
+                    })?;
+                let complete = if let Some(verified) = verified {
+                    verified.complete(self, &saved)?
+                } else {
+                    self.recording_save_complete(&item.session_id, &item.meeting_id, &|| {
+                        self.data_write_blocked()
+                    })?
+                };
+                if !complete {
                     return Err("正式な録音音声の保存と整理が完了していません".into());
                 }
                 Ok(saved)
@@ -467,6 +499,15 @@ impl Storage {
         session_id: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<RecordingSession, String> {
+        self.finalize_available_recording_checked(session_id, cancelled)
+            .map(|(session, _)| session)
+    }
+
+    fn finalize_available_recording_checked(
+        &self,
+        session_id: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(RecordingSession, Option<wav::CommittedAudio>), String> {
         partial::check_cancel(cancelled)?;
         self.require_data_writable()?;
         let (session, registered) = {
@@ -488,16 +529,18 @@ impl Storage {
             let _owner = self.begin_meeting_work(&session.meeting_id, "recording", None)?;
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             if let Some(saved) = legacy_wav::migrate_registered(self, &session, cancelled)? {
-                return Ok(saved);
+                return Ok((saved, None));
             }
             self.publish_single_wav(&session.meeting_id, cancelled, &|_, _| {})?;
-            return Ok(session);
+            return Ok((session, None));
         }
         if self.has_single_wav(&session)? {
-            return self.finalize_single_wav_recording(&session, cancelled);
+            return self
+                .finalize_single_wav_recording(&session, cancelled)
+                .map(|(saved, proof)| (saved, Some(proof)));
         }
         match self.finalize_recording(session_id) {
-            Ok(saved) => return Ok(saved),
+            Ok(saved) => return Ok((saved, None)),
             Err(error) => crate::internal_logs::report_error("recording_save", &error),
         }
         partial::check_cancel(cancelled)?;
@@ -519,6 +562,7 @@ impl Storage {
         // The recording policy authorizes automatic salvage of verified audio.
         // The existing generation/ownership checks remain unchanged.
         self.recover_partial_recording_checked(&review, true, cancelled)
+            .map(|saved| (saved, None))
     }
 
     #[allow(dead_code)]
@@ -776,7 +820,9 @@ impl Storage {
         }
         if self.has_single_wav(&session)? {
             drop(_meeting_owner);
-            return self.finalize_single_wav_recording(&session, &|| false);
+            return self
+                .finalize_single_wav_recording(&session, &|| false)
+                .map(|(session, _)| session);
         }
         if !matches!(
             session.state.as_str(),
