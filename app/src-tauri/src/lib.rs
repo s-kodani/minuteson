@@ -252,7 +252,7 @@ async fn apply_model_profile_application(
                 .state::<Storage>()
                 .history_model_name(&preview.package_id)
                 .unwrap_or_default();
-            job_history::model_stage(history_operation_id.as_deref(), &target, true, || {
+            job_history::model_stage(history_operation_id.as_deref(), &target, false, || {
                 AnalysisController::with_model_preparation(
                     &app,
                     Some(&token),
@@ -266,8 +266,13 @@ async fn apply_model_profile_application(
                             &|| guard.cancelled() || lease.cancelled(),
                         );
                         if applied.is_ok() {
-                            app.state::<AnalysisController>()
-                                .model_application_finished();
+                            AnalysisController::finish_model_application(
+                                &app,
+                                lease,
+                                history_operation_id.as_deref(),
+                                &target,
+                                &preview.package_id,
+                            );
                         }
                         applied
                     },
@@ -355,6 +360,9 @@ async fn select_audio_import(
         if window.label() != "main" {
             return Err("Only the main window can select audio".into());
         }
+        if window.state::<AnalysisController>().model_cleanup_active() {
+            return Err("重複モデルを整理中です。完了後に音声取り込みを開始できます。".into());
+        }
         ImportController::select(&window, path).await
     }
     .await;
@@ -368,6 +376,9 @@ fn start_audio_import(
     let result: Result<import_controller::Snapshot, String> = (|| {
         if window.label() != "main" {
             return Err("Only the main window can import audio".into());
+        }
+        if window.state::<AnalysisController>().model_cleanup_active() {
+            return Err("重複モデルを整理中です。完了後に音声取り込みを開始できます。".into());
         }
         ImportController::start(window.app_handle(), request)
     })();
@@ -696,7 +707,15 @@ fn get_data_operation_availability(
         } else {
             let controller = app.state::<AnalysisController>();
             let kind = controller.data_operation_blocker_kind()?;
-            let reason = kind.map(|kind| AnalysisController::blocker_message(kind).to_owned());
+            let reason = kind.map(|kind| {
+                if kind == mon_core::operation::Kind::ModelDeletion
+                    && controller.model_cleanup_active()
+                {
+                    "重複モデルを整理中".to_owned()
+                } else {
+                    AnalysisController::blocker_message(kind).to_owned()
+                }
+            });
             let code = kind.map(|kind| {
                 if kind == mon_core::operation::Kind::Restart {
                     "relocation_restart_required"
@@ -2726,7 +2745,7 @@ async fn start_recording(
     num_speakers: Option<u32>,
     meeting_vocabulary: Option<Vec<storage::VocabularyEntry>>,
 ) -> Result<RecordingSnapshot, mon_contracts::AppError> {
-    let result: Result<RecordingSnapshot, String> = async move {
+    async move {
         if window.label() != "main" {
             return Err("Only the main window can start recording".into());
         }
@@ -2738,62 +2757,63 @@ async fn start_recording(
         }
         tauri::async_runtime::spawn_blocking(move || {
             RecorderController::with_transition(&app, || {
-                app.state::<capture_test::CaptureTests>().require_empty()?;
-                if app.state::<StopDecisionStore>().snapshot().visible() {
-                    return Err("録音確認を完了してから開始してください".into());
-                }
-                if app.state::<SessionStore>().snapshot().is_active() {
-                    return Err("別の録音が進行中です".into());
-                }
-                app.state::<Storage>().require_data_writable()?;
-                let inputs = RecorderController::inputs(&app)?;
-                if let Some(uid) = microphone_uid.as_deref() {
-                    inputs.require_microphone(uid)?;
-                } else {
-                    inputs.require_automatic_microphone()?;
-                }
-                RecorderController::require_scope(&app, &capture_scope)?;
-                recording_windows::prepare(&app)?;
-                let result = (|| {
-                    if let Some(title) = new_title {
-                        app.state::<Storage>()
-                            .create_recording_draft_with_vocabulary(
+                Ok(
+                    (|| -> Result<RecordingSnapshot, mon_contracts::AppError> {
+                        app.state::<capture_test::CaptureTests>().require_empty()?;
+                        if app.state::<StopDecisionStore>().snapshot().visible() {
+                            return Err("録音確認を完了してから開始してください".into());
+                        }
+                        if app.state::<SessionStore>().snapshot().is_active() {
+                            return Err("別の録音が進行中です".into());
+                        }
+                        app.state::<Storage>().require_data_writable()?;
+                        let inputs = RecorderController::inputs(&app)?;
+                        if let Some(uid) = microphone_uid.as_deref() {
+                            inputs.require_microphone(uid)?;
+                        } else {
+                            inputs.require_automatic_microphone()?;
+                        }
+                        RecorderController::require_scope(&app, &capture_scope)?;
+                        ImportController::prepare_recording(&app)?;
+                        AnalysisController::prepare_recording(&app)?;
+                        let result = (|| {
+                            recording_windows::prepare(&app)?;
+                            if let Some(title) = new_title {
+                                app.state::<Storage>()
+                                    .create_recording_draft_with_vocabulary(
+                                        &meeting_id,
+                                        &title,
+                                        &meeting_vocabulary.unwrap_or_default(),
+                                    )?;
+                            }
+                            RecorderController::start(
+                                &app,
                                 &meeting_id,
-                                &title,
-                                &meeting_vocabulary.unwrap_or_default(),
-                            )?;
-                    }
-                    ImportController::prepare_recording(&app)?;
-                    let result = AnalysisController::prepare_recording(&app).and_then(|_| {
-                        RecorderController::start(
-                            &app,
-                            &meeting_id,
-                            microphone_uid.as_deref(),
-                            &capture_scope,
-                            &speaker_counts,
-                        )
-                    });
-                    if result.is_err() {
-                        AnalysisController::recording_finished(&app);
-                    }
-                    result
-                })();
-                if result.is_err() {
-                    if let Err(error) = recording_windows::release_if_current(
-                        &app,
-                        &app.state::<SessionStore>().snapshot(),
-                    ) {
-                        internal_logs::report_error("recording_windows", &error);
-                    }
-                }
-                result
+                                microphone_uid.as_deref(),
+                                &capture_scope,
+                                &speaker_counts,
+                            )
+                        })();
+                        if result.is_err() {
+                            AnalysisController::recording_finished(&app);
+                            if let Err(error) = recording_windows::release_if_current(
+                                &app,
+                                &app.state::<SessionStore>().snapshot(),
+                            ) {
+                                internal_logs::report_error("recording_windows", &error);
+                            }
+                        }
+                        result.map_err(|error| {
+                            mon_contracts::AppError::from_command("start_recording", error)
+                        })
+                    })(),
+                )
             })
         })
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())??
     }
-    .await;
-    result.map_err(|message| mon_contracts::AppError::from_command("start_recording", message))
+    .await
 }
 
 #[tauri::command]

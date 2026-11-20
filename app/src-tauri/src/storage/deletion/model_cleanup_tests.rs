@@ -3,7 +3,10 @@ use super::*;
 use crate::{analysis_worker::AnalysisController, model_inspection, model_placement};
 
 fn setup() -> (Fixture, Journal) {
-    let f = Fixture::new();
+    setup_with_fixture(Fixture::new())
+}
+
+fn setup_with_fixture(f: Fixture) -> (Fixture, Journal) {
     let keeper = uuid::Uuid::new_v4().to_string();
     let report = model_inspection::inspect(&f.source, &|| false).unwrap();
     model_placement::place(
@@ -34,8 +37,173 @@ fn setup() -> (Fixture, Journal) {
         keeper,
         next: 0,
         pending: None,
+        job: None,
     };
     (f, journal)
+}
+
+fn folder_job(keeper: &str) -> Job {
+    Job {
+        id: uuid::Uuid::new_v4().to_string(),
+        target: "合成モデル".into(),
+        started_at_ms: 1,
+        applied_package: Some(keeper.into()),
+    }
+}
+
+#[test]
+fn folder_cleanup_resumes_original_job_and_preserves_unowned_changes() {
+    for stage in ["armed", "renamed", "partial", "removed", "extra", "changed"] {
+        let (f, mut journal) = setup();
+        let controller = AnalysisController::default();
+        let lease = controller
+            .begin_model_deletion(false, false, &|| false)
+            .unwrap();
+        let job = folder_job(&journal.keeper.record.package_id);
+        journal.version = 2;
+        journal.job = Some(job.clone());
+        let before = journal.source.observations[0]
+            .proof
+            .as_ref()
+            .unwrap()
+            .directory_scope();
+        journal.pending = Some(Pending {
+            before: before.clone(),
+            staged: None,
+        });
+        save(&f.storage, &journal, None, &lease, &|| false).unwrap();
+        let reserved = format!(".mon-delete-cleanup-{}-folder", f.package);
+        let staged = f.root.join(&reserved);
+        if stage != "armed" {
+            Directory::root(&f.root)
+                .unwrap()
+                .rename_exclusive(&f.package, &reserved)
+                .unwrap();
+        }
+        if !matches!(stage, "armed" | "renamed") {
+            let prior = journal.clone();
+            journal.pending.as_mut().unwrap().staged = Some(before);
+            save(&f.storage, &journal, Some(&prior), &lease, &|| false).unwrap();
+        }
+        match stage {
+            "partial" => std::fs::remove_file(staged.join("cli")).unwrap(),
+            "removed" => std::fs::remove_dir_all(&staged).unwrap(),
+            "extra" => std::fs::write(staged.join("unregistered"), b"keep").unwrap(),
+            "changed" => std::fs::write(staged.join("weights/model.bin"), b"keep").unwrap(),
+            _ => {}
+        }
+        let f = f.cold();
+        let targets = plan(&f.storage, None).unwrap();
+        assert_eq!(targets.len(), 1, "{stage}");
+        let target = targets.into_iter().next().unwrap();
+        assert_eq!(target.job(), Some(&job));
+        let result = execute(&f.storage, &f.root, vec![target], &job, &lease);
+        if matches!(stage, "extra" | "changed") {
+            assert!(result.is_err(), "{stage}");
+            let changed = if stage == "extra" {
+                "unregistered"
+            } else {
+                "weights/model.bin"
+            };
+            assert_eq!(std::fs::read(staged.join(changed)).unwrap(), b"keep");
+            assert!(staged.join("cli").exists());
+        } else {
+            result.unwrap();
+            assert!(
+                !staged.exists() && !f.root.join(&f.package).exists(),
+                "{stage}"
+            );
+            assert!(plan(&f.storage, None).unwrap().is_empty());
+        }
+        assert!(f
+            .root
+            .join(&journal.keeper.record.package_id)
+            .join("weights/model.bin")
+            .exists());
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn folder_cleanup_reads_each_package_once_and_records_three_boundaries() {
+    use crate::operation_observation;
+    use std::time::Instant;
+
+    let controller = AnalysisController::default();
+    let lease = controller
+        .begin_model_deletion(false, false, &|| false)
+        .unwrap();
+    let (old, mut journal) = setup_with_fixture(Fixture::with_weight_size(32 * 1024 * 1024));
+    let (new, candidate) = setup_with_fixture(Fixture::with_weight_size(32 * 1024 * 1024));
+    let (old_read, old_checks, old_elapsed) = {
+        let started = Instant::now();
+        let _measure = operation_observation::Scope::enter("model_cleanup_test", |_| {});
+        for item in [&mut journal.source, &mut journal.keeper] {
+            *item = super::super::capture_mode(
+                &old.storage,
+                &old.root,
+                &item.record.package_id,
+                &item.record.review_hash,
+                &|| false,
+                false,
+            )
+            .unwrap();
+        }
+        save(&old.storage, &journal, None, &lease, &|| false).unwrap();
+        run_legacy(&old.storage, &mut journal, &lease, &|| false).unwrap();
+        let (bytes, checks) = operation_observation::measurements();
+        (bytes, checks, started.elapsed())
+    };
+    let (new_read, new_checks, new_elapsed) = {
+        let entries = new.storage.list_model_placements().unwrap();
+        let entry = |id: &str| {
+            Box::new(
+                entries
+                    .iter()
+                    .find(|item| item.package_id == id)
+                    .unwrap()
+                    .clone(),
+            )
+        };
+        let target = Target {
+            work: Work::Duplicate {
+                source: entry(&new.package),
+                keeper: entry(&candidate.keeper.record.package_id),
+            },
+        };
+        let started = Instant::now();
+        let _measure = operation_observation::Scope::enter("model_cleanup_test", |_| {});
+        execute(
+            &new.storage,
+            &new.root,
+            vec![target],
+            &folder_job(&candidate.keeper.record.package_id),
+            &lease,
+        )
+        .unwrap();
+        let (bytes, checks) = operation_observation::measurements();
+        (bytes, checks, started.elapsed())
+    };
+    eprintln!("legacy: {old_read} bytes, {old_checks} hashes, {old_elapsed:?}; folder: {new_read} bytes, {new_checks} hashes, {new_elapsed:?}");
+    let expected = candidate
+        .source
+        .observations
+        .iter()
+        .chain(&candidate.keeper.observations)
+        .filter_map(|item| item.entry.bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(new_read, expected.iter().sum::<u64>());
+    assert_eq!(new_checks, expected.len() as u64);
+    assert!(old_read > new_read * 2);
+    let db = new.storage.connection.lock().unwrap();
+    let writes: i64 = db
+        .query_row(
+            "SELECT lock_version FROM app_settings WHERE key=?1",
+            [format!("{PREFIX}{}", new.package)],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(writes, 3);
 }
 #[test]
 fn automatic_cleanup_removes_only_duplicate_body_keeps_history_and_does_not_fence_meetings() {
@@ -56,7 +224,7 @@ fn automatic_cleanup_removes_only_duplicate_body_keeps_history_and_does_not_fenc
             .unwrap()
             .body_removed
     );
-    run(&f.storage, &mut j, &lease, &|| false).unwrap();
+    run_legacy(&f.storage, &mut j, &lease, &|| false).unwrap();
     assert!(j.complete());
     assert!(!f.root.join(&f.package).exists());
     assert!(f
@@ -67,10 +235,10 @@ fn automatic_cleanup_removes_only_duplicate_body_keeps_history_and_does_not_fenc
     assert_eq!(f.storage.list_model_placements().unwrap().len(), 2);
     assert!(!f.storage.data_write_blocked());
     // Terminal readback does not perform another unlink or adopt a reappeared root.
-    run(&f.storage, &mut j, &lease, &|| false).unwrap();
+    run_legacy(&f.storage, &mut j, &lease, &|| false).unwrap();
     std::fs::create_dir(f.root.join(&f.package)).unwrap();
     std::fs::write(f.root.join(&f.package).join("external"), b"keep").unwrap();
-    assert!(run(&f.storage, &mut j, &lease, &|| false).is_err());
+    assert!(run_legacy(&f.storage, &mut j, &lease, &|| false).is_err());
     assert!(f.root.join(&f.package).join("external").exists());
 }
 #[test]
@@ -110,7 +278,7 @@ fn automatic_cleanup_resumes_after_journaled_rename_and_reopen() {
             let db = f.storage.connection.lock().unwrap();
             read(&db, &f.package).unwrap().unwrap()
         };
-        run(&f.storage, &mut saved, &lease, &|| false).unwrap();
+        run_legacy(&f.storage, &mut saved, &lease, &|| false).unwrap();
         assert!(saved.complete());
         assert!(!f.root.join(&f.package).exists());
     }
@@ -137,7 +305,7 @@ fn automatic_cleanup_rejects_changed_keeper_unknown_files_and_cancellation() {
         }
         let check = || change == "cancel";
         let result = save(&f.storage, &j, None, &lease, &check)
-            .and_then(|_| run(&f.storage, &mut j, &lease, &check));
+            .and_then(|_| run_legacy(&f.storage, &mut j, &lease, &check));
         assert!(result.is_err(), "{change}");
         assert!(f.root.join(&f.package).join("weights/model.bin").exists());
         assert!(!f.storage.data_write_blocked());
@@ -288,16 +456,22 @@ fn automatic_cleanup_sweep_retires_old_profile_body_after_success_without_changi
     let lease = controller
         .begin_model_deletion(false, false, &|| false)
         .unwrap();
-    let mut failed = HashSet::new();
-    assert!(sweep(&f.storage, &f.root, &lease, &mut failed, &|| false).unwrap());
+    let job = Job {
+        id: uuid::Uuid::new_v4().to_string(),
+        target: "重複モデルの整理".into(),
+        started_at_ms: 1,
+        applied_package: None,
+    };
+    let targets = plan(&f.storage, Some(&j.keeper.record.package_id)).unwrap();
+    assert_eq!(targets.len(), 1);
+    execute(&f.storage, &f.root, targets, &job, &lease).unwrap();
     assert!(!f.root.join(&f.package).exists());
     assert!(f.root.join(&j.keeper.record.package_id).exists());
     assert_eq!(
         serde_json::to_value(f.storage.model_profiles().unwrap()).unwrap(),
         before
     );
-    assert!(!sweep(&f.storage, &f.root, &lease, &mut failed, &|| false).unwrap());
-    assert!(failed.is_empty());
+    assert!(plan(&f.storage, None).unwrap().is_empty());
     drop(lease);
     let f = f.cold();
     assert_eq!(

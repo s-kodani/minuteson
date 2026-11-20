@@ -460,6 +460,11 @@ impl CaptureTests {
             // request. Losing its reply must not require resending start to
             // discover whether anything was accepted.
             let admission = (|| {
+                if app.state::<AnalysisController>().model_cleanup_active() {
+                    return Err(
+                        "重複モデルを整理中です。完了後に録音前テストを開始できます。".into(),
+                    );
+                }
                 if app.state::<SessionStore>().snapshot().is_active()
                     || app
                         .state::<crate::recording_confirmation::StopDecisionStore>()
@@ -526,8 +531,8 @@ impl CaptureTests {
                         return Err("別の録音が進行中です".into());
                     }
                     ImportController::prepare_recording_checked(&app, &request.expected_import)?;
-                    priority = true;
                     AnalysisController::prepare_recording(&app)?;
+                    priority = true;
                     if cancelled() {
                         return Err("録音前テストを取り消しました".into());
                     }

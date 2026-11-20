@@ -26,6 +26,7 @@ export interface CommandArguments {
   "get_downloaded_model_placement_result": { "packageId": string; "token"?: (string) | null; "downloadId": string; "expectedRecipeHash": string; "expectedReviewHash": string };
   "cancel_model_inspection": { "token": string };
   "get_model_placements": Record<string, never>;
+  "get_model_cleanup": Record<string, never>;
   "get_model_profiles": Record<string, never>;
   "preview_model_profile_application": { "token": string; "historyOperationId"?: (string) | null; "profile": unknown; "packageId": string; "expectedReviewHash": string; "checkOperationId": string; "diarizationThreads"?: (number) | null; "diarizationClusterThresholdMilli"?: (number) | null; "whisperVadOptions"?: (unknown) | null };
   "apply_model_profile_application": { "token": string; "historyOperationId"?: (string) | null; "preview": unknown };
@@ -607,6 +608,15 @@ export const commandContracts = {
     "response": {
       "type": "Result<Vec<model_placement::CatalogEntry>,mon_contracts::AppError>",
       "ok": "Vec<model_placement::CatalogEntry>",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_model_cleanup": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<Snapshot,mon_contracts::AppError>",
+      "ok": "Snapshot",
       "error": "mon_contracts::AppError"
     }
   },

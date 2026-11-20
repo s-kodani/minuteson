@@ -26,6 +26,7 @@ tauri::generate_handler![
     model_download_ipc::get_downloaded_model_placement_result,
     cancel_model_inspection,
     get_model_placements,
+    analysis_worker::model_cleanup::get_model_cleanup,
     get_model_profiles,
     preview_model_profile_application,
     apply_model_profile_application,

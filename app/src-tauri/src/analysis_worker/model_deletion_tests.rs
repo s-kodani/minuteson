@@ -21,6 +21,48 @@ fn automatic_cleanup_waits_across_preparation_steps_until_application_succeeds()
 }
 
 #[test]
+fn model_cleanup_handoff_keeps_one_owner_and_releases_the_visible_gate() {
+    let controller = AnalysisController::default();
+    let preparation = controller
+        .begin_model_preparation(false, false, &|| false)
+        .unwrap();
+    let job = model_cleanup::Job {
+        id: uuid::Uuid::new_v4().to_string(),
+        target: "合成モデル".into(),
+        started_at_ms: 1,
+        applied_package: Some(uuid::Uuid::new_v4().to_string()),
+    };
+    assert!(controller
+        .begin_model_cleanup(job.clone(), false, false, None)
+        .unwrap()
+        .is_none());
+    assert!(!controller.model_cleanup_active());
+    let cleanup = controller
+        .begin_model_cleanup(job.clone(), false, false, Some(&preparation.cancel))
+        .unwrap()
+        .unwrap();
+    drop(preparation);
+    cleanup.validate_model_deletion().unwrap();
+    assert_eq!(controller.close_activity().unwrap(), (false, true));
+    let request = Request::new(Kind::Recording, Scope::Global);
+    {
+        let state = controller.state.lock().unwrap();
+        assert_eq!(state.model_cleanup.revision, 1);
+        assert_eq!(state.model_cleanup.active.as_ref(), Some(&job));
+        assert_eq!(
+            state.admission(request, false).blocker(),
+            Some(Kind::ModelDeletion)
+        );
+    }
+    drop(cleanup);
+    assert_eq!(controller.close_activity().unwrap(), (false, false));
+    let state = controller.state.lock().unwrap();
+    assert_eq!(state.model_cleanup.revision, 2);
+    assert!(state.model_cleanup.active.is_none());
+    assert!(state.admission(request, false).can_reserve());
+}
+
+#[test]
 fn model_deletion_coexists_with_existing_and_new_notification_owners() {
     let c = AnalysisController::default();
     let writer = c.begin_notice_storage().unwrap();

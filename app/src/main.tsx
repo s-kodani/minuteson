@@ -37,6 +37,7 @@ import { RecordingVocabulary } from "./recording-vocabulary";
 import { flushPendingEdits } from "./draft-save";
 import { useSavedNavigation } from "./saved-navigation";
 import { AudioImportPanel } from "./audio-import";
+import { useModelCleanup } from "./model-cleanup";
 import { ModelInspectionPanel } from "./model-inspection";
 import { ModelDownloadGuidance } from "./model-download-guidance";
 import { ModelRuntimeGuidance } from "./model-runtime-guidance";
@@ -78,6 +79,8 @@ function MainWindow() {
   const state = useRecordingSession();
   const recordingDecision = useRecordingConfirmation("main");
   const dataOperation = useDataOperation();
+  const modelCleanup = useModelCleanup();
+  const modelCleanupActive = modelCleanup.active !== null;
   usePublishProgress("data-deletion", [deletionProgress(dataOperation.snapshot)]);
   usePublishProgress("data-transfer", dataOperation.jobs.filter(job => job.snapshot.busy || job.snapshot.phase === "ready").map(dataJobProgress));
   const recovery = useRecordingRecovery();
@@ -202,7 +205,7 @@ function MainWindow() {
   const modelPreparationStopRequested = recordingDecision.visible || recordingDecision.requestBusy || dataPending || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || !dataOperation.connected || !!dataOperation.snapshot?.busy || captureTest.blocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired || captureBusy || startConfirm.pending;
   const publication = useAnalysisPublication(writeLocked, action => withSavedEdits(action, "transcription"));
   const { root, startRecording, selectRecordingMicrophone, startCaptureTest, cancelCaptureTest, finishCaptureTest, stopRecording, prepareNewRecording, confirmPreparationResult } = useCaptureActions({
-    context: { selectedMeeting, preparation, screen, baseWriteLocked, captureAvailable, captureInputs, captureScope, captureTest, state },
+    context: { selectedMeeting, preparation, screen, baseWriteLocked, modelCleanupActive, reconcileModelCleanup: modelCleanup.reconcile, captureAvailable, captureInputs, captureScope, captureTest, state },
     controller: captureController, captureOwner, closing, activeMicrophoneInput, microphoneSession, microphoneSelection,
     startConfirm, withSavedEdits: saveEdits, recordingDecision, navigationLocked, setPreparation, setSelectedMeeting, setRenameTitle, setScreen, setMeetings,
   });
@@ -432,7 +435,7 @@ function MainWindow() {
         <main className={`content${detail ? " meeting-detail-content" : ""}`} aria-label="会議ワークスペース" tabIndex={-1}>
           <JobNotifications locked={navigationLocked} onOpen={openNotifiedMeeting} />
           {!detail && (screen === "overview" || screen === "meetings") && <div className="page-heading"><h1>会議一覧</h1></div>}
-          <AudioImportPanel overlayHost={audioDropHost} visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
+          <AudioImportPanel modelCleanupActive={modelCleanupActive} overlayHost={audioDropHost} visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
             await flushPendingEdits();
             const [meeting,items]=await Promise.all([invoke<Meeting|null>("get_meeting",{id}),invoke<Meeting[]>("list_meetings")]);
             if(!meeting)throw Error("保存した会議が見つかりません。");
@@ -440,7 +443,7 @@ function MainWindow() {
           }}/>
           {screen === "settings" && <div className="page-heading heading-with-info"><h1>設定</h1><InfoPopover label="設定">録音環境、ローカルAI、表示を管理します。</InfoPopover></div>}
           {screen === "settings" && <ThemeSettingsPanel locked={writeLocked} />}
-          <ModelInspectionPanel deletion={modelDeletion} refreshEpoch={modelRefreshEpoch} runtimeUpdateEpoch={modelRuntimeEpoch} visible={screen === "settings"} locked={writeLocked} stopRequested={modelPreparationStopRequested} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />
+          <ModelInspectionPanel cleanup={modelCleanup.active} deletion={modelDeletion} refreshEpoch={modelRefreshEpoch} runtimeUpdateEpoch={modelRuntimeEpoch} visible={screen === "settings"} locked={writeLocked} stopRequested={modelPreparationStopRequested} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} />
           {screen === "prompts" && <div className="page-heading heading-with-info"><h1>プロンプト</h1><InfoPopover label="プロンプト">議事録の作成・統合に使うプロンプトと共通用語を管理します。</InfoPopover></div>}
           <MinutesPromptSettings visible={screen === "prompts"} locked={writeLocked} />
           {screen === "prompts" && <VocabularyEditor locked={writeLocked} />}
@@ -451,7 +454,7 @@ function MainWindow() {
           <AudioDeletionPanel operation={dataOperation} control={audioDeletion} meetingTitle={meetings.find(m => m.id === audioDeletion.preview?.meetingId)?.title} />
           {screen === "settings" ? null : screen === "prompts" ? null : screen === "voices" ? <VoicePeopleSettings standalone locked={writeLocked} /> : screen === "logs" ? <InternalLogs /> : screen === "jobs" ? <JobList data={dataOperation} publicationReadStatus={publication.readStatus} onOpenData={() => setScreen("settings")} onShowRestored={showRestored} locked={navigationLocked} onOpenMeeting={openNotifiedMeeting} onOpenModels={() => { if (!navigationLocked) void navigate(() => setScreen("settings")); }} /> : screen==="recording" ? <>
             <RecordingWorkspace preparation={preparation} title={selectedMeeting?.title??preparation?.title??"録音対象を確認してください"} state={state} owner={captureOwner} locked={writeLocked}
-              canStart={isTauri()&&captureAvailable&&!!captureInputs.selected&&!!captureScope.scope&&!writeLocked&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)&&(preparation?validRecordingPreparation(preparation):selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null)}
+              canStart={!modelCleanupActive&&isTauri()&&captureAvailable&&!!captureInputs.selected&&!!captureScope.scope&&!writeLocked&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)&&(preparation?validRecordingPreparation(preparation):selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null)}
               canStop={!captureBusy&&!navigationBusy&&!recordingDecision.requestBusy&&!recordingDecision.visible&&recordingDecision.connected&&state.kind==="ready"&&["preparing","recording"].includes(state.snapshot.phase)}
               onTitle={title=>setPreparation(current=>current&&!current.submitted?{...current,title}:current)} onStart={()=>void startRecording()} onStop={source=>void stopRecording(source)}
               onSettings={()=>void navigate(()=>setScreen("settings"))} onConfirmResult={()=>void confirmPreparationResult()}
@@ -460,7 +463,7 @@ function MainWindow() {
               vocabulary={preparation?<RecordingVocabulary key={preparation.id} items={preparation.meetingVocabulary} locked={writeLocked||preparation.submitted}
                 onChange={meetingVocabulary=>setPreparation(current=>current&&!current.submitted?{...current,meetingVocabulary}:current)}/>:selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null?<VocabularyEditor key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={writeLocked}/>:null}
               test={captureAvailable?<CaptureTestPanel operationError={captureTestError} control={captureTest} currentUid={captureInputs.uid} currentScope={captureScope.scope}
-                canStart={!!captureInputs.selected&&!!captureScope.scope&&!captureTest.blocked&&!operationWriteLocked&&!preparation?.submitted&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)}
+                canStart={!modelCleanupActive&&!!captureInputs.selected&&!!captureScope.scope&&!captureTest.blocked&&!operationWriteLocked&&!preparation?.submitted&&state.kind==="ready"&&["idle","error"].includes(state.snapshot.phase)}
                 locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={startCaptureTest} onCancel={()=>void cancelCaptureTest()} onFinish={finishCaptureTest}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>

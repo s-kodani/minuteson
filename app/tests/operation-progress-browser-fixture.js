@@ -6,8 +6,23 @@ window.skipModelDownloadFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const { modelDownloadIPC } = await import("./model-download-browser-fixture.tsx");
 const modelCommands = new Set(["get_model_license_review", "get_official_model_options", "get_model_placements", "get_model_profiles", "get_model_download_catalog", "start_model_download", "place_downloaded_model", "check_model_compatibility", "preview_model_profile_application", "apply_model_profile_application", "cancel_model_inspection", "get_model_download_lifetime", "read_model_download", "get_downloaded_model_placement_result"]);
+const cleanup = window.modelCleanupFixture = { snapshot: { revision: 0, active: null } };
+const publishCleanup = async active => {
+  cleanup.snapshot = { revision: cleanup.snapshot.revision + 1, active };
+  await emit("model-cleanup-changed", cleanup.snapshot);
+};
 const f = window.operationProgressFixture = {
   closeCalls: [], hidden: false, hideFailure: false,
+  holdCleanup: false,
+  finishCleanup: async () => {
+    const job = cleanup.snapshot.active;
+    cleanup.history = { items: [{ id: `model:${job.id}`, kind: "model", target: job.target, meetingId: null,
+      state: "attention", acceptedAt: job.startedAtMs, finishedAt: null, observedAt: Date.now(),
+      detail: "モデル設定は反映済み。重複モデルの整理は未完了" }], nextCursor: null, storageError: null };
+    await publishCleanup(null);
+    await emit("job-history-changed", null);
+    f.releaseCleanup();
+  },
   requestClose: quit => emit("main-close-requested", { quit }),
   emitModelWait: (operationId, waiting) => emit("model-preparation-wait", { operationId, waiting }),
   emitTransfer: async (receivedBytes, patch = {}) => {
@@ -25,6 +40,14 @@ mockIPC(async (command, args) => {
     if (f.hideFailure) throw Error("模擬ウィンドウ非表示失敗");
     f.hidden = true;
     return null;
+  }
+  if (command === "apply_model_profile_application" && f.holdCleanup) {
+    const result = await modelDownloadIPC(command, args);
+    const pending = new Promise(resolve => { f.releaseCleanup = resolve; });
+    await publishCleanup({ id: args.historyOperationId, target: "Synthetic official model",
+      appliedPackage: args.preview.packageId, startedAtMs: Date.now() });
+    await pending;
+    return result;
   }
   if (modelCommands.has(command)) return modelDownloadIPC(command, args);
   return dataSaveIPC(command, args);

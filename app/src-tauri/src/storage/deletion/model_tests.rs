@@ -22,13 +22,17 @@ pub(crate) struct Fixture {
 }
 impl Fixture {
     pub(crate) fn new() -> Self {
+        Self::with_weight_size(150000)
+    }
+
+    pub(crate) fn with_weight_size(bytes: usize) -> Self {
         let source = tempfile::tempdir().unwrap();
         let meetings = tempfile::tempdir().unwrap();
         let app_data = tempfile::tempdir().unwrap();
         let source_path = source.path().canonicalize().unwrap();
         std::fs::create_dir(source_path.join("weights")).unwrap();
         std::fs::write(source_path.join("cli"), b"synthetic; do not execute").unwrap();
-        std::fs::write(source_path.join("weights/model.bin"), vec![b'm'; 150000]).unwrap();
+        std::fs::write(source_path.join("weights/model.bin"), vec![b'm'; bytes]).unwrap();
         let manifest = PackageManifest {
             backend: None,
             schema_version: 1,

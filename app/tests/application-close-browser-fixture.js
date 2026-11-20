@@ -10,6 +10,7 @@ import { toasts } from "../src/toast";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const data = window.dataFixture;
+const cleanup = window.modelCleanupFixture = { snapshot: { revision: 0, active: null } };
 const clone = value => structuredClone(value);
 const recording = { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null };
 const importing = { revision: 0, phase: "idle", busy: false, recordingBlocked: false, token: null, fileName: null, info: null, sourceBytes: null, requiredBytes: null, availableBytes: null, completed: 0, saved: null, errorMessage: null };
@@ -45,6 +46,11 @@ const f = window.closeFixture = {
   testChanged:patch=>{if(!f.captureTest)throw Error("模擬テストなし");f.captureTest={...f.captureTest,...patch,revision:f.captureTest.revision+1};},
   testReady:()=>f.testChanged({phase:"ready",busy:false,microphone:{frames:240000,sampleRate:48000,channels:1,durationMs:5000,hasGaps:false},system:{frames:192000,sampleRate:48000,channels:2,durationMs:4000,hasGaps:true}}),
   request: quit => emit("main-close-requested", { quit }),
+  changeModelCleanup: async (active, publish = true) => {
+    cleanup.snapshot = { revision: cleanup.snapshot.revision + 1, active: active
+      ? { id: crypto.randomUUID(), target: "重複モデルの整理", startedAtMs: Date.now(), appliedPackage: null } : null };
+    if (publish) await emit("model-cleanup-changed", clone(cleanup.snapshot));
+  },
   recordChanged: async patch => { f.recording = { ...f.recording, ...patch, revision: f.recording.revision + 1 }; await emit("session-changed", clone(f.recording)); },
   recoveryChanged:async patch=>{f.recovery={...f.recovery,...patch,revision:f.recovery.revision+1};await emit("recording-recovery-changed",null);},
   importChanged: async patch => { f.importing = { ...f.importing, ...patch, revision: f.importing.revision + 1 }; await emit("audio-import-changed", clone(f.importing)); },
@@ -214,6 +220,8 @@ mockIPC(async (command, args) => {
     return f.microphoneSelection.requestRevision;
   }
   if (command === "start_recording") {
+    if (cleanup.snapshot.active) throw { code: "recording_model_cleanup_not_started", operationId: null,
+      retryDisposition: "not_started", message: "重複モデルを整理中です。録音は開始していません。整理が完了してから再試行してください。" };
     if(f.captureRecovery.phase!=="clear")throw Error("模擬テスト音声の回復が未完了");
     if(f.captureTest)throw Error("模擬テスト所有が残っています");
     if (!["idle", "error"].includes(f.recording.phase)||f.startBeforeCommitFailure) throw Error("模擬録音対象変更・受付前失敗");

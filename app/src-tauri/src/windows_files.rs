@@ -154,13 +154,32 @@ pub(crate) fn remove_owned(
     expected: &Identity,
     is_directory: bool,
 ) -> Result<(), String> {
+    remove_owned_with(path, expected, is_directory, false, |_| Ok(()))
+}
+
+pub(crate) fn remove_owned_checked(
+    path: &Path,
+    expected: &Identity,
+    is_directory: bool,
+    check: impl FnOnce(&File) -> Result<(), String>,
+) -> Result<(), String> {
+    remove_owned_with(path, expected, is_directory, true, check)
+}
+
+fn remove_owned_with(
+    path: &Path,
+    expected: &Identity,
+    is_directory: bool,
+    checked: bool,
+    check: impl FnOnce(&File) -> Result<(), String>,
+) -> Result<(), String> {
     use windows_sys::Win32::Storage::FileSystem::{
         FileDispositionInfoEx, SetFileInformationByHandle, FILE_DISPOSITION_INFO_EX,
     };
     let _parent = parents(path.parent().ok_or("削除対象の親がありません")?)?;
     let file = OpenOptions::new()
-        .access_mode(0x10000 | 0x80)
-        .share_mode(3)
+        .access_mode(0x10000 | 0x80 | if checked { 0x20000 } else { 0 })
+        .share_mode(if checked { 1 } else { 3 })
         .custom_flags(0x02000000 | 0x00200000)
         .open(path)
         .map_err(|e| e.to_string())?;
@@ -171,6 +190,7 @@ pub(crate) fn remove_owned(
     {
         return Err("削除対象の実体・種類・リンク数が変更されています".into());
     }
+    check(&file)?;
     // Windows 11 + NTFS: unlink the checked name immediately while a read-only
     // proof handle remains open. Legacy delete-pending would make recovery's
     // post-delete absence check return ACCESS_DENIED until that handle closes.

@@ -105,6 +105,24 @@ async (page,capturePath,detailUI)=>{
   check(await name().count()===1&&await count("start_recording")===0&&await page.evaluate(()=>window.dataFixture.meetings.length===1),"failed edit save persisted the new draft");
   results.push("failed edit flushing retains local title and prevents both meeting creation and capture");
 
+  await boot();
+  await name().fill("整理後に録音する会議");
+  await start().click();
+  await modal().waitFor();
+  await page.evaluate(() => window.closeFixture.changeModelCleanup(true, false));
+  await accept().click();
+  await page.getByRole("alert").filter({hasText:"録音は開始していません"}).waitFor();
+  await dismissFailure();
+  await page.waitForFunction(() => document.querySelector('.common-operation-progress progress')?.getAttribute('aria-valuetext') === '重複モデルを整理中');
+  check(await start().isDisabled() && await name().inputValue() === "整理後に録音する会議", "cleanup stopped neither capture nor input loss");
+  check(await count("start_recording") === 1 && await page.evaluate(() => window.dataFixture.meetings.length === 1), "known rejection left a draft or restarted capture");
+  await page.evaluate(() => window.closeFixture.changeModelCleanup(false));
+  await start().click();
+  await accept().click();
+  await name().waitFor({ state: "detached" });
+  check(await count("start_recording") === 2 && await page.evaluate(() => window.dataFixture.meetings.length === 2), "explicit retry did not record exactly once after cleanup");
+  results.push("late cleanup admission stops recording before a draft and allows a fresh explicit retry");
+
   await boot();await page.evaluate(()=>{window.closeFixture.startLost=true;});await start().click();await accept().click();await dismissFailure();
   check(await count("start_recording")===1&&await name().isDisabled()&&await start().count()===0,"lost accepted reply replayed or enabled new start");
   await workspace().getByRole("button",{name:"録音の受付結果を確認",exact:true}).click();

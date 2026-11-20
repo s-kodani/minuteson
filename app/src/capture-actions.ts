@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { errorMessage, operationNotStarted } from "./app-error";
 import { invoke } from "./ipc.ts";
 import { toasts } from "./toast";
 import type { useCaptureInputs } from "./capture-inputs";
@@ -43,6 +44,8 @@ interface CaptureContext {
   screen: string;
   baseWriteLocked: boolean;
   captureAvailable: boolean;
+  modelCleanupActive: boolean;
+  reconcileModelCleanup: () => void;
   captureInputs: ReturnType<typeof useCaptureInputs>;
   captureScope: ReturnType<typeof useCaptureScope>;
   captureTest: ReturnType<typeof useCaptureTest>;
@@ -88,7 +91,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
   },[activeMicrophoneInput,microphoneSelection?.revision,captureInputs.inputs,captureInputs.mode,captureInputs.uid,microphoneRequest,microphoneSession]);
   const startRecording = async () => {
     const local=screen==="recording"?preparation:null;
-    if ((!selectedMeeting&&!local) || local&&!validRecordingPreparation(local) || !captureInputs.selected || !captureScope.scope || starting.current || closing.current || root.current.baseWriteLocked) return;
+    if ((!selectedMeeting&&!local) || local&&!validRecordingPreparation(local) || !captureInputs.selected || !captureScope.scope || starting.current || closing.current || root.current.baseWriteLocked || root.current.modelCleanupActive) return;
     const owner=local?.id??selectedMeeting!.id;
     const microphoneMode=captureInputs.mode;
     const microphoneUID=microphoneMode==="fixed"?captureInputs.uid:null;
@@ -113,6 +116,10 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
       await startConfirm({ title: "選択した会議の録音を開始しますか？", target: expected.title, confirmLabel: "録音を開始する", message: "", speakerCount: speakerCount.current.value,
         onSpeakerCountChange: value => { if (speakerCount.current.owner === owner) speakerCount.current.value = value; },
         validate: () => ownerUnchanged() && root.current.captureAvailable && root.current.captureInputs.mode===microphoneMode&&(microphoneUID===null||root.current.captureInputs.uid===microphoneUID)&&!!root.current.captureInputs.selected && scopeUnchanged() && !root.current.baseWriteLocked && root.current.state.kind === "ready" && ["idle", "error"].includes(root.current.state.snapshot.phase), action: (numSpeakers = null) => withConfirmedEdits(withSavedEdits, async () => {
+        if (root.current.modelCleanupActive) throw {
+          code: "recording_model_cleanup_not_started", operationId: null, retryDisposition: "not_started",
+          message: "重複モデルを整理中です。録音は開始していません。整理が完了してから再試行してください。",
+        };
         const [meeting, recording, currentImport, currentInputs, currentApplications] = await Promise.all([invoke<CaptureMeeting | null>("get_meeting", { id: expected.id }), invoke<RecordingSnapshot>("get_recording_snapshot"), invoke<ImportSnapshot>("get_audio_import"),invoke("get_capture_inputs").then(checkedCaptureInputs),scope.mode==="application"?invoke("get_capture_applications").then(checkedCaptureApplications):Promise.resolve(null)]);
         assertCloseRecording(recording);
         assertCloseImport(currentImport);
@@ -132,6 +139,12 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
         setSelectedMeeting(accepted);setRenameTitle(accepted.title);setPreparation(null);setScreen("recording");
         setMeetings(await invoke<CaptureMeeting[]>("list_meetings"));
       }), onError: cause => {
+        if (operationNotStarted(cause, "recording_model_cleanup_not_started")) {
+          if (local) setPreparation(current => current?.id === local.id ? { ...current, submitted: false } : current);
+          root.current.reconcileModelCleanup();
+          setCaptureError(errorMessage(cause));
+          return true;
+        }
         setCaptureError(`録音の受付状態を確認してください。開始は自動再送していません: ${String(cause)}`);
         return true;
       } });
@@ -159,7 +172,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
     }finally{setCaptureBusy(false);}
   };
   const startCaptureTest=async(source:HTMLElement)=>{
-    if(!captureOwner||!captureInputs.selected||!captureScope.scope||root.current.baseWriteLocked||starting.current||closing.current)return;
+    if(!captureOwner||!captureInputs.selected||!captureScope.scope||root.current.baseWriteLocked||root.current.modelCleanupActive||starting.current||closing.current)return;
     const owner=captureOwner,uid=captureInputs.uid,scope=checkedCaptureScope(captureScope.scope,captureScope.applications),scopeKey=JSON.stringify(scope);
     const sameInputs=()=>root.current.screen==="recording"&&(root.current.preparation?.id??root.current.selectedMeeting?.id)===owner&&root.current.captureInputs.uid===uid&&JSON.stringify(root.current.captureScope.scope)===scopeKey;
     starting.current=true;setCaptureBusy(true);setCaptureTestError("");
@@ -177,7 +190,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
           (captureInputs.mode==="automatic"?"\nマイクはOSの既定入力を使います。":"")+
           (previous?"\n前のテスト音声は破棄します。":"")+
           (importNeedsConsent(importing)?"\n進行中の取り込みは取り消します。元ファイルは残ります。":""),
-        validate:()=>sameInputs()&&!root.current.baseWriteLocked&&root.current.state.kind==="ready"&&["idle","error"].includes(root.current.state.snapshot.phase),
+        validate:()=>sameInputs()&&!root.current.baseWriteLocked&&!root.current.modelCleanupActive&&root.current.state.kind==="ready"&&["idle","error"].includes(root.current.state.snapshot.phase),
         action:()=>withConfirmedEdits(withSavedEdits,async()=>{
           const [recording,currentImport,inputs,applications]=await Promise.all([
             invoke<RecordingSnapshot>("get_recording_snapshot"),invoke<ImportSnapshot>("get_audio_import"),

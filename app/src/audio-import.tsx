@@ -24,8 +24,8 @@ import { backgroundReadFailure } from "./background-read-failure";
 import { assertCloseImport } from "./application-close";
 
 type Book={payload:VocabularyEntry[];lockVersion:number};
-export function AudioImportPanel({locked,recordingActive,visible,overlayHost,showNewRecording=true,withSavedEdits,onSaved,onNewRecording}: {
-  locked:boolean;recordingActive:boolean;visible:boolean;showNewRecording?:boolean;
+export function AudioImportPanel({locked,recordingActive,visible,overlayHost,modelCleanupActive=false,showNewRecording=true,withSavedEdits,onSaved,onNewRecording}: {
+  locked:boolean;recordingActive:boolean;visible:boolean;showNewRecording?:boolean;modelCleanupActive?:boolean;
   overlayHost:HTMLElement|null;
   withSavedEdits:(action:()=>void|Promise<void>)=>Promise<void | "cancelled">;onSaved:(id:string)=>Promise<void>;onNewRecording:()=>void|Promise<void>;
 }) {
@@ -115,6 +115,7 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
     const next=await invoke<Book>("get_vocabulary_book",{meetingId:null});setCommon(next);
   };
   const select=async(path:string|null)=>{
+    if (modelCleanupActive) return;
     if(selecting.current||busy||snapshotRef.current?.busy||locked||recordingActive||snapshotRef.current?.recordingBlocked){setError("録音・取り込み・保存中は音声を選べません。");return;}
     const sourceOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const expectedInput = JSON.stringify(inputRef.current), expectedToken = snapshotRef.current?.token;
@@ -155,7 +156,7 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
     else try { await dismiss(); } catch (cause) { reportFailure(cause); }
   };
   const start=async()=>{
-    if(!canStartImport(snapshot,title,terms,common?.lockVersion??null,recordingActive)||!snapshot?.token)return;
+    if(modelCleanupActive||!canStartImport(snapshot,title,terms,common?.lockVersion??null,recordingActive)||!snapshot?.token)return;
     await withSavedEdits(async()=>{setBusy(true);setError("");try{
       accept(await invoke<ImportSnapshot>("start_audio_import",{request:{token:snapshot.token,title:title.trim(),options:{meetingVocabulary:terms,expectedGlobalVersion:common!.lockVersion,numSpeakers}}}));
     }catch(cause){setError(String(cause));}finally{setBusy(false);}});
@@ -177,8 +178,8 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
   return <>
     <ToastNotice scope="audio-import" type="result" eventId={`${snapshot?.token}:${snapshot?.phase}`} level="info" message={snapshot?.phase === "cancelled" && !snapshot.busy && !snapshot.errorMessage ? "音声の取り込みを取り消しました。元ファイルと保存済み会議は保持しています。" : ""} />
     <ToastNotice scope="audio-import" type="saved" eventId={snapshot?.saved?.id} message={snapshot?.phase === "saved" && snapshot.saved ? "音声を保存しました。文字起こしを進めます。" : ""} action={snapshot?.saved ? { kind: "open", label: "保存した会議を開く", disabled, run: async () => { const saved = snapshotRef.current?.saved; if (!disabled && saved) await openSaved(saved.meetingId); } } : undefined} />
-    {visible&&<div className="import-entry">{showNewRecording&&<button type="button" disabled={!isTauri()||disabled} onClick={()=>void withSavedEdits(onNewRecording)}>新しい録音</button>}<button type="button" className="secondary" disabled={!isTauri()||disabled} onClick={event=>{event.currentTarget.focus({preventScroll:true});void select(null);}}>音声を取り込む</button><span>WAV・MP3・AAC/ALAC M4A・FLACを選択、または1件ドロップ</span></div>}
-    {hover&&!disabled&&!open&&overlayHost&&createPortal(<div className="audio-drop-overlay" role="status">
+    {visible&&<div className="import-entry">{showNewRecording&&<button type="button" disabled={!isTauri()||disabled} onClick={()=>void withSavedEdits(onNewRecording)}>新しい録音</button>}<button type="button" className="secondary" disabled={!isTauri()||disabled||modelCleanupActive} onClick={event=>{event.currentTarget.focus({preventScroll:true});void select(null);}}>音声を取り込む</button><span>WAV・MP3・AAC/ALAC M4A・FLACを選択、または1件ドロップ</span></div>}
+    {hover&&!disabled&&!modelCleanupActive&&!open&&overlayHost&&createPortal(<div className="audio-drop-overlay" role="status">
       <div className="audio-drop-card">
         <div className="audio-drop-icon" aria-hidden="true">
           <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" focusable="false">
@@ -208,7 +209,7 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,sho
         <div className="speaker-count-fields"><SpeakerCountSelect label="会議全体の話者数" help="人数が分かる場合は指定すると、自動推定による話者の増えすぎを抑えられます。この音声の初回の話者分離に適用します。" value={numSpeakers} onChange={setNumSpeakers}/></div>
         <div className="import-vocabulary-entry"><button ref={vocabularyTrigger} type="button" className="small-secondary" aria-haspopup="dialog" aria-controls={scope?.id??"audio-import-dialog"} aria-expanded={vocabularyOpen} onClick={event=>{event.currentTarget.focus({preventScroll:true});setVocabularyOpen(true);}}>会議の用語（任意）</button><VocabularyHelp label="取り込みの用語" context={<p>取り込みの開始時に会議別用語として保存します。共通用語は現在有効 {common?.payload.filter(e=>e.enabled).length??"—"} 件、適用候補 {effectiveVocabulary(common?.payload??[],terms).length} 件です。実際の文字起こし開始時に使用する用語を固定します。</p>} /></div>
       </fieldset>
-      <div className="analysis-actions"><button type="button" disabled={disabled||!canStartImport(snapshot,title,terms,common?.lockVersion??null,recordingActive)} onClick={()=>void start()}>取り込む</button><button type="button" className="small-secondary" disabled={disabled} onClick={()=>void select(null)}>音声を選び直す</button>{snapshot?.busy&&<button type="button" className="stop-button" disabled={busy||snapshot.phase==="cancelling"} onClick={()=>void cancel()}>取り込みを取り消す</button>}<IconButton label="閉じる" icon="close" type="button" className="small-secondary" disabled={busy||!!snapshot?.busy} data-dialog-cancel onClick={()=>void close()} /></div>
+      <div className="analysis-actions"><button type="button" disabled={disabled||modelCleanupActive||!canStartImport(snapshot,title,terms,common?.lockVersion??null,recordingActive)} onClick={()=>void start()}>取り込む</button><button type="button" className="small-secondary" disabled={disabled||modelCleanupActive} onClick={()=>void select(null)}>音声を選び直す</button>{snapshot?.busy&&<button type="button" className="stop-button" disabled={busy||snapshot.phase==="cancelling"} onClick={()=>void cancel()}>取り込みを取り消す</button>}<IconButton label="閉じる" icon="close" type="button" className="small-secondary" disabled={busy||!!snapshot?.busy} data-dialog-cancel onClick={()=>void close()} /></div>
     </ScopedModal>
   </>;
 }
