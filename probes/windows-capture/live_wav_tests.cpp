@@ -51,6 +51,7 @@ static void failed_checkpoint_preserves_prior_prefix(const char* fault){
     });
     try{feed(recording,pending,8);recording.finish();}catch(const std::exception&){failed=true;}
     try{recording.wait();}catch(const std::exception&){failed=true;}
+    try{recording.preserve_prefix();}catch(const std::exception&){failed=true;}
   }
   const auto tip=json(directory.path/L"single-wav.json");
   const auto expected=std::string_view(fault)=="close"?128000:64000;
@@ -87,6 +88,29 @@ static void fractional_lane_boundaries_keep_every_sample(){
   clipped.close();
   require(clipped.first==origin+99791/479,"fractional test window moved the first accepted sample");
   require(clipped.clock.parts.front().start>=clipped.window_start&&clipped.clock.parts.back().last_end<=clipped.window_end,"fractional test window escaped measured packet bounds");
+}
+
+static void unproven_stop_commits_the_accepted_tail(){
+  Directory directory;auto pending=std::make_shared<product::StoragePending>();
+  product::LiveWav recording(directory.path,recording_owner,pending);
+  feed(recording,pending,1);recording.preserve_prefix();recording.preserve_prefix();
+  const auto tip=json(directory.path/L"single-wav.json");
+  require(tip["frames"]==16000&&tip["checkpoints"]==1&&tip["producerClosed"]==false,"partial stop lost the short accepted tail or invented closure");
+  const auto data=bytes(directory.path/L"recording.wav");
+  require(data.size()==80+32000,"partial stop changed accepted WAV geometry");
+  require(fs::exists(directory.path/L"wav-00000001.json"),"partial stop did not publish a durable receipt");
+}
+
+static void auxiliary_clock_capacity_does_not_reject_shared_pcm(){
+  Directory directory;auto pending=std::make_shared<product::StoragePending>();
+  auto recording=std::make_shared<product::LiveWav>(directory.path,recording_owner,pending);
+  product::WavInput input(directory.path/L"microphone.wav",0,1,recording,1);
+  std::vector<float> pcm(4800,0.25f);
+  input.append(pcm.data(),4800,10000000,11000000,false,0);
+  input.append(pcm.data(),4800,12000000,13000000,true,0);
+  input.finish();recording->finish();
+  require(input.frames==3200&&!input.clock_error().empty(),"auxiliary map capacity discarded valid normalized PCM");
+  require(recording->status()["frames"]==4800&&recording->status()["producerClosed"]==true,"auxiliary map failure prevented shared WAV completion");
 }
 
 int main(){try{
@@ -132,6 +156,8 @@ int main(){try{
   WavInput test(test_directory.path/L"microphone.wav",0,1);test.append(microphone.data(),480,origin,origin+100000,false,0);test.finish();
   const auto test_audio=bytes(test_directory.path/L"microphone.wav");require(test_audio.size()==80+160*2&&test_audio[0]=='R',"five-second lane did not write compact WAV");
   slow_storage_keeps_dsp_independent();
+  unproven_stop_commits_the_accepted_tail();
+  auxiliary_clock_capacity_does_not_reject_shared_pcm();
   fractional_lane_boundaries_keep_every_sample();
   for(const auto* stage:{"pcm_write","pcm_sync","pcm_verify","receipt","tip","close"})failed_checkpoint_preserves_prior_prefix(stage);
   std::cout<<"live WAV native: exact PCM, single file, reservations, checkpoint failures, 100-second gated storage, closure and test WAV passed\n";

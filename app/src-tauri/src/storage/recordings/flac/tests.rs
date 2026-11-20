@@ -554,7 +554,7 @@ fn partial_recovery_sealed_prefix_registers_one_wav_without_fake_closure() {
         std::fs::read(fixture.base.join("manifest.json")).unwrap(),
         manifest
     );
-    assert!(!fixture.base.join("raw-microphone-00000001.caf").exists());
+    assert!(fixture.base.join("raw-microphone-00000001.caf").exists());
     assert_eq!(
         std::fs::read(fixture.base.join("raw-system-00000003.caf")).unwrap(),
         b"unfinished tail"
@@ -699,12 +699,13 @@ fn partial_recovery_one_valid_lane_does_not_guess_missing_or_corrupt_other_input
         assert_eq!(audio.tracks[0].kind, "processed");
         known.unwrap().validate(&audio).unwrap();
         let document = published_document(&fixture.storage, &result.meeting_id);
+        assert_eq!(document["partialRecovery"]["truncated"], true);
         assert_eq!(
             document["partialRecovery"]["lanes"],
             serde_json::to_value(&review.summary.lanes).unwrap()
         );
         assert!(fixture.base.join("raw-microphone-00000001.caf").is_file());
-        assert!(!fixture.base.join("raw-system-00000001.caf").exists());
+        assert!(fixture.base.join("raw-system-00000001.caf").exists());
     }
 }
 
@@ -1081,7 +1082,7 @@ fn assert_partial_whole_meeting_playback(storage: &Storage, meeting: &str, durat
 }
 
 #[test]
-fn partial_recovery_and_normal_stop_consume_1400_maps_without_retaining_lane_audio() {
+fn dense_clocks_preserve_partial_sources_and_retire_normal_completed_audio() {
     for partial in [false, true] {
         let fixture = Fixture::new(7, 2000, true);
         let fixture = if partial {
@@ -1118,7 +1119,10 @@ fn partial_recovery_and_normal_stop_consume_1400_maps_without_retaining_lane_aud
             std::fs::read(fixture.base.join("raw-microphone-00000001.json")).unwrap(),
             original
         );
-        assert!(!fixture.base.join("raw-microphone-00000001.caf").exists());
+        assert_eq!(
+            fixture.base.join("raw-microphone-00000001.caf").exists(),
+            partial
+        );
         assert_partial_whole_meeting_playback(
             &fixture.storage,
             &result.meeting_id,
@@ -1364,7 +1368,7 @@ fn partial_recovery_owned_sigkill_checkpoints_keep_interrupted_and_require_fresh
         known.unwrap().validate(&source).unwrap();
         assert_eq!(source.tracks.len(), 1);
         assert_eq!(source.tracks[0].kind, "processed");
-        assert!(!base.join("raw-microphone-00000001.caf").exists());
+        assert!(base.join("raw-microphone-00000001.caf").exists());
         assert_eq!(
             std::fs::read(base.join("raw-system-00000003.caf")).unwrap(),
             b"unfinished tail"

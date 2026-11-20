@@ -19,6 +19,7 @@ struct TrackStats: Encodable {
   var channels: UInt32?
   var clockSegments: [CapturedClockSegment]?
   var clockFailure: String?
+  var auxiliaryClockFailure: String?
   var timing: CaptureTrackTiming?
   var clockCapacity = 1024
   var inputLevel = PCMInputLevel()
@@ -33,7 +34,7 @@ struct TrackStats: Encodable {
 
   enum CodingKeys: String, CodingKey {
     case callbackCount, frames, firstPresentationTimeSeconds, lastPresentationTimeSeconds
-    case appendFailures, sampleRate, channels, clockSegments, clockFailure
+    case appendFailures, sampleRate, channels, clockSegments, clockFailure, auxiliaryClockFailure
     case microphoneRecovery, systemRecovery
     case rawSegments
     case microphoneFlowTimeouts, clockAlignment

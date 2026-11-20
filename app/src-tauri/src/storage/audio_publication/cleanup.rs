@@ -357,8 +357,6 @@ pub(super) fn finish(
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
     check(storage, cancelled)?;
-    let canonical = storage.verify_canonical_audio(meeting, cancelled)?;
-    let keep = storage.meeting_mix_path(meeting, &canonical.tracks[0])?;
     let (phase, text): (String, String) = storage
         .connection
         .lock()
@@ -372,6 +370,8 @@ pub(super) fn finish(
     if phase == "cleaned" {
         return Ok(());
     }
+    let canonical = storage.verify_canonical_audio(meeting, cancelled)?;
+    let keep = storage.meeting_mix_path(meeting, &canonical.tracks[0])?;
     let files: Vec<RetiredAudio> = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     if storage
         .meeting_owners

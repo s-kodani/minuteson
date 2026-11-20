@@ -160,6 +160,7 @@ final class RawRecordingSegments: @unchecked Sendable {
       result.timing = compactStats.timing
       result.clockSegments = nil
       result.clockAlignment = compactStats.clockAlignment
+      result.auxiliaryClockFailure = compactStats.clockFailure
       result.rawSegments = RawSegmentStatus(
         ownerId: owner, lane: lane, sealedSegments: sealedCount,
         sealedFrames: sealedFrames, lastEntrySHA256: previousHash, producerClosed: closed,
@@ -598,28 +599,34 @@ final class RawRecordingSegments: @unchecked Sendable {
     guard !pcm.isEmpty else { return }
     let frames = Int64(pcm.count)
     if let wavSession {
-      try lock.withLock {
-        compactStats.sampleRate = 16000
-        compactStats.channels = 1
-        if compactStats.timing == nil {
-          compactStats.timing = try CaptureTrackTiming(
-            sampleRate: 16000, maximumSegments: maximumTotalClockSegments)
-        }
-        try compactStats.timing?.recordSaved(
-          frames: frames, observation: .timestamp(start), sourceFrame: nil,
-          sourceEpoch: outputEpoch, captureEndNanoseconds: end)
-        compactStats.frames += frames
-      }
-      compactCaptureEnd = end
-      let saved = lock.withLock { compactStats.frames }
-      var acquired: Int64 = 0
-      while let first = sourceCredits.first, first.frameEnd <= saved {
-        acquired += first.nanoseconds
-        sourceCredits.removeFirst()
-      }
+      let saved = lock.withLock { compactStats.frames } + frames
+      let acquired = sourceCredits.prefix { $0.frameEnd <= saved }
+        .reduce(Int64(0)) { $0 + $1.nanoseconds }
       try wavSession.append(
         lane: lane, epoch: outputEpoch, pcm: pcm, start: start, end: end,
         acquiredNanoseconds: acquired)
+      lock.withLock {
+        compactStats.sampleRate = 16000
+        compactStats.channels = 1
+        // The shared mixer validates PCM order and timestamps. This separate
+        // whole-track map serves diagnostics only and must not revoke audio.
+        if compactStats.clockFailure == nil {
+          do {
+            if compactStats.timing == nil {
+              compactStats.timing = try CaptureTrackTiming(
+                sampleRate: 16000, maximumSegments: maximumTotalClockSegments)
+            }
+            try compactStats.timing?.recordSaved(
+              frames: frames, observation: .timestamp(start), sourceFrame: nil,
+              sourceEpoch: outputEpoch, captureEndNanoseconds: end)
+          } catch { compactStats.clockFailure = String(describing: error) }
+        }
+        compactStats.frames = saved
+      }
+      compactCaptureEnd = end
+      while let first = sourceCredits.first, first.frameEnd <= saved {
+        sourceCredits.removeFirst()
+      }
       return
     }
     if let active, active.frames + frames > 64_000 || active.timing.needsSegmentRollover {

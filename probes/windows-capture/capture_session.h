@@ -269,7 +269,7 @@ struct CaptureSession {
     for(auto* lane:{mic_lane.get(),system_lane.get()})if(lane){lane->cancel_preparation();if(lane->reader)lane->reader->stop();}
     for(auto* lane:{mic_lane.get(),system_lane.get()})if(lane){try{lane->close();}catch(...) {}if(lane->raw){try{lane->raw->drain();lane->raw->seal();}catch(...) {}}}
     if(commits){try{commits->wait();}catch(...) {}}
-    if(live_wav){try{live_wav->wait();}catch(...) {}}
+    if(live_wav){try{live_wav->preserve_prefix();}catch(...) {}}
     if(metadata){metadata->finish();metadata.reset();}
     try{diagnostics("failed",error.what());}catch(...){}
     if(!manifest.is_null()){

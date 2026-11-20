@@ -5,6 +5,93 @@ use std::cell::Cell;
 mod saved_playback;
 
 #[test]
+fn contradictory_frame_size_hints_allow_verified_audio_and_saved_playback() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut input, samples) = source(root.path(), 44100, 2, 12001);
+    let path = root.path().join("contradictory.flac");
+    let info = write_segment(&mut input, 0, 12001, &path, &|| false, &|_| {}).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[12..15].copy_from_slice(&[0xff, 0xff, 0xff]);
+    bytes[15..18].copy_from_slice(&[0, 0, 1]);
+    std::fs::write(&path, &bytes).unwrap();
+    let hash = format!("{:x}", Sha256::digest(&bytes));
+
+    // Reproduce the reported rejection with the unmodified decoder input.
+    let raw = MediaSourceStream::new(
+        Box::new(File::open(&path).unwrap()),
+        MediaSourceStreamOptions::default(),
+    );
+    let error = symphonia::default::get_probe()
+        .format(&Hint::new(), raw, &Default::default(), &Default::default())
+        .err()
+        .unwrap();
+    assert!(error
+        .to_string()
+        .contains("maximum frame length is less than the minimum frame length"));
+
+    let mut audio = read(&path).unwrap();
+    assert_eq!(audio.format.frames, info.frames);
+    for (first, count) in [(0, 30), (4090, 20), (11990, 11)] {
+        assert_samples(&mut audio, first, count, &samples);
+    }
+    // Saving/recovery must still verify the original file hash and source PCM.
+    verify_source(
+        &mut File::open(&path).unwrap(),
+        info.size,
+        &hash,
+        &mut input,
+        0,
+        info.frames,
+        &|| false,
+    )
+    .unwrap();
+    assert!(VerifiedAudio::open(File::open(&path).unwrap(), info.size, &info.sha256).is_err());
+    let mut playback = VerifiedAudio::open_saved_cancellable(
+        File::open(&path).unwrap(),
+        info.size,
+        &hash,
+        &|| false,
+    )
+    .unwrap();
+    for (first, count) in [(11990, 11), (0, 30), (4090, 20)] {
+        assert_samples(&mut playback, first, count, &samples);
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
+fn contradictory_frame_size_hints_do_not_hide_audio_corruption() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut input, _) = source(root.path(), 16000, 1, 9000);
+    let path = root.path().join("corrupt.flac");
+    write_segment(&mut input, 0, 9000, &path, &|| false, &|_| {}).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[12..15].copy_from_slice(&[0xff, 0xff, 0xff]);
+    bytes[15..18].copy_from_slice(&[0, 0, 1]);
+    for defect in ["crc", "md5", "count", "truncated", "block_bounds"] {
+        let mut broken = bytes.clone();
+        match defect {
+            "crc" => *broken.last_mut().unwrap() ^= 1,
+            "md5" => broken[26] ^= 1,
+            "count" => broken[25] ^= 1,
+            "truncated" => {
+                broken.truncate(broken.len() - 9);
+            }
+            "block_bounds" => {
+                broken[8..10].copy_from_slice(&[0xff, 0xff]);
+            }
+            _ => unreachable!(),
+        }
+        std::fs::write(&path, &broken).unwrap();
+        let hash = format!("{:x}", Sha256::digest(&broken));
+        assert!(
+            VerifiedAudio::open(File::open(&path).unwrap(), broken.len() as u64, &hash).is_err(),
+            "accepted {defect}"
+        );
+    }
+}
+
+#[test]
 fn missing_and_duplicated_flac_frames_are_classified_without_accepting_them() {
     let root = tempfile::tempdir().unwrap();
     let (mut input, _) = source(root.path(), 16000, 1, 12_301);

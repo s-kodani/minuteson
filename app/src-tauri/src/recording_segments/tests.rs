@@ -115,6 +115,15 @@ impl Fixture {
         )?
         .ok_or("test prefix absent".into())
     }
+    fn recover(&self) -> Result<Prefix, String> {
+        Prefix::read_recovery_optional(
+            self.directory()?,
+            OWNER,
+            self.lane,
+            &crate::test_support::never_cancelled,
+        )?
+        .ok_or("test prefix absent".into())
+    }
     fn status(&self) -> Status {
         let mut tip: Value = serde_json::from_slice(
             &std::fs::read(self.root.path().join(self.lane.tip_name())).unwrap(),
@@ -122,6 +131,149 @@ impl Fixture {
         .unwrap();
         tip["failure"] = Value::Null;
         serde_json::from_value(tip).unwrap()
+    }
+}
+
+#[test]
+fn recovery_stops_at_first_bad_segment_and_keeps_the_verified_leading_prefix() {
+    for problem in ["receipt", "missing_audio", "hash", "clock", "format"] {
+        let mut fixture = Fixture::new(3, 2000, true);
+        match problem {
+            "receipt" => write(
+                &fixture.root.path().join(fixture.lane.name_at(2, "json")),
+                b"{broken",
+            ),
+            "missing_audio" => {
+                std::fs::remove_file(fixture.root.path().join(fixture.lane.name_at(2, "caf")))
+                    .unwrap();
+            }
+            "hash" => write(
+                &fixture.root.path().join(fixture.lane.name_at(2, "caf")),
+                b"damaged PCM",
+            ),
+            "clock" => {
+                fixture.entries[1]["clockNanoseconds"][0]["endNanoseconds"] = json!(ORIGIN);
+                fixture.publish();
+            }
+            "format" => {
+                fixture.entries[1]["sampleRate"] = json!(16000);
+                fixture.publish();
+            }
+            _ => unreachable!(),
+        }
+        // Later files must not be opened or adopted after the broken entry.
+        std::fs::remove_file(fixture.root.path().join(fixture.lane.name_at(3, "caf"))).unwrap();
+        assert!(fixture.read().is_err(), "strict {problem}");
+        let prefix = fixture.recover().unwrap();
+        assert_eq!(prefix.frames(), 32_000, "{problem}");
+        assert_eq!(prefix.entries().len(), 1, "{problem}");
+        assert!(!prefix.tip.producer_closed);
+        prefix.verify_unchanged(&|| false).unwrap();
+        assert!(fixture
+            .root
+            .path()
+            .join(fixture.lane.name_at(1, "caf"))
+            .exists());
+    }
+}
+
+#[test]
+fn recovery_never_guesses_a_prefix_without_valid_admission_or_first_segment() {
+    for problem in ["owner", "first", "empty_claim"] {
+        let fixture = Fixture::new(2, 2000, true);
+        let tip_path = fixture.root.path().join(fixture.lane.tip_name());
+        match problem {
+            "owner" => {
+                let mut tip: Value =
+                    serde_json::from_slice(&std::fs::read(&tip_path).unwrap()).unwrap();
+                tip["ownerId"] = json!(uuid::Uuid::new_v4().to_string());
+                write(&tip_path, &serde_json::to_vec(&tip).unwrap());
+            }
+            "first" => write(
+                &fixture.root.path().join(fixture.lane.name_at(1, "caf")),
+                b"corrupt first segment",
+            ),
+            "empty_claim" => {
+                std::fs::remove_file(&tip_path).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(fixture.recover().is_err(), "{problem}");
+    }
+    let fixture = Fixture::new(2, 2000, true);
+    assert!(Prefix::read_recovery_optional(
+        fixture.directory().unwrap(),
+        OWNER,
+        fixture.lane,
+        &|| true
+    )
+    .is_err());
+}
+
+#[test]
+fn recovery_accepts_hashed_short_segments_without_relaxing_normal_seal_policy() {
+    let mut fixture = Fixture::new(2, 2000, true);
+    let frames = 16_000;
+    let audio = caf(frames);
+    write(
+        &fixture.root.path().join(fixture.lane.name_at(1, "caf")),
+        &audio,
+    );
+    let first = &mut fixture.entries[0];
+    first["frames"] = json!(frames);
+    first["audioBytes"] = json!(audio.len());
+    first["audioSHA256"] = json!(hash(&audio));
+    first["clockSegments"][0]["sourceFrameEnd"] = json!(frames);
+    first["clockSegments"][0]["timelineEndUs"] = json!(2_000_000);
+    first["clockNanoseconds"][0]["endNanoseconds"] = json!(ORIGIN + 2_000_000_000);
+    fixture.entries[1]["sourceFrameStart"] = json!(frames);
+    fixture.publish();
+    assert!(fixture.read().is_err());
+    let recovered = fixture.recover().unwrap();
+    assert_eq!(recovered.frames(), 18_000);
+    assert_eq!(recovered.entries().len(), 2);
+    assert!(!recovered.is_truncated());
+}
+
+#[test]
+fn recovery_excludes_the_final_entry_when_the_advertised_hash_disagrees() {
+    let fixture = Fixture::new(3, 2000, true);
+    let path = fixture.root.path().join(fixture.lane.tip_name());
+    let mut tip: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    tip["lastEntrySHA256"] = json!("0".repeat(64));
+    write(&path, &serde_json::to_vec(&tip).unwrap());
+    let original = std::fs::read(&path).unwrap();
+    assert!(fixture.read().is_err());
+    let recovered = fixture.recover().unwrap();
+    assert_eq!(recovered.entries().len(), 2);
+    assert_eq!(recovered.frames(), 64_000);
+    assert!(recovered.is_truncated());
+    assert!(!recovered.tip.producer_closed);
+    assert_eq!(std::fs::read(path).unwrap(), original);
+}
+
+#[test]
+fn recovery_normalizes_redundant_frame_count_without_claiming_lost_audio() {
+    for summary in [
+        json!(66_001),
+        json!(0),
+        json!(SAFE + 1),
+        json!("invalid"),
+        Value::Null,
+    ] {
+        let fixture = Fixture::new(3, 2000, true);
+        let path = fixture.root.path().join(fixture.lane.tip_name());
+        let mut tip: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        tip["sealedFrames"] = summary;
+        write(&path, &serde_json::to_vec(&tip).unwrap());
+        let original = std::fs::read(&path).unwrap();
+        assert!(fixture.read().is_err());
+        let recovered = fixture.recover().unwrap();
+        assert_eq!(recovered.entries().len(), 3);
+        assert_eq!(recovered.frames(), 66_000);
+        assert!(!recovered.is_truncated());
+        assert!(!recovered.tip.producer_closed);
+        assert_eq!(std::fs::read(path).unwrap(), original);
     }
 }
 

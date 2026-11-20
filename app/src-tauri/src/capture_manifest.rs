@@ -69,12 +69,21 @@ impl<'de> serde::Deserialize<'de> for UniqueValue {
 }
 
 pub(crate) fn validate_size(bytes: &[u8]) -> Result<(), String> {
+    let value = decode_unique(bytes)?;
+    validate_envelope(&value, bytes.len())
+}
+
+/// Bounded decoding without making diagnostic metadata authority to save PCM.
+pub(crate) fn decode_unique(bytes: &[u8]) -> Result<serde_json::Value, String> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
         return Err("録音manifestの容量が不正です".into());
     }
-    let value = serde_json::from_slice::<UniqueValue>(bytes)
+    Ok(serde_json::from_slice::<UniqueValue>(bytes)
         .map_err(|e| e.to_string())?
-        .0;
+        .0)
+}
+
+fn validate_envelope(value: &serde_json::Value, bytes: usize) -> Result<(), String> {
     if ![CAPTURE_VERSION, crate::current_formats::LEGACY_CAPTURE]
         .iter()
         .any(|v| value["schemaVersion"] == *v)
@@ -85,7 +94,7 @@ pub(crate) fn validate_size(bytes: &[u8]) -> Result<(), String> {
     {
         return Err("非対応の録音manifest形式です".into());
     }
-    if bytes.len() as u64 <= SMALL_MANIFEST_BYTES {
+    if bytes as u64 <= SMALL_MANIFEST_BYTES {
         return Ok(());
     }
     if value["schemaVersion"] == CAPTURE_VERSION
@@ -112,7 +121,8 @@ pub(crate) fn validate_size(bytes: &[u8]) -> Result<(), String> {
             microphone: Track,
             system: Track,
         }
-        let envelope: Envelope = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let envelope: Envelope =
+            serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
         let owner = &envelope.recording_owner_id;
         if envelope.schema_version == crate::current_formats::LEGACY_CAPTURE
             && ["unavailable", "unconfirmed", "reported"]

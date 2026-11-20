@@ -61,12 +61,27 @@ async (page, capturePath) => {
   if(capturePath)await page.screenshot({path:capturePath("recording-recovery-failure.png")});
   results.push("failed recovery remains visible without an endless progress bar");
   const row=page.getByRole("row").filter({hasText:"回復中の会議"});
-  await row.getByRole("button",{name:"保存を再試行",exact:true}).click();
+  const trigger=row.getByRole("button",{name:"回復中の会議の操作",exact:true});
+  const menu=page.getByRole("menu",{name:"回復中の会議の操作",exact:true});
+  const retry=menu.getByRole("menuitem",{name:"保存を再試行",exact:true});
+  check(await row.getByRole("button",{name:"保存を再試行",exact:true}).count()===0&&await row.getByRole("menuitem",{name:"保存を再試行",exact:true}).count()===0,"save retry is visible outside the row menu");
+  await trigger.click();
+  check(await retry.isEnabled(),"failed recording has no enabled save retry in its row menu");
+  await page.keyboard.press("ArrowDown");
+  check(await retry.evaluate(button=>button===document.activeElement),"keyboard navigation skipped save retry");
+  if(capturePath)await page.screenshot({path:capturePath("recording-recovery-retry-menu.png")});
+  await page.keyboard.press("Escape");
+  check(await trigger.evaluate(button=>button===document.activeElement)&&await menu.count()===0,"Escape did not close the menu and restore its trigger");
+  await trigger.click();
+  await retry.click();
+  check(await menu.count()===0,"save retry did not close the row menu");
   await row.getByRole("cell",{name:"録音を保存中",exact:true}).waitFor();
   check(await page.evaluate(()=>window.recordingRecoveryFixture.calls.filter(command=>command==="retry_recording_recovery").length)===1,"retry submitted more than once");
   await page.evaluate(()=>window.recordingRecoveryFixture.finish());
   await row.getByRole("cell",{name:"録音済み",exact:true}).waitFor();
-  check(await row.getByRole("button",{name:"保存を再試行",exact:true}).count()===0,"saved recording still offers retry");
+  await trigger.click();
+  check(await retry.count()===0,"saved recording still offers retry");
+  await page.keyboard.press("Escape");
   results.push("save retry completes without restart and removes the obsolete failed status");
 
   await page.evaluate(()=>window.recordingRecoveryFixture.recordChanged({phase:"idle",sessionId:null,meetingId:null,errorMessage:null}));
@@ -92,5 +107,29 @@ async (page, capturePath) => {
   check(await common().count()===0&&await page.locator('.job-list-rows>li').count()===0&&await page.locator('.job-nav-count').count()===0,"delayed recorder saving revived a completed save job");
   check(await page.evaluate(()=>window.recordingRecoveryFixture.notificationHistory().filter(n=>n.eventId==="recording_save:normal-session:succeeded").length)===1,"normal save completion notification was duplicated");
   results.push("terminal save evidence suppresses late recorder progress without repeating the completion notification");
+
+  const warning="破損箇所の直前までの音声を保存しました。元音声は保持しています。";
+  await page.evaluate(async warning=>{
+    const r=window.recordingRecoveryFixture,item={...r.snapshot.items[0],sessionId:"partial-session",phase:"succeeded",error:null,warning};
+    await r.recordChanged({phase:"saving",sessionId:item.sessionId,meetingId:item.meetingId,errorMessage:null});
+    await r.change({runId:"partial-save",phase:"completed",origin:"stop",targetSessionId:item.sessionId,error:null,items:[item]});
+  },warning);
+  const partial=page.locator(".toast-card").filter({hasText:warning});
+  await partial.waitFor();
+  check(await partial.getByRole("button",{name:"保存を再試行",exact:true}).count()===0,"partial success offered a save retry");
+  await page.evaluate(async()=>{
+    const r=window.recordingRecoveryFixture;
+    await r.recordChanged({phase:"error",errorMessage:"遅延した外側の保存失敗"});
+    await r.change({items:r.snapshot.items.map(item=>({...item}))});
+  });
+  await page.clock.runFor(1200);
+  const partialHistory=await page.evaluate(()=>window.recordingRecoveryFixture.notificationHistory().filter(n=>n.eventId?.startsWith("recording_save:partial-session:")));
+  check(partialHistory.length===1&&partialHistory[0].level==="warning"&&partialHistory[0].message.includes(warning),"partial-save warning was duplicated or replaced by a stale recorder result");
+  check(await common().count()===0&&await page.locator('.job-list-rows>li').count()===0,"partial success revived a saving job");
+  await page.getByRole("button",{name:"会議一覧",exact:true}).first().click();
+  const partialRow=page.getByRole("row").filter({hasText:"回復中の会議"});
+  await partialRow.getByRole("cell",{name:"録音済み",exact:true}).waitFor();
+  check(await partialRow.getByRole("button",{name:"保存を再試行",exact:true}).count()===0,"partial success remained a save error in the meeting list");
+  results.push("partial save publishes one warning, retains the recorded meeting and suppresses late errors without a retry action");
   return {passed:results.length,results};
 }

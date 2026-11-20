@@ -192,6 +192,7 @@ pub(crate) struct Prefix {
     tip: Tip,
     tip_stamp: Stamp,
     entries: Vec<BoundEntry>,
+    truncated: bool,
 }
 
 pub(crate) struct FlacGroup {
@@ -440,6 +441,7 @@ impl Prefix {
             tip: self.tip.clone(),
             tip_stamp: self.tip_stamp.clone(),
             entries: self.entries.clone(),
+            truncated: self.truncated,
         })
     }
     pub(crate) fn lane(&self) -> Lane {
@@ -448,6 +450,9 @@ impl Prefix {
         } else {
             Lane::System
         }
+    }
+    pub(crate) fn is_truncated(&self) -> bool {
+        self.truncated
     }
     /// Bind a review to exact durable generations, not just the last entry's
     /// content hash. Replacing identical bytes or closing the producer still
@@ -483,9 +488,10 @@ impl Prefix {
             .map_err(|e| e.to_string())?,
         ))
     }
-    /// Content evidence only, never a review/consent capability. The complete
-    /// validated tip binds closure, counts and the entry/audio hash chain, but
-    /// deliberately does not bind transport-dependent inode generations.
+    /// Content evidence only, never a review/consent capability. The selected
+    /// prefix binds counts and the entry/audio hash chain; a truncated recovery
+    /// has no producer closure. Transport-dependent inode generations are not
+    /// part of this content key.
     pub(crate) fn content_hash(&self) -> Result<String, String> {
         Ok(hash(
             &serde_json::to_vec(&serde_json::json!({"version":1,"tip":self.tip}))
@@ -654,6 +660,30 @@ impl Prefix {
         lane: Lane,
         check: &impl Fn() -> bool,
     ) -> Result<Option<Self>, String> {
+        Self::read_prefix(directory, owner, lane, check, false)
+    }
+
+    /// Recovery of a closed, unresolved DB-owned recording may retain the
+    /// healthy leading entries before the first damaged segment. This never
+    /// scans beyond the producer's advertised count or skips a broken entry.
+    /// Normal completion, relocation and migration continue to use the strict
+    /// reader above.
+    pub(crate) fn read_recovery_optional(
+        directory: File,
+        owner: &str,
+        lane: Lane,
+        check: &impl Fn() -> bool,
+    ) -> Result<Option<Self>, String> {
+        Self::read_prefix(directory, owner, lane, check, true)
+    }
+
+    fn read_prefix(
+        directory: File,
+        owner: &str,
+        lane: Lane,
+        check: &impl Fn() -> bool,
+        recover: bool,
+    ) -> Result<Option<Self>, String> {
         if !crate::input_levels::valid_owner(owner) {
             return Err("原音声セグメントの録音IDが不正です".into());
         }
@@ -667,7 +697,30 @@ impl Prefix {
             return Ok(None);
         };
         let (bytes, tip_stamp) = read_json(&directory, &name, file, check)?;
-        let tip: Tip = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let (mut tip, invalid_frame_summary): (Tip, bool) = if recover {
+            let mut document = crate::capture_manifest::decode_unique(&bytes)?;
+            let advertised = document["sealedSegments"].as_u64();
+            let invalid_summary = advertised
+                .is_some_and(|count| count > 0 && count <= u64::from(MAX_SEGMENTS))
+                && document["sealedFrames"]
+                    .as_u64()
+                    .is_none_or(|frames| frames == 0 || frames > SAFE);
+            if invalid_summary {
+                // Only this redundant nonempty summary may be normalized.
+                // Count/ownership/hash authority still decode strictly below;
+                // empty claims must retain a genuine numeric zero summary.
+                document["sealedFrames"] = serde_json::json!(1);
+            }
+            (
+                serde_json::from_value(document).map_err(|e| e.to_string())?,
+                invalid_summary,
+            )
+        } else {
+            (
+                serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+                false,
+            )
+        };
         if tip.schema_version != 2
             || tip.owner_id != owner
             || tip.lane != lane.name()
@@ -690,90 +743,152 @@ impl Prefix {
         let mut format = None;
         for sequence in 1..=tip.sealed_segments {
             cancelled(check)?;
-            let json_name = lane.name_at(sequence, "json");
-            let (bytes, json_stamp) = read_json(
-                &directory,
-                &json_name,
-                required(&directory, &json_name)?,
-                check,
-            )?;
-            json_bytes = json_bytes
-                .checked_add(bytes.len() as u64)
-                .filter(|v| *v <= MAX_TOTAL_JSON)
-                .ok_or("原音声セグメントの総JSON容量が上限を超えています")?;
-            let entry: Entry = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-            entry.validate(owner, lane, sequence, frames, previous_hash.as_deref())?;
-            // The native writer may seal before four physical seconds when
-            // its 128-map entry budget reserves two pending/final boundary
-            // slots. Compact producers may also seal before an indivisible
-            // converter packet (at most MAX_OUTPUT_FRAMES) exceeds four
-            // seconds. Do not accept arbitrary short intermediate segments.
-            let compact_packet_boundary = entry.schema_version == 3
-                && entry.frames
-                    > u64::from(entry.sample_rate) * 4
-                        - mon_core::media::voice::MAX_OUTPUT_FRAMES as u64;
-            if sequence < tip.sealed_segments
-                && entry.frames < u64::from(entry.sample_rate) * 4
-                && !(126..=128).contains(&entry.clock_segments.len())
-                && !compact_packet_boundary
-            {
-                return Err("原音声の途中のセグメントが確定条件を満たしていません".into());
-            }
-            if format
-                .is_some_and(|f| f != (entry.sample_rate, entry.channels, entry.schema_version))
-            {
-                return Err("原音声セグメントに未対応の入力形式変更があります".into());
-            }
-            format = Some((entry.sample_rate, entry.channels, entry.schema_version));
-            if previous_end_ns.is_some_and(|end| end > entry.capture_origin_nanoseconds) {
-                return Err("原音声セグメントの取得時刻が重複または逆行しています".into());
-            }
-            previous_end_ns = Some(entry.clock_nanoseconds.last().unwrap().end_nanoseconds);
-            maps = maps
-                .checked_add(entry.clock_segments.len())
-                .filter(|v| *v <= MAX_TOTAL_MAPS)
-                .ok_or("原音声セグメントの総時刻対応数が上限を超えています")?;
-            let file = required(&directory, &entry.audio_name)?;
-            let audio_stamp = Stamp::of(&file)?;
-            if audio_stamp.size != entry.audio_bytes {
-                return Err("原音声セグメントの物理サイズが確定記録と一致しません".into());
-            }
-            let (pcm, size, sha256) = crate::audio::inspect_recorded_caf(
-                file.try_clone().map_err(|e| e.to_string())?,
-                check,
-            )?;
-            if size != entry.audio_bytes
-                || sha256 != entry.audio_sha256
-                || pcm.frames != entry.frames
-                || pcm.sample_rate != entry.sample_rate
-                || pcm.channels != entry.channels
-                || !pcm.is_raw_recording_segment()
-                || (entry.schema_version == 3 && !pcm.is_compact_recording_segment())
-                || (entry.schema_version == 2 && pcm.is_compact_recording_segment())
-            {
-                return Err("原音声セグメントの実音声が確定記録と一致しません".into());
-            }
-            audio_stamp.require(&file)?;
-            audio_stamp.require(&required(&directory, &entry.audio_name)?)?;
-            frames = frames
-                .checked_add(entry.frames)
-                .filter(|v| *v <= SAFE)
-                .ok_or("原音声セグメントの総フレーム数が範囲外です")?;
-            previous_hash = Some(hash(&bytes));
-            entries.push(BoundEntry {
-                entry,
-                json_stamp,
-                audio_stamp,
-            });
+            // Adopt counters only after the entire entry, clock and PCM have
+            // been verified. A failed entry cannot contaminate the prefix.
+            let checked = (|| -> Result<_, String> {
+                let json_name = lane.name_at(sequence, "json");
+                let (bytes, json_stamp) = read_json(
+                    &directory,
+                    &json_name,
+                    required(&directory, &json_name)?,
+                    check,
+                )?;
+                let next_json_bytes = json_bytes
+                    .checked_add(bytes.len() as u64)
+                    .filter(|v| *v <= MAX_TOTAL_JSON)
+                    .ok_or("原音声セグメントの総JSON容量が上限を超えています")?;
+                let entry: Entry = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                entry.validate(owner, lane, sequence, frames, previous_hash.as_deref())?;
+                // The native writer may seal before four physical seconds when
+                // its 128-map entry budget reserves two pending/final boundary
+                // slots. Compact producers may also seal before an indivisible
+                // converter packet (at most MAX_OUTPUT_FRAMES) exceeds four
+                // seconds. Do not accept arbitrary short intermediate segments.
+                let compact_packet_boundary = entry.schema_version == 3
+                    && entry.frames
+                        > u64::from(entry.sample_rate) * 4
+                            - mon_core::media::voice::MAX_OUTPUT_FRAMES as u64;
+                if !recover
+                    && sequence < tip.sealed_segments
+                    && entry.frames < u64::from(entry.sample_rate) * 4
+                    && !(126..=128).contains(&entry.clock_segments.len())
+                    && !compact_packet_boundary
+                {
+                    return Err("原音声の途中のセグメントが確定条件を満たしていません".into());
+                }
+                if format
+                    .is_some_and(|f| f != (entry.sample_rate, entry.channels, entry.schema_version))
+                {
+                    return Err("原音声セグメントに未対応の入力形式変更があります".into());
+                }
+                if previous_end_ns.is_some_and(|end| end > entry.capture_origin_nanoseconds) {
+                    return Err("原音声セグメントの取得時刻が重複または逆行しています".into());
+                }
+                let next_maps = maps
+                    .checked_add(entry.clock_segments.len())
+                    .filter(|v| *v <= MAX_TOTAL_MAPS)
+                    .ok_or("原音声セグメントの総時刻対応数が上限を超えています")?;
+                let file = required(&directory, &entry.audio_name)?;
+                let audio_stamp = Stamp::of(&file)?;
+                if audio_stamp.size != entry.audio_bytes {
+                    return Err("原音声セグメントの物理サイズが確定記録と一致しません".into());
+                }
+                let (pcm, size, sha256) = crate::audio::inspect_recorded_caf(
+                    file.try_clone().map_err(|e| e.to_string())?,
+                    check,
+                )?;
+                if size != entry.audio_bytes
+                    || sha256 != entry.audio_sha256
+                    || pcm.frames != entry.frames
+                    || pcm.sample_rate != entry.sample_rate
+                    || pcm.channels != entry.channels
+                    || !pcm.is_raw_recording_segment()
+                    || (entry.schema_version == 3 && !pcm.is_compact_recording_segment())
+                    || (entry.schema_version == 2 && pcm.is_compact_recording_segment())
+                {
+                    return Err("原音声セグメントの実音声が確定記録と一致しません".into());
+                }
+                audio_stamp.require(&file)?;
+                audio_stamp.require(&required(&directory, &entry.audio_name)?)?;
+                let next_frames = frames
+                    .checked_add(entry.frames)
+                    .filter(|v| *v <= SAFE)
+                    .ok_or("原音声セグメントの総フレーム数が範囲外です")?;
+                let next_hash = hash(&bytes);
+                if recover
+                    && sequence == tip.sealed_segments
+                    && Some(&next_hash) != tip.last_entry_sha256.as_ref()
+                {
+                    return Err("原音声の末尾セグメントと確定ハッシュが一致しません".into());
+                }
+                Ok((
+                    BoundEntry {
+                        entry,
+                        json_stamp,
+                        audio_stamp,
+                    },
+                    next_json_bytes,
+                    next_maps,
+                    next_frames,
+                    next_hash,
+                ))
+            })();
+            let (bound, next_json_bytes, next_maps, next_frames, next_hash) = match checked {
+                Ok(checked) => checked,
+                Err(error) if recover && !entries.is_empty() => {
+                    cancelled(check)?;
+                    crate::internal_logs::detail(
+                        crate::internal_logs::current_context("recording"),
+                        "legacy_prefix_recovery_boundary",
+                        "warning",
+                        std::time::Duration::ZERO,
+                        &format!("{} entry {sequence}: {error}", lane.name()),
+                    );
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
+            json_bytes = next_json_bytes;
+            maps = next_maps;
+            frames = next_frames;
+            previous_hash = Some(next_hash);
+            format = Some((
+                bound.entry.sample_rate,
+                bound.entry.channels,
+                bound.entry.schema_version,
+            ));
+            previous_end_ns = Some(
+                bound
+                    .entry
+                    .clock_nanoseconds
+                    .last()
+                    .unwrap()
+                    .end_nanoseconds,
+            );
+            entries.push(bound);
         }
-        if frames != tip.sealed_frames || previous_hash != tip.last_entry_sha256 {
-            return Err("原音声の確定範囲と実際のセグメント列が一致しません".into());
+        let truncated = entries.len() != tip.sealed_segments as usize;
+        if truncated
+            || invalid_frame_summary
+            || frames != tip.sealed_frames
+            || previous_hash != tip.last_entry_sha256
+        {
+            if !recover || entries.is_empty() {
+                return Err("原音声の確定範囲と実際のセグメント列が一致しません".into());
+            }
+            // The original tip remains pinned by tip_stamp. These in-memory
+            // counts describe only the verified prefix and confer no closure.
+            tip.sealed_segments = entries.len() as u32;
+            tip.sealed_frames = frames;
+            tip.last_entry_sha256 = previous_hash;
+            tip.producer_closed = false;
         }
         let prefix = Self {
             directory,
             tip,
             tip_stamp,
             entries,
+            truncated,
         };
         prefix.verify_unchanged(check)?;
         Ok(Some(prefix))

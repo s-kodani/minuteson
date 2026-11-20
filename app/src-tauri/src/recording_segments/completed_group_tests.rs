@@ -74,6 +74,7 @@ pub(crate) fn maximum_prefix() -> Prefix {
         },
         tip_stamp: stamp,
         entries,
+        truncated: false,
     }
 }
 
