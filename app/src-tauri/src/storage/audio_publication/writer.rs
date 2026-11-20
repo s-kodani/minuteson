@@ -176,7 +176,8 @@ mod tests {
 
     fn completed() -> (tempfile::TempDir, Pending, Vec<u8>) {
         let root = tempfile::tempdir().unwrap();
-        let mut pending = Pending::open(root.path(), "owned-wav", 2).unwrap();
+        let directory = root.path().canonicalize().unwrap();
+        let mut pending = Pending::open(&directory, "owned-wav", 2).unwrap();
         let mut bytes = crate::audio::wave::streaming_header(2).unwrap().to_vec();
         bytes.extend([1, 0, 2, 0]);
         let mut file = pending.begin().unwrap().unwrap();
@@ -193,7 +194,7 @@ mod tests {
     fn completed_descriptor_remains_bound_after_reopen_but_not_after_payload_change() {
         let (root, pending, _) = completed();
         pending.completed_file().unwrap();
-        let resumed = Pending::open(root.path(), "owned-wav", 2).unwrap();
+        let resumed = Pending::open(&root.path().canonicalize().unwrap(), "owned-wav", 2).unwrap();
         resumed.completed_file().unwrap();
         let mut changed = std::fs::OpenOptions::new()
             .append(true)
