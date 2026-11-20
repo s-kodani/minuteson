@@ -32,7 +32,7 @@ impl CaptureManifest {
             return Ok(false);
         }
         let track = &self.microphone;
-        if self.schema_version != crate::current_formats::CAPTURE
+        if self.schema_version != crate::current_formats::LEGACY_CAPTURE
             || self.state != "saved"
             || !self.errors.is_empty()
             || self.recording_owner_id.as_deref() != Some(owner)
@@ -70,7 +70,7 @@ impl CaptureManifest {
         });
         #[cfg(not(unix))]
         let empty_raw = cfg!(windows);
-        if self.schema_version != crate::current_formats::CAPTURE
+        if self.schema_version != crate::current_formats::LEGACY_CAPTURE
             || self.state != "saved"
             || !self.errors.is_empty()
             || self.recording_owner_id.as_deref() != Some(owner)
@@ -109,7 +109,7 @@ impl CaptureManifest {
             }
         }
         match (self.schema_version, &self.capture_clock) {
-            (crate::current_formats::CAPTURE, Some(clock))
+            (crate::current_formats::LEGACY_CAPTURE, Some(clock))
                 if matches!(
                     clock.domain.as_str(),
                     "mach_continuous_time" | "query_performance_counter"
@@ -129,7 +129,7 @@ impl CaptureManifest {
         system: &CaptureTimeline<'_>,
     ) -> Result<Option<&CaptureEnd>, String> {
         match (self.schema_version, &self.capture_end) {
-            (crate::current_formats::CAPTURE, Some(end))
+            (crate::current_formats::LEGACY_CAPTURE, Some(end))
                 if self.recording_owner_id.as_deref() == Some(owner)
                     && crate::input_levels::valid_owner(owner)
                     && end.method == "acquisition_closed"

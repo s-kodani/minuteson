@@ -32,7 +32,8 @@ fn read_existing(
         .map_err(|e| e.to_string())?;
     if frames <= 0
         || end_us != frames * 1_000_000 / 16000
-        || size != crate::audio::wave::header(frames as u64)?.len() as i64 + frames * 2
+        || size < 0
+        || !crate::audio::wave::valid_size(frames as u64, size as u64)
     {
         return Err("共通会議音声の保存形式・フレーム数が不正です".into());
     }

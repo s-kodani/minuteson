@@ -105,6 +105,10 @@ final class NativeCoreAudioCaptureDriver: CoreAudioCaptureDriver, @unchecked Sen
     self.requireIdentity = requireIdentity
   }
 
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void) {
+    ioQueue.async(execute: observation)
+  }
+
   func start(
     sample: @escaping @Sendable (CMSampleBuffer) -> Void,
     failure: @escaping @Sendable (Error) -> Void

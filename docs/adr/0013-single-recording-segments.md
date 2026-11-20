@@ -3,13 +3,15 @@ type: "ADR"
 title: "ADR 0013 録音音声を分割CAFへ一本化する"
 description: "録音中の重複書込みを廃止し、取得・変換と同期保存を分離する。"
 tags: [capture, storage, recovery]
-status: stable
+status: deprecated
 sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/844cb35b7bb166dda26b541cf19da168e4cfe280/probes/windows-capture/raw_segments.h"
   - resource: "https://github.com/s-kodani/minuteson/blob/844cb35b7bb166dda26b541cf19da168e4cfe280/probes/macos-capture/Sources/MONMacOSCapture/RawRecordingSegments.swift"
 ---
 
 # ADR 0013 録音音声を分割CAFへ一本化する
+
+1.0.8の新規録音は[ADR 0014](0014-direct-wav-recording.md)の単一WAV方式へ変更します。本ADRは旧分割CAFの設計と救出条件の記録として保持します。
 
 ## 決定と理由
 

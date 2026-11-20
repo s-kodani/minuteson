@@ -483,6 +483,31 @@ fn interrupt_fixture(fixture: Fixture) -> Fixture {
     fixture
 }
 
+fn published_document(storage: &Storage, meeting: &str) -> Value {
+    let relative:String=storage.connection.lock().unwrap().query_row(
+        "SELECT f.relative_path FROM meeting_audio_commits a JOIN file_assets f ON f.id=a.manifest_asset_id WHERE a.meeting_id=?1",
+        [meeting],|row|row.get(0)).unwrap();
+    serde_json::from_slice(&std::fs::read(storage.root.join(relative)).unwrap()).unwrap()
+}
+fn prepared_wave(storage: &Storage, meeting: &str) -> PathBuf {
+    let parent = storage
+        .root
+        .join("meetings")
+        .join(meeting)
+        .join("audio/meeting-wave");
+    let mut waves = Vec::new();
+    for entry in std::fs::read_dir(parent).unwrap() {
+        let directory = entry.unwrap().path();
+        let plan: Value = serde_json::from_slice(
+            &std::fs::read(directory.join("wave-publication.json")).unwrap(),
+        )
+        .unwrap();
+        waves.push(directory.join(plan["name"].as_str().unwrap()));
+    }
+    assert_eq!(waves.len(), 1);
+    waves.pop().unwrap()
+}
+
 fn partial_registered_rows(fixture: &Fixture) -> i64 {
     fixture
         .storage
@@ -494,7 +519,7 @@ fn partial_registered_rows(fixture: &Fixture) -> i64 {
 }
 
 #[test]
-fn partial_recovery_sealed_prefix_registers_real_flac_and_known_runs_without_fake_closure() {
+fn partial_recovery_sealed_prefix_registers_one_wav_without_fake_closure() {
     let fixture = partial_fixture();
     let review = fixture
         .storage
@@ -508,7 +533,6 @@ fn partial_recovery_sealed_prefix_registers_real_flac_and_known_runs_without_fak
         .lanes
         .iter()
         .all(|lane| lane.state == "available" && lane.frames == 34000));
-    let raw = std::fs::read(fixture.base.join("raw-microphone-00000001.caf")).unwrap();
     let manifest = std::fs::read(fixture.base.join("manifest.json")).unwrap();
     let result = fixture
         .storage
@@ -521,39 +545,23 @@ fn partial_recovery_sealed_prefix_registers_real_flac_and_known_runs_without_fak
         .storage
         .pending_capture_input_for_test(&result.meeting_id)
         .unwrap();
-    assert_eq!(audio.tracks.len(), 2);
-    let known = known.unwrap();
-    assert_eq!(known.runs.len(), 4);
-    known.validate(&audio).unwrap();
-    for track in &audio.tracks {
-        assert_eq!(
-            track.chunks.iter().map(|chunk| chunk.frames).sum::<i64>(),
-            34000
-        );
-    }
-    assert!(known
-        .gaps
-        .iter()
-        .all(|gap| gap.reason_code != "capture_stop_gap"));
-    assert!(known
-        .gaps
-        .iter()
-        .any(|gap| gap.reason_code == "partial_prefix_end_gap"));
-    assert_eq!(
-        std::fs::read(fixture.base.join("raw-microphone-00000001.caf")).unwrap(),
-        raw
-    );
+    assert_eq!(audio.tracks.len(), 1);
+    assert_eq!(audio.tracks[0].kind, "processed");
+    assert_eq!(audio.tracks[0].chunks.len(), 1);
+    assert_eq!(audio.tracks[0].chunks[0].frames, 80000);
+    known.unwrap().validate(&audio).unwrap();
     assert_eq!(
         std::fs::read(fixture.base.join("manifest.json")).unwrap(),
         manifest
     );
+    assert!(!fixture.base.join("raw-microphone-00000001.caf").exists());
     assert_eq!(
         std::fs::read(fixture.base.join("raw-system-00000003.caf")).unwrap(),
         b"unfinished tail"
     );
-    let document: Value =
-        serde_json::from_slice(&std::fs::read(fixture.base.join("partial-recovery.json")).unwrap())
-            .unwrap();
+    assert!(!fixture.base.join(PARTIAL_PLAN).exists());
+    assert!(!fixture.base.join(LOCK).exists());
+    let document = published_document(&fixture.storage, &result.meeting_id);
     assert_eq!(document["state"], "interrupted");
     assert_eq!(document["partialRecovery"]["acquisitionEndKnown"], false);
     assert!(document["partialRecovery"]["tailLossUs"].is_null());
@@ -563,7 +571,7 @@ fn partial_recovery_sealed_prefix_registers_real_flac_and_known_runs_without_fak
         .storage
         .recover_partial_recording(&review, true)
         .is_err());
-    assert_eq!(partial_registered_rows(&fixture), 3);
+    assert_eq!(partial_registered_rows(&fixture), 1);
     drop(fixture.storage);
     let reopened = Storage::open(fixture.temp.path().to_owned()).unwrap();
     assert!(reopened.recover_completed_recordings().unwrap().is_empty());
@@ -688,59 +696,58 @@ fn partial_recovery_one_valid_lane_does_not_guess_missing_or_corrupt_other_input
             .pending_capture_input_for_test(&result.meeting_id)
             .unwrap();
         assert_eq!(audio.tracks.len(), 1);
-        assert_eq!(audio.tracks[0].kind, "system");
-        assert_eq!(known.unwrap().runs.len(), 2);
+        assert_eq!(audio.tracks[0].kind, "processed");
+        known.unwrap().validate(&audio).unwrap();
+        let document = published_document(&fixture.storage, &result.meeting_id);
+        assert_eq!(
+            document["partialRecovery"]["lanes"],
+            serde_json::to_value(&review.summary.lanes).unwrap()
+        );
         assert!(fixture.base.join("raw-microphone-00000001.caf").is_file());
+        assert!(!fixture.base.join("raw-system-00000001.caf").exists());
     }
 }
 
 #[test]
-fn partial_recovery_failed_commit_keeps_all_audio_and_resumes_same_checkpoint_ids() {
+fn partial_recovery_failed_commit_keeps_raw_and_reuses_the_same_owned_wav() {
     let fixture = partial_fixture();
     let review = fixture
         .storage
         .review_partial_recording(&fixture.session.id)
         .unwrap();
-    fixture.storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER reject_partial_commit BEFORE UPDATE OF audio_manifest_hash ON recording_sessions BEGIN SELECT RAISE(ABORT,'injected partial commit failure'); END").unwrap();
+    let raw = std::fs::read(fixture.base.join("raw-microphone-00000001.caf")).unwrap();
+    fixture.reject_partial_commit(true);
     assert!(fixture
         .storage
         .recover_partial_recording(&review, true)
         .is_err());
     assert_eq!(partial_registered_rows(&fixture), 0);
-    assert!(fixture
-        .storage
-        .pending_capture_audio_for_test(&fixture.session.meeting_id)
-        .is_err());
-    let plan = std::fs::read(fixture.base.join(PARTIAL_PLAN)).unwrap();
-    let document = std::fs::read(fixture.base.join("partial-recovery.json")).unwrap();
-    fixture
-        .storage
-        .connection
-        .lock()
-        .unwrap()
-        .execute_batch("DROP TRIGGER reject_partial_commit")
-        .unwrap();
+    assert_eq!(
+        std::fs::read(fixture.base.join("raw-microphone-00000001.caf")).unwrap(),
+        raw
+    );
+    let wave = prepared_wave(&fixture.storage, &fixture.session.meeting_id);
+    let stamp = Stamp::read(&File::open(&wave).unwrap()).unwrap();
+    let bytes = std::fs::read(&wave).unwrap();
+    assert!(!fixture.base.join(PARTIAL_PLAN).exists());
+    fixture.reject_partial_commit(false);
     drop(fixture.storage);
     let reopened = Storage::open(fixture.temp.path().to_owned()).unwrap();
-    let review = reopened
+    let fresh = reopened
         .review_partial_recording(&fixture.session.id)
         .unwrap();
-    let result = reopened.recover_partial_recording(&review, true).unwrap();
+    let result = reopened.recover_partial_recording(&fresh, true).unwrap();
+    assert_eq!(result.state, "interrupted");
+    stamp.require(&File::open(&wave).unwrap()).unwrap();
+    assert_eq!(std::fs::read(&wave).unwrap(), bytes);
     assert_eq!(
-        std::fs::read(fixture.base.join(PARTIAL_PLAN)).unwrap(),
-        plan
+        reopened
+            .verify_canonical_audio(&result.meeting_id, &|| false)
+            .unwrap()
+            .tracks
+            .len(),
+        1
     );
-    assert_eq!(
-        std::fs::read(fixture.base.join("partial-recovery.json")).unwrap(),
-        document
-    );
-    let plan: Plan = serde_json::from_slice(&plan).unwrap();
-    let (audio, _) = reopened
-        .pending_capture_input_for_test(&result.meeting_id)
-        .unwrap();
-    for track in &audio.tracks {
-        assert!(plan.tracks.iter().any(|item| item.id == track.id));
-    }
 }
 
 #[test]
@@ -874,32 +881,21 @@ fn partial_startup_contradictory_saved_metadata_fails_closed_instead_of_disappea
         .storage
         .recover_partial_recording(&review, true)
         .unwrap();
-    let original: String = fixture
-        .storage
-        .connection
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT processing_config_json FROM audio_tracks WHERE session_id=?1 AND kind='system'",
-            [&fixture.session.id],
-            |row| row.get(0),
-        )
-        .unwrap();
+    let original:String=fixture.storage.connection.lock().unwrap().query_row(
+        "SELECT processing_config_json FROM audio_tracks WHERE session_id=?1 AND kind='processed'",
+        [&fixture.session.id],|row|row.get(0)).unwrap();
     for change in [
         "json_set(processing_config_json,'$.partial_recovery.lanes[0].frames',1)",
         "json_set(processing_config_json,'$.partial_recovery',NULL)",
         "json_set(processing_config_json,'$.partial_recovery.reviewHash','invalid')",
         "json_set(processing_config_json,'$.padding',printf('%.*c',4194305,'x'))",
     ] {
-        fixture.storage.connection.lock().unwrap().execute(&format!(
-            "UPDATE audio_tracks SET processing_config_json={change} WHERE session_id=?1 AND kind='system'"), [&fixture.session.id]).unwrap();
+        fixture.storage.connection.lock().unwrap().execute(&format!("UPDATE audio_tracks SET processing_config_json={change} WHERE session_id=?1 AND kind='processed'"),[&fixture.session.id]).unwrap();
         assert!(
             fixture.storage.partial_recovery_listing(None).is_err(),
             "{change}"
         );
-        fixture.storage.connection.lock().unwrap().execute(
-            "UPDATE audio_tracks SET processing_config_json=?1 WHERE session_id=?2 AND kind='system'",
-            rusqlite::params![original, fixture.session.id]).unwrap();
+        fixture.storage.connection.lock().unwrap().execute("UPDATE audio_tracks SET processing_config_json=?1 WHERE session_id=?2 AND kind='processed'",params![original,fixture.session.id]).unwrap();
     }
     fixture
         .storage
@@ -907,7 +903,7 @@ fn partial_startup_contradictory_saved_metadata_fails_closed_instead_of_disappea
         .lock()
         .unwrap()
         .execute(
-            "UPDATE audio_tracks SET channels=1 WHERE session_id=?1 AND kind='system'",
+            "UPDATE audio_tracks SET channels=2 WHERE session_id=?1 AND kind='processed'",
             [&fixture.session.id],
         )
         .unwrap();
@@ -916,16 +912,7 @@ fn partial_startup_contradictory_saved_metadata_fails_closed_instead_of_disappea
         .storage
         .partial_recovery_result(&fixture.session.id, &review.summary.review_hash)
         .is_err());
-    fixture
-        .storage
-        .connection
-        .lock()
-        .unwrap()
-        .execute(
-            "UPDATE audio_tracks SET channels=2,kind='mic' WHERE session_id=?1 AND kind='system'",
-            [&fixture.session.id],
-        )
-        .unwrap();
+    fixture.storage.connection.lock().unwrap().execute("UPDATE audio_tracks SET channels=1,kind='mic' WHERE session_id=?1 AND kind='processed'",[&fixture.session.id]).unwrap();
     assert!(fixture.storage.partial_recovery_listing(None).is_err());
 }
 
@@ -940,18 +927,29 @@ fn partial_startup_history_paginates_201_registered_metadata_rows_without_claimi
         .storage
         .recover_partial_recording(&review, true)
         .unwrap();
-    // Metadata-only pagination fixture, not 200 additional capture/conversion claims.
+    // Clone only the admitted metadata graph; these rows claim no new bodies.
     let mut db = fixture.storage.connection.lock().unwrap();
     let tx = db.transaction().unwrap();
+    let (old_track,old_manifest,old_audio):(String,String,String)=tx.query_row(
+        "SELECT a.track_id,a.manifest_asset_id,c.file_asset_id FROM meeting_audio_commits a JOIN audio_chunks c ON c.track_id=a.track_id WHERE a.meeting_id=?1",
+        [&fixture.session.meeting_id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
     for _ in 0..200 {
         let meeting = Uuid::new_v4().to_string();
         let session = Uuid::new_v4().to_string();
-        tx.execute("INSERT INTO meetings(id,title,duration_us,lifecycle,source_type,created_at,updated_at) SELECT ?1,title,duration_us,lifecycle,source_type,created_at,updated_at FROM meetings WHERE id=?2", rusqlite::params![meeting, fixture.session.meeting_id]).unwrap();
-        tx.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at) SELECT ?1,?2,state,capture_mode,capture_config_json,?3,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at FROM recording_sessions WHERE id=?4", rusqlite::params![session,meeting,Uuid::new_v4().to_string(),fixture.session.id]).unwrap();
-        tx.execute("INSERT INTO file_assets(id,meeting_id,storage_scope,relative_path,media_type,size_bytes,hash_algorithm,content_hash,state,created_at,updated_at) SELECT ?1,?2,storage_scope,?3,media_type,size_bytes,hash_algorithm,content_hash,state,created_at,updated_at FROM file_assets WHERE meeting_id=?4 AND media_type='application/json'", rusqlite::params![Uuid::new_v4().to_string(),meeting,format!("meetings/{meeting}/history.json"),fixture.session.meeting_id]).unwrap();
-        for kind in ["mic", "system"] {
-            tx.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) SELECT ?1,?2,?3,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at FROM audio_tracks WHERE session_id=?4 AND kind=?5", rusqlite::params![Uuid::new_v4().to_string(),meeting,session,fixture.session.id,kind]).unwrap();
+        let track = Uuid::new_v4().to_string();
+        let manifest = Uuid::new_v4().to_string();
+        let audio = Uuid::new_v4().to_string();
+        tx.execute("INSERT INTO meetings(id,title,duration_us,lifecycle,source_type,created_at,updated_at) SELECT ?1,title,duration_us,lifecycle,source_type,created_at,updated_at FROM meetings WHERE id=?2",params![meeting,fixture.session.meeting_id]).unwrap();
+        tx.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at) SELECT ?1,?2,state,capture_mode,capture_config_json,?3,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at FROM recording_sessions WHERE id=?4",params![session,meeting,Uuid::new_v4().to_string(),fixture.session.id]).unwrap();
+        for (new_id, old_id, name) in [
+            (&manifest, &old_manifest, "history.json"),
+            (&audio, &old_audio, "history.wav"),
+        ] {
+            tx.execute("INSERT INTO file_assets(id,meeting_id,storage_scope,relative_path,media_type,size_bytes,hash_algorithm,content_hash,state,created_at,updated_at) SELECT ?1,?2,storage_scope,?3,media_type,size_bytes,hash_algorithm,content_hash,state,created_at,updated_at FROM file_assets WHERE id=?4",params![new_id,meeting,format!("meetings/{meeting}/{name}"),old_id]).unwrap();
         }
+        tx.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) SELECT ?1,?2,?3,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at FROM audio_tracks WHERE id=?4",params![track,meeting,session,old_track]).unwrap();
+        tx.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) SELECT ?1,?2,?3,?4,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at FROM audio_chunks WHERE track_id=?5",params![Uuid::new_v4().to_string(),meeting,track,audio,old_track]).unwrap();
+        tx.execute("INSERT INTO meeting_audio_commits(meeting_id,track_id,manifest_asset_id,manifest_hash,frames,source_json,cleanup_json,phase,created_at) SELECT ?1,?2,?3,manifest_hash,frames,source_json,'[]','cleaned',created_at FROM meeting_audio_commits WHERE meeting_id=?4",params![meeting,track,manifest,fixture.session.meeting_id]).unwrap();
     }
     tx.commit().unwrap();
     drop(db);
@@ -1083,7 +1081,7 @@ fn assert_partial_whole_meeting_playback(storage: &Storage, meeting: &str, durat
 }
 
 #[test]
-fn partial_recovery_and_normal_stop_whole_meeting_playback_keep_1400_maps_per_track() {
+fn partial_recovery_and_normal_stop_consume_1400_maps_without_retaining_lane_audio() {
     for partial in [false, true] {
         let fixture = Fixture::new(7, 2000, true);
         let fixture = if partial {
@@ -1092,6 +1090,7 @@ fn partial_recovery_and_normal_stop_whole_meeting_playback_keep_1400_maps_per_tr
             fixture
         };
         dense_raw_maps(&fixture);
+        let original = std::fs::read(fixture.base.join("raw-microphone-00000001.json")).unwrap();
         let result = if partial {
             let review = fixture
                 .storage
@@ -1112,21 +1111,14 @@ fn partial_recovery_and_normal_stop_whole_meeting_playback_keep_1400_maps_per_tr
             .pending_capture_input_for_test(&result.meeting_id)
             .unwrap();
         known.unwrap().validate(&source).unwrap();
-        for track in &source.tracks {
-            assert!((1..=2).contains(&track.chunks.len()));
-            assert_eq!(
-                track
-                    .chunks
-                    .iter()
-                    .map(|chunk| chunk.clock_segments.len())
-                    .sum::<usize>(),
-                1400
-            );
-            assert!(track
-                .chunks
-                .iter()
-                .all(|chunk| chunk.clock_segments.len() <= crate::audio_clock::MAX_CLOCK_SEGMENTS));
-        }
+        assert_eq!(source.tracks.len(), 1);
+        assert_eq!(source.tracks[0].kind, "processed");
+        assert_eq!(source.tracks[0].chunks.len(), 1);
+        assert_eq!(
+            std::fs::read(fixture.base.join("raw-microphone-00000001.json")).unwrap(),
+            original
+        );
+        assert!(!fixture.base.join("raw-microphone-00000001.caf").exists());
         assert_partial_whole_meeting_playback(
             &fixture.storage,
             &result.meeting_id,
@@ -1136,7 +1128,7 @@ fn partial_recovery_and_normal_stop_whole_meeting_playback_keep_1400_maps_per_tr
 }
 
 #[test]
-fn partial_recovery_commit_marker_cannot_authorize_unmarked_track_or_invent_known_end() {
+fn partial_recovery_commit_marker_cannot_invent_another_review_or_known_end() {
     let fixture = partial_fixture();
     let review = fixture
         .storage
@@ -1147,67 +1139,57 @@ fn partial_recovery_commit_marker_cannot_authorize_unmarked_track_or_invent_know
         .recover_partial_recording(&review, true)
         .unwrap();
     assert_partial_whole_meeting_playback(&fixture.storage, &result.meeting_id, result.duration_us);
-    let db = fixture.storage.connection.lock().unwrap();
-    let track: String = db
+    let original: String = fixture
+        .storage
+        .connection
+        .lock()
+        .unwrap()
         .query_row(
-            "SELECT id FROM audio_tracks WHERE kind='system'",
+            "SELECT processing_config_json FROM audio_tracks WHERE kind='processed'",
             [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let original: String = db
-        .query_row(
-            "SELECT processing_config_json FROM audio_tracks WHERE id=?1",
-            [&track],
             |row| row.get(0),
         )
         .unwrap();
     let mut changed: Value = serde_json::from_str(&original).unwrap();
     changed["partial_recovery"]["reviewHash"] = json!("f".repeat(64));
-    db.execute(
-        "UPDATE audio_tracks SET processing_config_json=?1 WHERE id=?2",
-        params![changed.to_string(), track],
-    )
-    .unwrap();
-    assert!(
-        !crate::storage::transcription::partial_recording_committed(&db, &result.meeting_id)
-            .unwrap()
-    );
-    db.execute(
-        "UPDATE audio_tracks SET processing_config_json='{}' WHERE id=?1",
-        [&track],
-    )
-    .unwrap();
-    drop(db);
+    fixture
+        .storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE audio_tracks SET processing_config_json=?1 WHERE kind='processed'",
+            [changed.to_string()],
+        )
+        .unwrap();
+    assert!(fixture.storage.partial_recovery_listing(None).is_err());
     assert!(fixture
         .storage
         .pending_capture_input_for_test(&result.meeting_id)
         .is_err());
-    use crate::storage::meeting_playback::{MeetingPlaybackMode, MeetingPlaybackRequest};
-    assert!(fixture
+    // A damaged history marker does not alter the independently verified PCM.
+    assert_partial_whole_meeting_playback(&fixture.storage, &result.meeting_id, result.duration_us);
+    fixture
         .storage
-        .prepare_meeting_audio(&MeetingPlaybackRequest {
-            start_reference: None,
-            meeting_id: result.meeting_id.clone(),
-            mode: MeetingPlaybackMode::Mixed
-        })
-        .is_ok());
-    let db = fixture.storage.connection.lock().unwrap();
-    db.execute(
-        "UPDATE audio_tracks SET processing_config_json=?1 WHERE id=?2",
-        params![original, track],
-    )
-    .unwrap();
-    db.execute(
-        "UPDATE recording_sessions SET ended_at_utc_ms=123 WHERE id=?1",
-        [&result.id],
-    )
-    .unwrap();
-    assert!(
-        !crate::storage::transcription::partial_recording_committed(&db, &result.meeting_id)
-            .unwrap()
-    );
-    drop(db);
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE audio_tracks SET processing_config_json=?1 WHERE kind='processed'",
+            [original],
+        )
+        .unwrap();
+    fixture
+        .storage
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE recording_sessions SET ended_at_utc_ms=123 WHERE id=?1",
+            [&result.id],
+        )
+        .unwrap();
+    assert!(fixture.storage.partial_recovery_listing(None).is_err());
     assert!(fixture
         .storage
         .pending_capture_input_for_test(&result.meeting_id)
@@ -1260,9 +1242,7 @@ fn partial_recovery_preserves_original_failure_observation_without_claiming_acqu
         .unwrap();
     assert_eq!(result.state, "interrupted");
     assert_eq!(result.ended_at_utc_ms, None);
-    let document: Value =
-        serde_json::from_slice(&std::fs::read(fixture.base.join("partial-recovery.json")).unwrap())
-            .unwrap();
+    let document: Value = published_document(&fixture.storage, &fixture.session.meeting_id);
     assert_eq!(document["partialRecovery"]["originalState"], "failed");
     assert_eq!(
         document["partialRecovery"]["originalObservedEndUtcMs"],
@@ -1296,7 +1276,10 @@ fn partial_recovery_crash_child() {
     let owner = std::env::var("MON_FINAL_FLAC_CRASH_OWNER").unwrap();
     let storage = Storage::open(root).unwrap();
     let review = storage.review_partial_recording(&owner).unwrap();
-    storage.recover_partial_recording(&review, true).unwrap();
+    // Exercise historical producer crash receipts explicitly. The current
+    // recovery path writes only its final WAV and has no FLAC boundaries.
+    drop(review.legacy_publication_for_test(&storage).unwrap());
+    crash_point("partial-before-db-commit");
     panic!("owned partial-recovery child failed to reach its crash point");
 }
 
@@ -1342,8 +1325,12 @@ fn partial_recovery_owned_sigkill_checkpoints_keep_interrupted_and_require_fresh
         );
         let reopened = Storage::open(temp.path().to_owned()).unwrap();
         assert!(reopened.recover_completed_recordings().unwrap().is_empty());
+        assert_eq!(
+            std::fs::read(base.join("raw-microphone-00000001.caf")).unwrap(),
+            original
+        );
         let plan_bytes = std::fs::read(base.join(PARTIAL_PLAN)).unwrap();
-        let plan: Plan = serde_json::from_slice(&plan_bytes).unwrap();
+        let _: Plan = serde_json::from_slice(&plan_bytes).unwrap();
         {
             let db = reopened.connection.lock().unwrap();
             let current = load_session(&db, &session.id).unwrap().unwrap();
@@ -1374,14 +1361,10 @@ fn partial_recovery_owned_sigkill_checkpoints_keep_interrupted_and_require_fresh
         let (source, known) = reopened
             .pending_capture_input_for_test(&result.meeting_id)
             .unwrap();
-        assert_eq!(known.unwrap().runs.len(), 4);
-        for track in &source.tracks {
-            assert!(plan.tracks.iter().any(|planned| planned.id == track.id));
-        }
-        assert_eq!(
-            std::fs::read(base.join("raw-microphone-00000001.caf")).unwrap(),
-            original
-        );
+        known.unwrap().validate(&source).unwrap();
+        assert_eq!(source.tracks.len(), 1);
+        assert_eq!(source.tracks[0].kind, "processed");
+        assert!(!base.join("raw-microphone-00000001.caf").exists());
         assert_eq!(
             std::fs::read(base.join("raw-system-00000003.caf")).unwrap(),
             b"unfinished tail"
@@ -1404,24 +1387,24 @@ impl Storage {
     > {
         let db = self.connection.lock().unwrap();
         crate::storage::deletion::audio::require_source(&db, meeting)?;
-        let interrupted:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE meeting_id=?1 AND state='interrupted')",[meeting],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if interrupted && !crate::storage::transcription::partial_recording_committed(&db, meeting)?
-        {
-            return Err("部分救出の元の確定記録が変更されています".into());
-        }
-        let saved: Option<String> = db
+        let canonical: bool = db
             .query_row(
-                "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
+                "SELECT EXISTS(SELECT 1 FROM meeting_audio_commits WHERE meeting_id=?1)",
                 [meeting],
-                |r| r.get(0),
+                |row| row.get(0),
             )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        let source = if let Some(json) = saved {
-            serde_json::from_str(&json).map_err(|e| e.to_string())?
-        } else {
-            crate::storage::audio_publication::inputs::read(&db, meeting)?
-        };
+            .map_err(|error| error.to_string())?;
+        if canonical {
+            let interrupted:Option<(String,Option<String>)>=db.query_row("SELECT r.id,json_extract(t.processing_config_json,'$.partial_recovery.reviewHash') FROM recording_sessions r JOIN meeting_audio_commits a ON a.meeting_id=r.meeting_id JOIN audio_tracks t ON t.id=a.track_id WHERE r.meeting_id=?1 AND r.state='interrupted'",[meeting],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|error.to_string())?;
+            drop(db);
+            if let Some((session, hash)) = interrupted {
+                let hash = hash.ok_or("部分救出の正式記録がありません")?;
+                self.partial_recovery_result(&session, &hash)?
+                    .ok_or("部分救出の正式記録が変更されています")?;
+            }
+            return self.recorded_analysis_input(meeting);
+        }
+        let source = crate::storage::audio_publication::inputs::read(&db, meeting)?;
         let known = crate::storage::transcription::known::read(&db, meeting, &source)?;
         Ok((source, Some(known)))
     }

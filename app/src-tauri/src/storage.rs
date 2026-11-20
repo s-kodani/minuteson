@@ -105,7 +105,8 @@ pub(crate) use vocabulary::{
     VocabularyBook, VocabularyEntry, VocabularySnapshot, VocabularyStamp, VocabularyView,
 };
 
-pub(crate) const SCHEMA_VERSION: usize = 39;
+pub(crate) const SCHEMA_VERSION: usize = 40;
+mod schema_40;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,6 +154,8 @@ pub struct Storage {
     native_models_root: PathBuf,
     #[cfg(any(target_os = "macos", windows))]
     flac_history: Option<std::sync::Arc<recordings::flac::relocation::Aliases>>,
+    #[cfg(any(target_os = "macos", windows))]
+    wav_history: Option<std::sync::Arc<backup::relocation::wav::Aliases>>,
     #[cfg(any(target_os = "macos", windows))]
     _reset_guard: std::sync::Arc<crate::bootstrap::reset::RootLease>,
 }
@@ -297,7 +300,8 @@ impl Storage {
         admission.verify()?;
         let flac_history = recordings::flac::relocation::admitted_history(admission)?;
         let history = deletion::relocation::receiver::admitted_history(admission)?;
-        let storage = Self::open_inner(
+        let wav_history = backup::relocation::wav::admitted_history(admission)?;
+        let mut storage = Self::open_inner(
             admission.root().to_owned(),
             Some(admission.models_root().to_owned()),
             history,
@@ -307,6 +311,7 @@ impl Storage {
             None,
         )
         .map_err(|e| e.to_string())?;
+        storage.wav_history = wav_history;
         admission.verify()?;
         Ok(storage)
     }
@@ -372,6 +377,32 @@ impl Storage {
             if db.query_row(sql, [], |r| r.get::<_, bool>(0)).map_err(|e| e.to_string())? { pending.push(reason.into()); }
         }
         Ok(pending)
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    fn validate_rebinding_before_migration(db: &Connection) -> Result<Vec<String>, String> {
+        // Recovery admission precedes the one supported DB upgrade. Its
+        // schema39 exception requires a query-only connection, even though
+        // startup owns this connection for the later writable migration.
+        let previous: bool = db
+            .query_row("PRAGMA query_only", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        if !previous {
+            db.execute_batch("PRAGMA query_only=ON;")
+                .map_err(|error| error.to_string())?;
+        }
+        let validated = Self::validate_rebinding(db);
+        if !previous {
+            // Restore on validation failure as well. A restore failure stops
+            // startup before journal changes, migration or cleanup can run.
+            if let Err(error) = db.execute_batch("PRAGMA query_only=OFF;") {
+                return Err(match validated {
+                    Err(original) => format!("{original}。DB接続の状態を戻せません: {error}"),
+                    Ok(_) => format!("DB接続の状態を戻せません: {error}"),
+                });
+            }
+        }
+        validated
     }
 
     fn open_inner(
@@ -460,7 +491,7 @@ impl Storage {
         if let Some(admission) = recovery {
             // Verify again through SQLite before any mutable startup work.
             // Admission checks only metadata and never closes another live DB FD.
-            Self::validate_rebinding(&connection)?;
+            Self::validate_rebinding_before_migration(&connection)?;
             recovery_hold = admission.pending();
             admission.verify()?;
             recovery_content
@@ -566,6 +597,8 @@ impl Storage {
             _reset_guard: reset_guard,
             #[cfg(any(target_os = "macos", windows))]
             flac_history,
+            #[cfg(any(target_os = "macos", windows))]
+            wav_history: None,
         })
     }
 
@@ -917,7 +950,7 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
         |row| row.get(0),
     )?;
     if !empty {
-        verify_database_schema(connection)?;
+        schema_40::verify_startup(connection)?;
     }
     Ok(empty)
 }
@@ -931,14 +964,14 @@ fn initialize_database_with_guidance(
     guidance: bool,
 ) -> Result<(), Box<dyn Error>> {
     if !empty_or_current_database(connection)? {
-        return Ok(());
+        return schema_40::migrate(connection);
     }
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if !empty_or_current_database(&transaction)? {
         return Ok(());
     }
-    transaction.execute_batch(SCHEMA_SQL)?;
+    transaction.execute_batch(canonical_schema_sql())?;
     if guidance {
         model_download_guidance::seed(&transaction)?;
     }
@@ -950,29 +983,18 @@ fn initialize_database_with_guidance(
     Ok(())
 }
 
+fn canonical_schema_sql() -> &'static str {
+    static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SQL.get_or_init(|| SCHEMA_SQL.replace("\r\n", "\n"))
+}
+
 fn schema_checksum() -> &'static str {
     static CHECKSUM: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CHECKSUM.get_or_init(|| format!("{:x}", Sha256::digest(SCHEMA_SQL.as_bytes())))
+    CHECKSUM.get_or_init(|| format!("{:x}", Sha256::digest(canonical_schema_sql().as_bytes())))
 }
 
 pub(crate) fn verify_database_schema(connection: &Connection) -> Result<(), Box<dyn Error>> {
-    let unsupported = "非対応の会議DB形式です。元のデータを保持しています";
-    let mut query = connection
-        .prepare("SELECT version, checksum FROM schema_migrations ORDER BY version DESC LIMIT 2")
-        .map_err(|error| format!("{unsupported}: {error}"))?;
-    let mut rows = query.query([])?;
-    let Some(row) = rows.next()? else {
-        return Err(unsupported.into());
-    };
-    let version: i64 = row.get(0)?;
-    let checksum: String = row.get(1)?;
-    if version != SCHEMA_VERSION as i64 || checksum != schema_checksum() || rows.next()?.is_some() {
-        return Err(format!(
-            "{unsupported}（記録された形式版: {version}、対応形式版: {SCHEMA_VERSION}）"
-        )
-        .into());
-    }
-    Ok(())
+    schema_40::current_layout(connection).map(|_| ())
 }
 
 fn hash_file(path: &Path) -> Result<(i64, String), String> {

@@ -147,9 +147,10 @@ struct Manifest: Encodable {
   var microphoneSelectionError: String? = nil
   var timingEstimated: Bool? = nil
   var observedCaptureEnd: CaptureEndMetadata? = nil
+  var singleWav: SingleWavStatus? = nil
 
   mutating func finalizeClock(_ clock: CaptureClockDomain) throws {
-    guard schemaVersion == 4,
+    guard schemaVersion == 4 || schemaVersion == 5,
       let micStart = microphone.firstCaptureNanoseconds,
       let systemStart = system.firstCaptureNanoseconds
     else { throw ProbeError.capture("both capture clocks are required for schema 2") }
@@ -168,7 +169,7 @@ struct Manifest: Encodable {
       previous.windowStartNs == completed.windowStartNs,
       previous.windowEndNs == completed.windowEndNs
     else { throw ProbeError.capture("capture test completion does not match its starting window") }
-    guard schemaVersion == 4, completed.completed == true else {
+    guard schemaVersion == 4 || schemaVersion == 5, completed.completed == true else {
       throw ProbeError.capture("completed capture test is required")
     }
     captureTest = completed
@@ -223,11 +224,11 @@ struct Manifest: Encodable {
   mutating func finalizeStoppedClock(
     _ clock: CaptureClockDomain, microphoneClosure: CaptureClosure?, systemClosure: CaptureClosure?
   ) throws {
-    guard schemaVersion == 4, captureTest == nil,
+    guard schemaVersion == 4 || schemaVersion == 5, captureTest == nil,
       let owner = recordingOwnerId, InputLevelReport.validOwner(owner),
       let microphoneClosure, let systemClosure
     else { throw ProbeError.capture("recording owner and both acquisition closures are required") }
-    let origin = try finishAvailableClocks(owner: owner)
+    let origin = try finishAvailableClocks(owner: schemaVersion == 4 ? owner : nil)
     let (metadata, ending) = try clock.ending(
       originNanoseconds: origin, microphone: microphoneClosure, system: systemClosure)
     guard let micEnd = microphone.frames == 0 ? 0 : microphone.clockSegments?.last?.timelineEndUs,
@@ -262,7 +263,6 @@ struct Manifest: Encodable {
         ? max(metadata.uncertaintyNs, end * 1000 + 1_000_000) : metadata.uncertaintyNs)
     captureEnd = CaptureEndMetadata(
       microphoneClosedUs: micClosed, systemClosedUs: pcClosed, endUs: end)
-    schemaVersion = 4
   }
 
   func encodedData() throws -> Data {
@@ -273,7 +273,7 @@ struct Manifest: Encodable {
           && microphone.rawSegments?.lane == "microphone"
           && system.rawSegments?.ownerId == owner && system.rawSegments?.lane == "system"
       } ?? false
-    let extended = segmented && schemaVersion == 4
+    let extended = (segmented && schemaVersion == 4) || schemaVersion == 5
     let encoder = JSONEncoder()
     encoder.outputFormatting = extended ? [.sortedKeys] : [.prettyPrinted, .sortedKeys]
     let original = try encoder.encode(self)
@@ -287,6 +287,8 @@ struct Manifest: Encodable {
     }
     object["systemAudioUnreceived"] = systemAudioUnreceived ?? false
     object["microphoneAudioUnreceived"] = microphoneAudioUnreceived ?? false
+    if schemaVersion == 5 { object["audioFormat"] = "wav" }
+    if singleWav != nil { object["clockMappingSource"] = "single_wav_v1" }
     object["inputDiagnosticsState"] =
       inputEventJournalError != nil
       ? "unavailable" : (inputEventJournalPersistence == nil ? "unconfirmed" : "reported")

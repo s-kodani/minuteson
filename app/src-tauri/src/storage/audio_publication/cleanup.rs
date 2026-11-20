@@ -46,7 +46,7 @@ fn scoped_path(storage: &Storage, meeting: &str, relative: &str) -> Result<PathB
     storage.managed_path(relative)
 }
 
-fn snapshot(
+pub(in crate::storage) fn snapshot(
     storage: &Storage,
     meeting: &str,
     relative: &str,
@@ -189,7 +189,7 @@ impl<C: Fn() -> bool> Census<'_, C> {
     }
 }
 
-pub(super) fn inventory(
+pub(in crate::storage) fn inventory(
     storage: &Storage,
     meeting: &str,
     source: Option<&RecordedAudioPlan>,

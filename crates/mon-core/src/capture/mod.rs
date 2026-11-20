@@ -6,5 +6,6 @@ pub mod input;
 pub mod limits;
 pub mod request;
 pub mod supervisor;
+pub mod wav;
 
 pub mod legacy_pcm;

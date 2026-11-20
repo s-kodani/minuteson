@@ -96,6 +96,7 @@ Json microphones(){
 #include "input_binding.h"
 #include "endpoint_changes.h"
 #include "raw_segments.h"
+#include "live_wav.h"
 #include "async_capture.h"
 struct CaptureApartment {
   CaptureApartment(){acquisition(CoInitializeEx(nullptr,COINIT_MULTITHREADED),"initialize WASAPI preparation thread");}
@@ -171,9 +172,11 @@ class Lane {
   fs::path path;UINT32 channels;std::uint64_t frames=0,packets=0,first=0;double rms=0,peak=0;UINT32 window_frames=0;std::uint64_t measured=0;PacketClock clock;
   Handle file;
   std::uint64_t converted_epoch=0;
+  std::uint64_t admitted_sequence=0;
   bool started=false,holding_for_window=false;std::uint64_t window_start=0,window_end=0;
   Binding binding;
   std::unique_ptr<RawSegments> raw;
+  std::unique_ptr<WavInput> wav;
   std::unique_ptr<CaptureReader> reader;
   std::shared_ptr<CaptureReader> retiring_reader;
   std::unique_ptr<NativeRetirement> retirement;
@@ -205,7 +208,8 @@ class Lane {
   Lane(fs::path output,UINT32 count,bool bounded=false):path(std::move(output)),channels(count),clock(bounded?PacketClock::bounded_capacity:PacketClock::recording_capacity){}
   ~Lane(){if(reader)reader->stop();}
   void cancel_preparation(){if(preparation){preparation->cancel();preparation_schedule.cancel();}}
-  void adopt(PreparedInput input){if(reader||retirement||retiring_reader)throw std::logic_error("input handoff overlaps owned retirement");if(raw)input.reader->queue.attach_storage(raw->writer->pending(),raw->lane_index);clock.begin_stream(input.matching_position_rate);reader=std::move(input.reader);started=true;binding.connected();preparation_schedule.accept();}
+  bool is_recording()const{return raw||(wav&&wav->pending());}
+  void adopt(PreparedInput input){if(reader||retirement||retiring_reader)throw std::logic_error("input handoff overlaps owned retirement");if(raw)input.reader->queue.attach_storage(raw->writer->pending(),raw->lane_index);else if(wav&&wav->pending())input.reader->queue.attach_storage(wav->pending(),wav->lane_index());clock.begin_stream(input.matching_position_rate);admitted_sequence=0;reader=std::move(input.reader);started=true;binding.connected();preparation_schedule.accept();}
   void detach(const char* reason,bool unavailable=false){
     cancel_preparation();
     if(started)std::cerr<<"mon_capture_reconnect: lane="<<(channels==1?"microphone":"system")<<" reason="<<reason<<std::endl;
@@ -227,7 +231,7 @@ class Lane {
       try{pump(budget);}
       catch(const InputFailure&){retirement_queue_ended=true;}
       catch(const InputDataFault&){
-        retirement_queue_ended=true;if(!raw)throw;
+        retirement_queue_ended=true;if(!is_recording())throw;
         if(!retirement_fault_reported){
           retirement_fault_reported=true;mon_capture_input_fault(&input_retry,GetTickCount64()*1000000ULL);
           binding.lost("invalid_audio_data",true);
@@ -248,6 +252,7 @@ class Lane {
     previous_alignment.merge(retiring_reader->alignment_diagnostics());
     retiring_reader.reset();retirement.reset();
     if(raw&&input_retry.failures)raw->drain();
+    if(wav&&input_retry.failures)wav->drain_converter();
   }
   void begin_file(){
     file.value=CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);if(file.value==INVALID_HANDLE_VALUE)throw std::runtime_error("capture destination already exists");
@@ -266,7 +271,18 @@ class Lane {
     const auto packet=clock.observe(count,raw,position,flags,arrival);
     auto time=packet.start;const auto original_count=count;UINT32 skipped=0;
     if(window_end){
-      if(time>=window_end)count=0;
+      if(wav){
+        if(packet.start>=window_end||packet.end<=window_start)count=0;
+        else{
+          const auto width=packet.end-packet.start;
+          const auto skip=packet.start<window_start?((window_start-packet.start)*original_count+width-1)/width:0;
+          const auto after=packet.end>window_end?(window_end-packet.start)*original_count/width:original_count;
+          skipped=UINT32(skip);count=after>skip?UINT32(after-skip):0;
+          time=packet.start+width*skip/original_count;
+          if(!silent)samples+=skip*channels;
+        }
+      }
+      else if(time>=window_end)count=0;
       else {
         if(time<window_start){auto skip=std::min<std::uint64_t>(count,((window_start-time)*48000+9999999)/10000000);time+=skip*10000000/48000;count-=UINT32(skip);skipped=UINT32(skip);if(!silent)samples+=skip*channels;}
         count=UINT32(std::min<std::uint64_t>(count,(window_end-time)*48000/10000000));
@@ -275,18 +291,28 @@ class Lane {
     Json entry={{"packet",++observed},{"streamEpoch",clock.stream_epoch},{"rawQpc100ns",raw},{"previousRawQpc100ns",previous},{"devicePositionFrames",position},{"previousDevicePositionFrames",previous_position},{"previousMappedEnd100ns",previous_end},{"flags",flags},{"arrivalQpc100ns",arrival},{"packetFrames",original_count},{"mappedStart100ns",packet.start},{"mappedEnd100ns",packet.end},{"source",packet.source},{"reason",packet.reason},{"selectedFrames",count},{"skippedFrames",skipped}};
     if(recent.size()==32)recent.erase(recent.begin());recent.push_back(entry);
     if(std::string_view(packet.reason)!="none"&&anomalies.size()<16)anomalies.push_back(entry);
-    if(!count)return;if(!first)first=time;if(!this->raw&&file.value==INVALID_HANDLE_VALUE)begin_file();
+    if(!count)return;if(!first)first=time;if(!this->raw&&!wav&&file.value==INVALID_HANDLE_VALUE)begin_file();
     std::vector<float> zeros;if(silent){zeros.assign(std::size_t(count)*channels,0);samples=zeros.data();}
     double sum=0,maximum=0;for(std::size_t i=0;i<std::size_t(count)*channels;++i){if(!std::isfinite(samples[i])||std::abs(samples[i])>16)throw std::runtime_error("invalid captured PCM amplitude");sum+=double(samples[i])*samples[i];maximum=std::max(maximum,double(std::abs(samples[i])));}
     const auto previous_maps=clock.parts.size();
-    clock.append(frames,count,time,packet.boundary);
+    const auto selected_end=packet.start+(packet.end-packet.start)*(std::uint64_t(skipped)+count)/original_count;
+    clock.append(frames,count,time,packet.boundary,wav?selected_end:0);
     if(this->raw)this->raw->append(samples,count,clock.parts.back().last_end-std::uint64_t(count)*10000000/48000,packet.boundary||clock.parts.size()!=previous_maps||clock.stream_epoch!=converted_epoch,storage_end);
+    else if(wav)wav->append(samples,count,time,selected_end,packet.boundary||clock.parts.size()!=previous_maps||clock.stream_epoch!=converted_epoch,storage_end);
     converted_epoch=clock.stream_epoch;
-    if(!this->raw)write_all(file.value,samples,std::size_t(count)*channels*4);frames+=count;++packets;rms=std::sqrt(sum/(double(count)*channels));peak=maximum;window_frames=count;measured=qpc();
+    if(!this->raw&&!wav)write_all(file.value,samples,std::size_t(count)*channels*4);frames+=count;++packets;rms=std::sqrt(sum/(double(count)*channels));peak=maximum;window_frames=count;measured=qpc();
     if(started)mon_capture_input_valid(&input_retry,GetTickCount64()*1000000ULL);
   }
-  void pump(std::uint64_t budget=4800){auto* source=reader?reader.get():retiring_reader.get();if(!source)return;std::uint64_t frames_written=0;while(frames_written<budget){auto packet=source->queue.pop();if(!packet)break;append(packet->samples.data(),packet->frames,packet->time,packet->position,packet->flags,packet->arrival,packet->storage_end);frames_written+=packet->frames;}}
+  void pump(std::uint64_t budget=4800){auto* source=reader?reader.get():retiring_reader.get();if(!source)return;std::uint64_t frames_written=0;while(frames_written<budget){auto packet=source->queue.pop();if(!packet)break;if(packet->sequence!=admitted_sequence+1)throw InputDataFault("capture ingress order changed");admitted_sequence=packet->sequence;append(packet->samples.data(),packet->frames,packet->time,packet->position,packet->flags,packet->arrival,packet->storage_end);frames_written+=packet->frames;}}
   bool queued(){return (reader&&reader->queue.pending_frames()!=0)||(retiring_reader&&retiring_reader->queue.pending_frames()!=0);}
+  std::optional<std::uint64_t> idle_frontier(std::uint64_t no_source_through){
+    auto* source=reader?reader.get():retiring_reader.get();
+    if(source)return source->queue.observed_through(admitted_sequence);
+    // An uncancelled preparation may already hold PCM which will be admitted
+    // on adoption. A canceled result is never adopted; no producer remains.
+    if(preparation&&!preparation_schedule.cancelled)return std::nullopt;
+    return no_source_through;
+  }
   Json diagnostics(){return Json{{"observedPackets",observed},{"savedFrames",frames},{"discontinuityPackets",discontinuities},{"acquisitionQueuePeakFrames",std::max(peak_queued_frames,reader?reader->queue.peak():0ULL)},{"acquisitionQueueLimitFrames",PacketQueue::max_frames},{"equalTimestampPackets",clock.equal_timestamps},{"reversedTimestampPackets",clock.reversed_timestamps},{"timestampErrorPackets",clock.timestamp_errors},{"devicePositionFallbackPackets",clock.device_fallbacks},{"sampleCountFallbackPackets",clock.frame_fallbacks},{"estimatedPackets",clock.estimated_packets},{"timingEstimated",clock.estimated_packets!=0},{"firstAnomalies",anomalies},{"recentPackets",recent}};}
   void close(){cancel_preparation();
     const auto deadline=GetTickCount64()+PreparationSchedule::timeout_ms;
@@ -295,14 +321,14 @@ class Lane {
       if(retirement_wait_expired||GetTickCount64()>=deadline){
         retirement_wait_expired=true;
         try{while(retiring_reader->queue.pending_frames())pump(std::numeric_limits<std::uint64_t>::max());}
-        catch(const InputFailure&){}catch(const InputDataFault&){if(!raw)throw;}
+        catch(const InputFailure&){}catch(const InputDataFault&){if(!is_recording())throw;}
         throw std::runtime_error("input retirement is still pending; recording closure is unproven");
       }
       Sleep(1);
     }
-    if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());}if(started){try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}catch(const InputDataFault&){if(!raw)throw;}started=false;}if(raw)raw->drain();if(file.value!=INVALID_HANDLE_VALUE){auto length=frames*channels*4+4;BYTE size[8];for(int i=0;i<8;++i)size[i]=BYTE(length>>(56-i*8));LARGE_INTEGER offset;offset.QuadPart=56;if(!SetFilePointerEx(file.value,offset,nullptr,FILE_BEGIN))throw std::runtime_error("CAF finalization seek failed");write_all(file.value,size,8);if(!capture_flush(file.value,"caf_finalize_sync"))throw std::runtime_error("CAF finalization flush failed");CloseHandle(file.value);file.value=INVALID_HANDLE_VALUE;}}
+    if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());}if(started){try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}catch(const InputDataFault&){if(!is_recording())throw;}started=false;}if(raw)raw->drain();if(wav)wav->finish();if(file.value!=INVALID_HANDLE_VALUE){auto length=frames*channels*4+4;BYTE size[8];for(int i=0;i<8;++i)size[i]=BYTE(length>>(56-i*8));LARGE_INTEGER offset;offset.QuadPart=56;if(!SetFilePointerEx(file.value,offset,nullptr,FILE_BEGIN))throw std::runtime_error("CAF finalization seek failed");write_all(file.value,size,8);if(!capture_flush(file.value,"caf_finalize_sync"))throw std::runtime_error("CAF finalization flush failed");CloseHandle(file.value);file.value=INVALID_HANDLE_VALUE;}}
   bool acquisition_closed() const{return (!preparation||preparation->finished())&&(!retirement||retirement->finished());}
-  Json track(std::uint64_t origin){Json segments=Json::array();for(auto& p:clock.parts)segments.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});if(raw)segments=raw->timeline(origin);const auto stored=raw?raw->stored_frames():frames;return Json{{"frames",stored},{"sampleRate",stored?Json(raw?16000:48000):Json(nullptr)},{"channels",stored?Json(raw?1:channels):Json(nullptr)},{"appendFailures",0},{"callbackCount",packets},{"clockSegments",segments},{"clockBoundaryAdjustments",clock.boundary_adjustments},{"maxClockBoundaryAdjustmentNs",clock.max_boundary_adjustment_ticks*100}};}
+  Json track(std::uint64_t origin){Json segments=Json::array();for(auto& p:clock.parts)segments.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});if(raw)segments=raw->timeline(origin);if(wav)segments=wav->timeline(origin);const auto stored=raw?raw->stored_frames():wav?wav->frames:frames;return Json{{"frames",stored},{"sampleRate",stored?Json(raw||wav?16000:48000):Json(nullptr)},{"channels",stored?Json(raw||wav?1:channels):Json(nullptr)},{"appendFailures",0},{"callbackCount",packets},{"clockSegments",segments},{"clockBoundaryAdjustments",clock.boundary_adjustments},{"maxClockBoundaryAdjustmentNs",clock.max_boundary_adjustment_ticks*100}};}
   Json level(){if(!window_frames)return Json{{"state","waiting"},{"windowFrames",nullptr},{"ageMs",nullptr},{"rms",nullptr},{"peak",nullptr}};return Json{{"state","measured"},{"windowFrames",window_frames},{"ageMs",(qpc()-measured)/10000},{"rms",rms},{"peak",peak}};}
 };
 #include "capture_options.h"

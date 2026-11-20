@@ -64,11 +64,14 @@ public enum CaptureCommand {
              [--input-level-owner <session-uuid>]
              [--five-second-test <test-uuid>]
              [--capture-test-lease-fd <inherited-descriptor>]
+             [--capture-format wav-v1]
     --until-stopped requires --stop-on-file and --parent-pid, without --duration.
     --five-second-test requires --stop-on-file, --parent-pid and --microphone-uid.
     Its shared 5-second capture window opens only after both inputs initialize.
     A supplied capture-test lease must be inherited, private, locked and bound to that test's output.
-    Records microphone.caf and system.caf after the required macOS permissions are granted.
+    wav-v1 requires an owned recording or five-second test. Ordinary recordings write recording.wav;
+    five-second tests write separate microphone.wav and system.wav after permissions are granted.
+    Measurement probes without --capture-format retain their legacy CAF output.
     """
 
   private struct ListedApplication: Encodable {

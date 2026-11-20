@@ -66,6 +66,8 @@ pub(crate) fn open_capture_file_at_optional(
             | "manifest.json"
             | "microphone.caf"
             | "system.caf"
+            | "microphone.wav"
+            | "system.wav"
     ) {
         return Err("録音確認のファイル名が不正です".into());
     }
@@ -111,6 +113,8 @@ pub(crate) fn open_capture_file_at_optional(
             | "manifest.json"
             | "microphone.caf"
             | "system.caf"
+            | "microphone.wav"
+            | "system.wav"
     ) {
         return Err("録音確認のファイル名が不正です".into());
     }

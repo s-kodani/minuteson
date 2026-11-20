@@ -90,16 +90,11 @@ fn read_metadata(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    let header = crate::audio::wave::header(
-        u64::try_from(frames).map_err(|_| "会議音声のフレーム数が不正です")?,
-    )?;
     if chunks != 1
         || frames <= 0
         || frames != chunk_frames
-        || frames
-            .checked_mul(2)
-            .and_then(|v| v.checked_add(header.len() as i64))
-            != Some(size)
+        || size < 0
+        || !crate::audio::wave::valid_size(frames as u64, size as u64)
         || end != frames * 1_000_000 / 16000
     {
         return Err("共通会議音声の保存記録が不正です".into());

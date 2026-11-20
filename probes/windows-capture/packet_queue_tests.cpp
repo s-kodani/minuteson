@@ -17,7 +17,7 @@ int main(){
     require(queue.peak()==479000,"queue lost buffered frames during storage delay");
     queue.fail(std::make_exception_ptr(std::runtime_error("device disconnected")));
     for(std::uint64_t p=0;p<1000;++p){
-      auto packet=queue.pop();require(packet&&packet->time==p*75000&&packet->position==p*160,"packet order changed");
+      auto packet=queue.pop();require(packet&&packet->sequence==p+1&&packet->time==p*75000&&packet->position==p*160,"packet order changed");
       for(std::uint64_t i=0;i<479;++i)require(packet->samples[i]==float(std::sin(double(p*479+i)*0.04)),"PCM changed at packet boundary");
     }
     bool failed=false;try{queue.pop();}catch(const std::runtime_error& error){failed=std::string(error.what())=="device disconnected";}
@@ -43,7 +43,18 @@ int main(){
       require(rejected&&checked.pending_frames()==0&&pending->snapshot().frames[0]==0,"invalid PCM acquired storage credits");
     }
     product::CapturePacket valid;valid.frames=1;valid.samples={0.25f};checked.push(std::move(valid));
-    require(checked.pop()->samples[0]==0.25f&&pending->snapshot().frames[0]==1,"rejection poisoned later valid data");
+    const auto accepted=checked.pop();require(accepted->sequence==1&&accepted->samples[0]==0.25f&&pending->snapshot().frames[0]==1,"rejection poisoned later valid data");
+    product::PacketQueue progress;progress.observe(1000);
+    require(progress.observed_through(0)==1000,"empty acquisition observation missing");
+    product::CapturePacket before;before.frames=1;before.flags=2;progress.push(std::move(before));
+    progress.observe(2000);
+    require(!progress.observed_through(1),"acquisition observation overtook unread PCM");
+    const auto first=progress.pop();require(first->sequence==1&&!progress.observed_through(0)
+      &&progress.observed_through(1)==2000,"observation did not follow its accepted sequence");
+    product::CapturePacket after;after.frames=1;after.flags=2;progress.push(std::move(after));
+    require(!progress.observed_through(1),"old observation overtook newly accepted PCM");
+    progress.pop();require(!progress.observed_through(2),"old observation authorized an unobserved sequence");
+    progress.observe(3000);require(progress.observed_through(2)==3000,"latest drained observation missing");
     std::cout<<"acquisition queue: delayed storage, exact continuous PCM, ordered drain before failure, and bounded overflow passed\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

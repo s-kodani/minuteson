@@ -16,6 +16,7 @@ okf_version: "0.2"
 
 - [GitHubでの開発とリリース](guides/development-workflow.md) — PR、文書更新、必須検査、main成果物の検証、手動公開と承認後のStore送信。
 - [DevSecOpsの検査と運用](guides/devsecops.md) — セキュリティ検査と初期設定・障害対応。
+- [1.0.8 WAV保存統一の実装計画](plans/v1-0-8-wav-recording.md) — 計画中の変更範囲、過剰な変更の抑制、互換性と配布候補の条件。
 
 - [現行仕様](spec/index.md) — 録音・解析・モデル・議事録・保存とアーキテクチャ。
 - [利用と保守の手順](guides/index.md) — OS別ビルド、配布、更新、テストと文書管理。

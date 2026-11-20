@@ -57,6 +57,13 @@ pub(super) fn unpublished(storage: &Storage, meeting: &str, session: &str) {
     }
 }
 
+pub(super) fn canonical_document(storage: &Storage, meeting: &str) -> Value {
+    let relative: String = storage.connection.lock().unwrap().query_row(
+        "SELECT f.relative_path FROM meeting_audio_commits a JOIN file_assets f ON f.id=a.manifest_asset_id WHERE a.meeting_id=?1",
+        [meeting], |row| row.get(0)).unwrap();
+    serde_json::from_slice(&std::fs::read(storage.root().join(relative)).unwrap()).unwrap()
+}
+
 // The exported Swift fixtures predate a native session. Bind their synthetic
 // capture proof to this session before finalizing through the real writer.
 fn verify_swift_fixture(
@@ -118,54 +125,23 @@ fn verify_swift_fixture(
     assert_eq!(saved.state, "saved");
     assert_eq!(saved.duration_us, duration);
     assert_eq!(saved.started_at_utc_ms, Some(utc));
-    let db = storage.connection.lock().unwrap();
-    let source: String = db
-        .query_row(
-            "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
-            [&meeting],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let source: crate::storage::RecordedAudioPlan = serde_json::from_str(&source).unwrap();
-    assert_eq!(source.tracks.len(), 2);
-    for (kind, count) in [("mic", frames.0), ("system", frames.1)] {
-        let track = source.tracks.iter().find(|t| t.kind == kind).unwrap();
-        assert_eq!(track.chunks.iter().map(|c| c.frames).sum::<i64>(), count);
+    let saved_document = canonical_document(&storage, &meeting);
+    for (lane, count) in [("microphone", frames.0), ("system", frames.1)] {
+        assert_eq!(saved_document[lane]["frames"], count);
+        assert_eq!(
+            saved_document[lane]["clockSegments"],
+            manifest[lane]["clockSegments"]
+        );
     }
-    let gaps: Vec<(String, i64, i64, String)> = db.prepare("SELECT t.kind,g.start_us,g.end_us,g.reason_code FROM audio_gaps g JOIN audio_tracks t ON t.id=g.track_id WHERE t.kind!='processed' ORDER BY t.kind,g.start_us,g.end_us,g.reason_code").unwrap()
-        .query_map([], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap().collect::<Result<_,_>>().unwrap();
-    let mut expected = vec![(
-        interrupted.into(),
-        gap.0,
-        gap.1,
-        "capture_timestamp_gap".into(),
-    )];
-    for track in &source.tracks {
-        if track.start_us > 0 {
-            expected.push((
-                track.kind.clone(),
-                0,
-                track.start_us,
-                "capture_start_gap".into(),
-            ));
-        }
-        if track.end_us < duration {
-            expected.push((
-                track.kind.clone(),
-                track.end_us,
-                duration,
-                "capture_stop_gap".into(),
-            ));
-        }
-    }
-    expected.sort();
-    assert_eq!(gaps, expected);
-    drop(db);
-    for track in &source.tracks {
-        assert!(storage
-            .prepare_track_audio(&meeting, &track.id, track.start_us, track.end_us)
-            .is_err());
-    }
+    let lane = if interrupted == "mic" {
+        "microphone"
+    } else {
+        "system"
+    };
+    let maps = saved_document[lane]["clockSegments"].as_array().unwrap();
+    assert!(maps
+        .windows(2)
+        .any(|pair| pair[0]["timelineEndUs"] == gap.0 && pair[1]["timelineStartUs"] == gap.1));
     let plan = storage.verify_canonical_audio(&meeting, &|| false).unwrap();
     assert_eq!(plan.tracks.len(), 1);
     assert_eq!(
@@ -257,28 +233,13 @@ fn corrected_capture_finalization_binds_physical_frames_clock_maps_utc_and_pcm_r
     assert_eq!(saved.state, "saved");
     assert_eq!(saved.duration_us, 1005100);
     assert_eq!(saved.started_at_utc_ms, Some(1234567890000));
-    let json: String = storage
-        .connection
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
-            [&meeting],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let original: crate::storage::RecordedAudioPlan = serde_json::from_str(&json).unwrap();
-    for track in original.tracks {
-        let lane = if track.kind == "mic" {
-            "microphone"
-        } else {
-            "system"
-        };
+    let saved_document = canonical_document(&storage, &meeting);
+    for lane in ["microphone", "system"] {
         assert_eq!(
-            serde_json::to_value(&track.chunks[0].clock_segments).unwrap(),
+            saved_document[lane]["clockSegments"],
             value[lane]["clockSegments"]
         );
-        assert_eq!(track.chunks[0].frames, 48000);
+        assert_eq!(saved_document[lane]["frames"], 48000);
     }
     let plan = storage.verify_canonical_audio(&meeting, &|| false).unwrap();
     assert_eq!(plan.tracks.len(), 1);
@@ -406,7 +367,7 @@ fn corrected_capture_gaps_are_saved_as_missing_time_and_only_known_runs_are_play
         .unwrap();
     assert_eq!(
         (first, last, reason.as_str(), recovered),
-        (500000, 3500000, "capture_timestamp_gap", 0)
+        (1005100, 3500000, "meeting_input_missing", 0)
     );
     drop(db);
     let plan = storage.verify_canonical_audio(&meeting, &|| false).unwrap();
@@ -421,14 +382,14 @@ fn corrected_capture_gaps_are_saved_as_missing_time_and_only_known_runs_are_play
     assert!(full.missing_ranges.is_empty());
     assert_eq!(full.total_frames, 64000);
     assert_eq!(
-        full.read_analysis_pcm(16000, 16000).unwrap(),
+        full.read_analysis_pcm(16082, 16000).unwrap(),
         vec![0; 16000 * 4]
     );
 }
 
 #[test]
 fn corrected_capture_clock_or_gap_insert_failure_rolls_back_all_publication_and_can_retry() {
-    for table in ["track_clock_segments", "audio_gaps"] {
+    for table in ["audio_chunks", "audio_gaps"] {
         let root = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().into()).unwrap();
         let (meeting, session, output, mut value) = corrected(&storage);
@@ -472,18 +433,14 @@ fn corrected_capture_restart_uses_the_saved_shared_origin() {
     reopened
         .verify_canonical_audio(&meeting, &|| false)
         .unwrap();
-    let json: String = reopened
-        .connection
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
-            [&meeting],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let source: crate::storage::RecordedAudioPlan = serde_json::from_str(&json).unwrap();
-    assert_eq!(source.tracks[0].chunks[0].clock_segments.len(), 2);
+    let document = canonical_document(&reopened, &meeting);
+    assert_eq!(
+        document["microphone"]["clockSegments"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]
@@ -508,7 +465,8 @@ fn corrected_capture_invalid_manifest_clock_recovers_only_verified_prefix_withou
         .unwrap()
         .unwrap();
     assert_eq!(saved.state, "interrupted");
-    assert_eq!(saved.started_at_utc_ms, original_start);
+    assert!(original_start.is_some());
+    assert_eq!(saved.started_at_utc_ms, None);
     assert_eq!(saved.ended_at_utc_ms, None);
     assert_eq!(saved.duration_us, 1_005_100);
     reopened

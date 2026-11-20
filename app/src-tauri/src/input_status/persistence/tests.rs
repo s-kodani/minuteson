@@ -131,21 +131,28 @@ fn journal_diagnostics_stop_errors_are_not_audio_failure_or_optimistic_confirmat
         "microphone":{"state":"stopped","sourceEpoch":0,"interruptions":0,"reason":null},"system":null,
         "microphoneHistory":{"lastSequence":0,"droppedThrough":0,"events":[]},"systemHistory":null}}),
     );
-    for (state, expected) in [
-        ("confirmed", None),
-        ("pending", Some("unconfirmed")),
-        ("failed", Some("failed")),
-        ("invalid", Some("invalid")),
-    ] {
-        let mut p =
-            report(1, 3, if state == "confirmed" { 3 } else { 2 }, state)["persistence"].clone();
-        p["closed"] = json!(true);
-        write(
-            temp.path(),
-            "manifest.json",
-            &json!({"schemaVersion":4,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,"inputEventJournalPersistence":p}),
-        );
-        assert_eq!(archived_issue(&directory, OWNER), expected);
+    for capture_version in [4, 5] {
+        for (state, expected) in [
+            ("confirmed", None),
+            ("pending", Some("unconfirmed")),
+            ("failed", Some("failed")),
+            ("invalid", Some("invalid")),
+        ] {
+            let mut p = report(1, 3, if state == "confirmed" { 3 } else { 2 }, state)
+                ["persistence"]
+                .clone();
+            p["closed"] = json!(true);
+            write(
+                temp.path(),
+                "manifest.json",
+                &json!({"schemaVersion":capture_version,"inputDiagnosticsState":"reported","state":"saved","recordingOwnerId":OWNER,"inputEventJournalPersistence":p}),
+            );
+            assert_eq!(
+                archived_issue(&directory, OWNER),
+                expected,
+                "capture v{capture_version}"
+            );
+        }
     }
     let confirmed =
         json!({"requestedRevision":3,"committedRevision":3,"state":"confirmed","closed":true});

@@ -65,6 +65,15 @@ final class VoicePCM {
     guard count == 68 else { throw ProbeError.capture("invalid compact CAF geometry") }
     return Data(bytes)
   }
+  static func wavHeader(frames: Int64) throws -> Data {
+    guard frames >= 0 else { throw ProbeError.capture("invalid WAV length") }
+    var bytes = [UInt8](repeating: 0, count: 80)
+    let count = bytes.withUnsafeMutableBufferPointer {
+      mon_voice_wav_header(UInt64(frames), $0.baseAddress, $0.count)
+    }
+    guard count == 80 else { throw ProbeError.capture("invalid WAV geometry") }
+    return Data(bytes)
+  }
   static func interleaved(_ buffer: AVAudioPCMBuffer) throws -> [Float] {
     guard buffer.format.commonFormat == .pcmFormatFloat32, let data = buffer.floatChannelData else {
       throw ProbeError.capture("voice PCM input must be Float32")

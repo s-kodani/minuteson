@@ -355,7 +355,12 @@ fn identifier(id: &str) -> bool {
 }
 
 fn validate_manifest(m: &Manifest) -> Result<(), String> {
-    if m.format_version != crate::current_formats::BACKUP || m.schema_version != SCHEMA_VERSION {
+    // Format 8 contains the same portable table/column contract on schema39
+    // and40. The only DB difference is the imported-asset ready trigger; the
+    // archive never supplies executable SQL, and restoration uses schema40.
+    if m.format_version != crate::current_formats::BACKUP
+        || ![super::super::schema_40::PREVIOUS_VERSION, SCHEMA_VERSION].contains(&m.schema_version)
+    {
         return Err(
             "このバックアップ形式には対応していません。新しい形式で作成してください".into(),
         );

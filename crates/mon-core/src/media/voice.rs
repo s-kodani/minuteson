@@ -150,16 +150,14 @@ impl VoiceConverter {
                 self.spans.pop_front();
                 continue;
             }
-            let span = self.spans.front().ok_or("voice PCM timestamp missing")?;
-            let timestamp = |pos: u128| {
-                let relative = pos.saturating_sub(span.first);
-                let width = u128::from(span.last) * u128::from(RATE) - span.first;
-                span.start + (relative.min(width) * (span.end - span.start) as u128 / width) as i64
-            };
             if pcm.is_empty() {
-                packet_start = timestamp(position);
+                packet_start = self.timestamp(position)?;
             }
-            packet_end = timestamp(position + u128::from(self.rate));
+            // The next output position can lie beyond this input span (for
+            // example 479 source frames at 48 kHz). Evaluate it in the accepted
+            // next span so adjacent output callbacks share one boundary;
+            // clamping here would invent a short gap before that callback.
+            packet_end = self.timestamp(position + u128::from(self.rate))?;
             let value = if self.rate == RATE {
                 self.samples[(self.emitted - self.first) as usize]
             } else {
@@ -201,6 +199,19 @@ impl VoiceConverter {
         self.samples.drain(..discard);
         self.first += discard as u64;
         Ok(())
+    }
+
+    fn timestamp(&self, position: u128) -> Result<i64, &'static str> {
+        let span = self
+            .spans
+            .iter()
+            .find(|span| position < u128::from(span.last) * u128::from(RATE))
+            .or_else(|| self.spans.back())
+            .ok_or("voice PCM timestamp missing")?;
+        let relative = position.saturating_sub(span.first);
+        let width = u128::from(span.last) * u128::from(RATE) - span.first;
+        // The final fractional sample ends at the actual captured endpoint.
+        Ok(span.start + (relative.min(width) * (span.end - span.start) as u128 / width) as i64)
     }
 
     fn emit(
@@ -313,6 +324,81 @@ mod tests {
             assert_eq!(saved, 64000);
             assert_eq!(last, 5_000_000_000 - 3000);
         }
+    }
+
+    #[test]
+    fn fractional_packet_boundaries_do_not_invent_output_clock_gaps() {
+        for rate in [44100, 48000, 96000] {
+            let input: Vec<_> = (0..479 * 160)
+                .map(|n| (n as f32 * 0.031).sin() * 0.25)
+                .collect();
+            let origin = 1_000_000_000;
+            let at = |frame: usize| origin + (frame as i64 * 10_000_000 / i64::from(rate)) * 100;
+            let mut reference = None;
+            for block in [input.len(), 479] {
+                let mut converter = VoiceConverter::new(rate, 1).unwrap();
+                let mut samples = Vec::new();
+                let mut previous = origin;
+                let mut write = |pcm: &[i16], start, end| {
+                    assert_eq!(start, previous, "rate={rate} block={block}");
+                    assert!(end > start);
+                    samples.extend_from_slice(pcm);
+                    previous = end;
+                    Ok(())
+                };
+                let mut received = 0;
+                for chunk in input.chunks(block) {
+                    let first = received;
+                    received += chunk.len();
+                    converter
+                        .push(chunk, at(first), at(received), &mut write)
+                        .unwrap();
+                }
+                converter.finish(&mut write).unwrap();
+                assert_eq!(previous, at(input.len()));
+                assert_eq!(
+                    samples.len() as u64,
+                    frames(input.len() as u64, rate).unwrap()
+                );
+                if let Some(expected) = &reference {
+                    assert_eq!(&samples, expected, "packetization changed PCM at {rate} Hz");
+                } else {
+                    reference = Some(samples);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_capture_discontinuity_retains_its_actual_gap_between_streams() {
+        let mut intervals = Vec::new();
+        let mut count = 0;
+        for start in [1_000_000_000, 1_100_000_000] {
+            let mut converter = VoiceConverter::new(48000, 1).unwrap();
+            let mut write = |pcm: &[i16], first, end| {
+                count += pcm.len();
+                intervals.push((first, end));
+                Ok(())
+            };
+            // Native capture starts a fresh converter at a known gap/epoch.
+            converter
+                .push(&[0.125; 479], start, start + 9_979_100, &mut write)
+                .unwrap();
+            converter.finish(&mut write).unwrap();
+        }
+        assert_eq!(count, 320);
+        assert_eq!(intervals.first().unwrap().0, 1_000_000_000);
+        let preceding = intervals
+            .iter()
+            .filter(|(start, _)| *start < 1_100_000_000)
+            .last()
+            .unwrap();
+        let following = intervals
+            .iter()
+            .find(|(start, _)| *start >= 1_100_000_000)
+            .unwrap();
+        assert_eq!(preceding.1, 1_009_979_100);
+        assert_eq!(following.0, 1_100_000_000);
     }
 
     #[test]

@@ -47,6 +47,7 @@ struct CapturePacket {
   std::uint32_t frames=0,flags=0;
   std::uint64_t time=0,position=0,arrival=0;
   std::uint64_t storage_end=0;
+  std::uint64_t sequence=0;
 };
 // At most 20 seconds per lane (11 MiB total PCM for mono + stereo).
 // Never discard old audio to make room; an exhausted writer stops explicitly.
@@ -66,6 +67,7 @@ class PacketQueue {
         static_cast<std::uint32_t>(packets_.size()),bytes,duration))
       throw std::runtime_error("音声の保存待ちが上限に達しました。保存先の負荷を確認してください。確定済み音声は保持しています");
     if(storage_)packet.storage_end=storage_->acquire(lane_,packet.frames);
+    packet.sequence=++sequence_;
     bytes_+=bytes;nanoseconds_+=duration;frames_+=packet.frames;peak_=std::max(peak_,frames_);packets_.push_back(std::move(packet));
   }
   // Preparation may be cancelled before adoption, so only product-owned
@@ -83,6 +85,18 @@ class PacketQueue {
     if(packets_.empty()){if(failure_)std::rethrow_exception(failure_);return std::nullopt;}
     auto packet=std::move(packets_.front());packets_.pop_front();frames_-=packet.frames;bytes_-=std::uint64_t(packet.samples.size())*sizeof(float);nanoseconds_-=(std::uint64_t(packet.frames)*1000000000+47999)/48000;return packet;
   }
+  // Only the acquisition owner may publish this after draining the native
+  // buffers and any adapter-held PCM preceding `through`. It belongs after
+  // the exact accepted sequence, rather than a control-thread timer.
+  void observe(std::uint64_t through){
+    std::lock_guard lock(mutex_);
+    observation_=Observation{sequence_,through};
+  }
+  std::optional<std::uint64_t> observed_through(std::uint64_t consumed){
+    std::lock_guard lock(mutex_);
+    if(!observation_||!packets_.empty()||observation_->sequence!=consumed)return std::nullopt;
+    return observation_->through;
+  }
   std::uint64_t pending_frames(){std::lock_guard lock(mutex_);return frames_;}
   void fail(std::exception_ptr error){std::lock_guard lock(mutex_);failure_=error;}
   std::uint64_t peak(){std::lock_guard lock(mutex_);return peak_;}
@@ -90,6 +104,9 @@ class PacketQueue {
   std::mutex mutex_;
   std::deque<CapturePacket> packets_;
   std::uint64_t frames_=0,peak_=0,bytes_=0,nanoseconds_=0;
+  std::uint64_t sequence_=0;
+  struct Observation {std::uint64_t sequence,through;};
+  std::optional<Observation> observation_;
   std::exception_ptr failure_;
   std::shared_ptr<StoragePending> storage_;unsigned lane_=0;
 };

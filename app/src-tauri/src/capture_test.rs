@@ -199,6 +199,8 @@ fn command_for(
         command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     }
     command
+        .arg("--capture-format")
+        .arg("wav-v1")
         .arg("--output")
         .arg(directory)
         .arg("--mode")

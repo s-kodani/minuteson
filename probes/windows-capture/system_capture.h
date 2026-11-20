@@ -39,7 +39,8 @@ class SystemCapture final : public CaptureReader {
     }
     return unknown?std::nullopt:std::optional<bool>(false);
   }
-  static std::map<std::wstring,ComPtr<IMMDevice>> endpoints(IMMDeviceEnumerator* e,const std::map<std::wstring,std::unique_ptr<Stream>>& streams){
+  template<class Known>
+  static std::map<std::wstring,ComPtr<IMMDevice>> endpoints(IMMDeviceEnumerator* e,const Known& streams){
     ComPtr<IMMDeviceCollection> devices;acquisition(e->EnumAudioEndpoints(eRender,DEVICE_STATE_ACTIVE,&devices),"enumerate PC audio outputs");
     UINT count=0;acquisition(devices->GetCount(&count),"count PC audio outputs");
     if(count>128)throw std::runtime_error("too many PC audio output devices");
@@ -61,8 +62,13 @@ class SystemCapture final : public CaptureReader {
     WAVEFORMATEX format{};format.wFormatTag=WAVE_FORMAT_IEEE_FLOAT;format.nChannels=2;format.nSamplesPerSec=48000;
     format.wBitsPerSample=32;format.nBlockAlign=8;format.nAvgBytesPerSec=384000;
     acquisition(stream->client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,5000000,0,&format,nullptr),"initialize PC audio output loopback");
-    acquisition(stream->client->GetService(IID_PPV_ARGS(stream->capture.GetAddressOf())),"get PC audio output capture service");
     return stream;
+  }
+  static void start(Stream& stream){
+    // The preparation worker initializes the client, but the acquisition
+    // owner obtains/releases the capture service and owns every buffer call.
+    acquisition(stream.client->GetService(IID_PPV_ARGS(stream.capture.GetAddressOf())),"get PC audio output capture service");
+    acquisition(stream.client->Start(),"start PC audio output loopback");stream.started=true;
   }
   bool drain(Stream& stream,EndpointMixer& mixer,unsigned budget=1){
     UINT32 available=0;acquisition(stream.capture->GetNextPacketSize(&available),"poll PC audio output packets");
@@ -97,38 +103,95 @@ class SystemCapture final : public CaptureReader {
         auto devices=endpoints(e.Get(),streams);
         if(devices.empty())throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio output unavailable");
         for(auto& [id,device]:devices)streams.emplace(id,open(device.Get()));
-        for(auto& [id,stream]:streams){acquisition(stream->client->Start(),"start PC audio output loopback");stream->started=true;}
+        for(auto& [id,stream]:streams)start(*stream);
         std::cerr<<"mon_capture_system: source=render_endpoints count="<<streams.size()<<std::endl;
         DWORD index=0;auto priority_handle=AvSetMmThreadCharacteristicsW(L"Audio",&index);
         // AVRT handles require AvRevertMmThreadCharacteristics, not CloseHandle.
         struct Priority {HANDLE value;~Priority(){if(value)AvRevertMmThreadCharacteristics(value);}} priority_owner{priority_handle};
         if(priority_handle)AvSetMmThreadPriority(priority_handle,AVRT_PRIORITY_HIGH);
-        EndpointMixer mixer;startup();auto next_check=GetTickCount64()+100;
+        EndpointMixer mixer(true);startup();auto next_check=GetTickCount64()+100;
+        using Devices=std::map<std::wstring,ComPtr<IMMDevice>>;
+        using Enumeration=InputPreparation<Devices,CaptureApartment>;
+        using Opening=InputPreparation<std::unique_ptr<Stream>,CaptureApartment>;
+        std::unique_ptr<Enumeration> enumeration;
+        std::map<std::wstring,std::unique_ptr<Opening>> openings;
+        Devices desired=devices;
         auto emit=[&](CapturePacket packet){queue.push(std::move(packet));};
         try{
           while(!stopping_.load(std::memory_order_acquire)){
-            if(changes->changed.exchange(false)||GetTickCount64()>=next_check){
-              auto revoked=changes->take();
-              next_check=GetTickCount64()+100;auto current=endpoints(e.Get(),streams);
-              if(current.empty())throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio output unavailable");
-              reconcile_render_streams(streams,current,[&](Stream& stream){
-                if(stream.started){stream.client->Stop();stream.started=false;}
-                try{drain(stream,mixer,256);}catch(const InputFailure&){}
-              },[&](const ComPtr<IMMDevice>& device){auto stream=open(device.Get());acquisition(stream->client->Start(),"start changed PC audio output loopback");stream->started=true;return stream;},revoked.endpoints,revoked.all);
+            const auto now_ms=GetTickCount64();
+            if(changes->changed.exchange(false)||now_ms>=next_check){
+              auto revoked=changes->take();next_check=now_ms+100;
+              // Revoke native lifetimes immediately. A preparation remains
+              // owned until its cancellation really completes, while other
+              // endpoints continue draining their acquisition buffers.
+              for(auto& [id,pending]:openings)if(revoked.all||revoked.endpoints.count(id))pending->cancel();
+              if(revoked.all)desired.clear();else for(const auto& id:revoked.endpoints)desired.erase(id);
+              if(enumeration&&(revoked.all||!revoked.endpoints.empty())){enumeration->cancel();next_check=0;}
+              for(auto it=streams.begin();it!=streams.end();){
+                if(revoked.all||revoked.endpoints.count(it->first)){
+                  auto& stream=*it->second;if(stream.started){stream.client->Stop();stream.started=false;}
+                  try{while(drain(stream,mixer,32)){};}catch(const InputFailure&){}it=streams.erase(it);
+                }else ++it;
+              }
+              if(!enumeration){
+                std::set<std::wstring> known;for(const auto& [id,stream]:streams)known.insert(id);
+                enumeration=std::make_unique<Enumeration>([known=std::move(known),factory=device_enumerator](auto cancelled){
+                  auto devices=factory();auto result=endpoints(devices.Get(),known);
+                  if(cancelled())return Devices{};return result;
+                });
+              }
+            }
+            if(enumeration){
+              if(auto current=enumeration->take()){
+                enumeration.reset();desired=std::move(*current);
+                if(desired.empty())throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio output unavailable");
+                for(auto& [id,pending]:openings)if(!desired.count(id))pending->cancel();
+                for(auto it=streams.begin();it!=streams.end();){
+                  if(!desired.count(it->first)){
+                    auto& stream=*it->second;if(stream.started){stream.client->Stop();stream.started=false;}
+                    try{while(drain(stream,mixer,32)){};}catch(const InputFailure&){}it=streams.erase(it);
+                  }else ++it;
+                }
+              }else if(enumeration->finished()){
+                auto error=enumeration->error();enumeration.reset();if(error)std::rethrow_exception(error);
+              }
+            }
+            for(auto it=openings.begin();it!=openings.end();){
+              if(auto stream=it->second->take()){
+                start(**stream);
+                streams.emplace(it->first,std::move(*stream));it=openings.erase(it);
+              }else if(it->second->finished()){
+                auto error=it->second->error();it=openings.erase(it);if(error)std::rethrow_exception(error);
+              }else ++it;
+            }
+            for(const auto& [id,device]:desired)if(!streams.count(id)&&!openings.count(id)){
+              openings.emplace(id,std::make_unique<Opening>([device](auto cancelled){
+                if(cancelled())return std::unique_ptr<Stream>{};auto stream=open(device.Get());
+                if(cancelled())return std::unique_ptr<Stream>{};return stream;
+              }));
             }
             bool backlog=false;
             for(auto& [id,stream]:streams)backlog|=drain(*stream,mixer);
             const auto now=qpc(),frame=EndpointMixer::frame_at(now);
             auto through=frame>EndpointMixer::latency_frames?frame-EndpointMixer::latency_frames:0;
             for(auto& [id,stream]:streams)through=stream->cursor.safe_through(now,through);
-            mixer.flush(through,now,emit);
+            // An empty observation follows every currently queued endpoint
+            // packet. A timer must never overtake a backlog on another peer.
+            if(!backlog){
+              mixer.flush(through,now,emit);
+              queue.observe(EndpointMixer::ticks_at(mixer.observed_through(through)));
+            }
             // Round-robin packets keep endpoints fair, but sleeping with a
             // backlog can make a 10 ms stream fall behind the Windows timer.
             if(!backlog)Sleep(1);
           }
-          for(auto& [id,stream]:streams){acquisition(stream->client->Stop(),"stop PC audio output loopback");stream->started=false;drain(*stream,mixer,256);}
+          for(auto& [id,stream]:streams){
+            acquisition(stream->client->Stop(),"stop PC audio output loopback");stream->started=false;
+            while(drain(*stream,mixer,256)){}
+          }
         }catch(...){
-          auto error=std::current_exception();
+          auto error=std::current_exception();observe_alignment(mixer);
           for(auto& [id,stream]:streams){
             if(stream->started){stream->client->Stop();stream->started=false;}
             try{drain(*stream,mixer,256);}catch(const InputFailure&){}catch(const InputDataFault&){}catch(...){error=std::current_exception();}

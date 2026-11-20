@@ -43,6 +43,14 @@ class StoragePending {
     bytes_=base+job_bytes+(next_active?active_bytes:0);jobs_=jobs+1+(next_active?1:0);
   }
   void abandon_active(){std::lock_guard lock(mutex_);bytes_-=active_bytes;--jobs_;}
+  void committed_wav(const std::array<std::uint64_t,2>& source_ends,std::uint64_t job_bytes){
+    std::lock_guard lock(mutex_);
+    for(unsigned lane=0;lane<2;++lane)
+      if(source_ends[lane]<committed_[lane]||source_ends[lane]>acquired_[lane])
+        throw std::logic_error("invalid WAV recording acknowledgement");
+    if(job_bytes>bytes_||!jobs_)throw std::logic_error("invalid WAV recording reservation");
+    committed_=source_ends;bytes_-=job_bytes;--jobs_;
+  }
   void committed(unsigned lane,std::uint64_t source_end,std::uint64_t job_bytes){
     std::lock_guard lock(mutex_);
     if(source_end<committed_.at(lane)||source_end>acquired_.at(lane)||job_bytes>bytes_||!jobs_)

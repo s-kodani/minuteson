@@ -26,8 +26,11 @@ protocol MicrophoneCaptureEngine: AnyObject, Sendable {
   func prepare()
   func start() throws
   func stop() throws
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void)
 }
 extension MicrophoneCaptureEngine {
+  // Controlled engines invoke their tap synchronously.
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void) { observation() }
   func verifyCallbackDevice(_ binding: MicrophoneRecovery.Binding) throws {
     try verifyDevice(binding)
   }
@@ -59,6 +62,15 @@ final class NativeMicrophoneCaptureEngine: MicrophoneCaptureEngine, @unchecked S
       ?? AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
   }
   var isRunning: Bool { state.withLock { self.context }?.running() ?? false }
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void) {
+    owner.async { [self] in
+      if let context = state.withLock({ self.context }) {
+        context.afterAcceptedPCM { [owner] in owner.async(execute: observation) }
+      } else {
+        observation()
+      }
+    }
+  }
   func selectDevice(_ binding: MicrophoneRecovery.Binding) throws {
     try owner.sync {
       guard state.withLock({ self.context == nil }) else {

@@ -12,6 +12,8 @@ template<class Predicate>void wait_for(Predicate predicate,const char* message){
 }
 struct EndpointStats {
   std::atomic<unsigned> opens{0},live{0},released{0},overlaps{0},stops{0},enumerations{0},wrong_thread{0},packets{0};
+  std::atomic<unsigned> polls{0};
+  std::atomic<bool> block_enumeration{false},release_enumeration{false};
 };
 class ReplugCapture final : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IAudioCaptureClient> {
   std::shared_ptr<EndpointStats> stats_;
@@ -21,7 +23,7 @@ class ReplugCapture final : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::
  public:
   explicit ReplugCapture(std::shared_ptr<EndpointStats> stats):stats_(std::move(stats)){}
   ~ReplugCapture(){if(owner_&&owner_!=GetCurrentThreadId())++stats_->wrong_thread;}
-  HRESULT STDMETHODCALLTYPE GetNextPacketSize(UINT32* frames)override{owner();*frames=delivered_?0:480;return S_OK;}
+  HRESULT STDMETHODCALLTYPE GetNextPacketSize(UINT32* frames)override{owner();++stats_->polls;*frames=delivered_?0:480;return S_OK;}
   HRESULT STDMETHODCALLTYPE GetBuffer(BYTE** data,UINT32* frames,DWORD* flags,UINT64* position,UINT64* time)override{
     owner();*data=reinterpret_cast<BYTE*>(samples_.data());*frames=480;*flags=0;*position=0;*time=product::qpc();return S_OK;
   }
@@ -84,7 +86,13 @@ class ReplugEnumerator final : public Microsoft::WRL::RuntimeClass<Microsoft::WR
  public:
   explicit ReplugEnumerator(std::shared_ptr<EndpointStats> stats):stats_(std::move(stats)),device_(Microsoft::WRL::Make<ReplugDevice>(stats_)){}
   HRESULT STDMETHODCALLTYPE EnumAudioEndpoints(EDataFlow,DWORD,IMMDeviceCollection** value)override{
-    ++stats_->enumerations;auto devices=Microsoft::WRL::Make<ReplugDevices>(device_);return devices.CopyTo(value);
+    const auto call=++stats_->enumerations;
+    if(call>1&&stats_->block_enumeration){
+      const auto deadline=GetTickCount64()+5000;
+      while(!stats_->release_enumeration&&GetTickCount64()<deadline)Sleep(1);
+      if(!stats_->release_enumeration)return E_ABORT;
+    }
+    auto devices=Microsoft::WRL::Make<ReplugDevices>(device_);return devices.CopyTo(value);
   }
   HRESULT STDMETHODCALLTYPE GetDefaultAudioEndpoint(EDataFlow,ERole,IMMDevice** value)override{return device_.CopyTo(value);}
   HRESULT STDMETHODCALLTYPE GetDevice(LPCWSTR,IMMDevice** value)override{return device_.CopyTo(value);}
@@ -92,6 +100,17 @@ class ReplugEnumerator final : public Microsoft::WRL::RuntimeClass<Microsoft::WR
   HRESULT STDMETHODCALLTYPE UnregisterEndpointNotificationCallback(IMMNotificationClient*)override{std::lock_guard lock(mutex_);callback_.Reset();return S_OK;}
   ComPtr<IMMNotificationClient> callback(){std::lock_guard lock(mutex_);return callback_;}
 };
+
+void enumeration_does_not_block_active_readers(){
+  auto stats=std::make_shared<EndpointStats>();stats->block_enumeration=true;
+  auto devices=Microsoft::WRL::Make<ReplugEnumerator>(stats);
+  product::SystemCapture reader([devices]{ComPtr<IMMDeviceEnumerator> value;devices.As(&value);return value;});
+  wait_for([&]{return stats->packets.load()==1&&stats->enumerations.load()>1;},"independent enumeration did not start");
+  const auto before=stats->polls.load();
+  wait_for([&]{return stats->polls.load()>before+50;},"device enumeration blocked acquisition buffer draining");
+  stats->release_enumeration=true;reader.stop();
+  require(!stats->live&&!stats->wrong_thread,"enumeration preparation leaked an acquisition owner");
+}
 
 void same_id_reconnection_releases_old_render_client(){
   auto stats=std::make_shared<EndpointStats>();auto devices=Microsoft::WRL::Make<ReplugEnumerator>(stats);
@@ -154,6 +173,7 @@ void microphone_reconnection_revokes_old_native_generation(){
 int main(){
   try{
     product::CaptureApartment apartment;
+    enumeration_does_not_block_active_readers();
     same_id_reconnection_releases_old_render_client();
     microphone_reconnection_revokes_old_native_generation();
     std::cout<<"same-ID reconnect: fresh WASAPI clients, close before reopen, microphone revocation, owner-thread cleanup and healthy-stream preservation passed\n";

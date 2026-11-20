@@ -1,4 +1,4 @@
-use super::tests::{corrected, unpublished, write};
+use super::tests::{canonical_document, corrected, unpublished, write};
 use crate::playback::PlaybackStore;
 use crate::storage::meeting_playback::{MeetingPlaybackMode, MeetingPlaybackRequest};
 use crate::storage::recordings::{load_session, RecordingConfig};
@@ -42,7 +42,7 @@ fn ending(storage: &Storage) -> (String, String, PathBuf, Value) {
 }
 
 fn gaps(storage: &Storage) -> Vec<(String, i64, i64, String, bool)> {
-    storage.connection.lock().unwrap().prepare("SELECT t.kind,g.start_us,g.end_us,g.reason_code,g.recovered FROM audio_gaps g JOIN audio_tracks t ON t.id=g.track_id WHERE t.kind!='processed' ORDER BY t.kind,g.start_us,g.end_us").unwrap()
+    storage.connection.lock().unwrap().prepare("SELECT t.kind,g.start_us,g.end_us,g.reason_code,g.recovered FROM audio_gaps g JOIN audio_tracks t ON t.id=g.track_id WHERE t.kind='processed' ORDER BY t.kind,g.start_us,g.end_us").unwrap()
         .query_map([], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).unwrap()
         .collect::<Result<_,_>>().unwrap()
 }
@@ -109,24 +109,10 @@ fn swift_generated_pc_only_capture_publishes_wave_without_inventing_microphone_a
     let saved = storage.finalize_recording(&session.id).unwrap();
     assert_eq!(saved.state, "saved");
     assert_eq!(saved.duration_us, 100000);
-    let db = storage.connection.lock().unwrap();
-    let source: String = db
-        .query_row(
-            "SELECT source_json FROM meeting_audio_commits WHERE meeting_id=?1",
-            [&meeting.id],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let source: crate::storage::RecordedAudioPlan = serde_json::from_str(&source).unwrap();
-    assert_eq!(source.tracks.len(), 1);
-    assert_eq!(source.tracks[0].kind, "system");
-    assert_eq!(
-        (source.tracks[0].sample_rate, source.tracks[0].channels),
-        (16000, 1)
-    );
-    // The fixture's 480 input frames at 48 kHz retain 10 ms of audio at 16 kHz.
-    assert_eq!(source.tracks[0].chunks[0].frames, 160);
-    drop(db);
+    let document = canonical_document(&storage, &meeting.id);
+    assert_eq!(document["microphone"]["frames"], 0);
+    assert_eq!(document["system"]["frames"], 160);
+    assert!(document["microphoneAudioUnreceived"].as_bool().unwrap());
     let plan = storage
         .verify_canonical_audio(&meeting.id, &|| false)
         .unwrap();
@@ -151,7 +137,16 @@ fn capture_ending_preserves_physical_pcm_boundary_gaps_actual_end_and_commit_tim
     assert!(saved.ended_at_utc_ms.is_some());
     assert_eq!(meeting_duration(&storage, &meeting), 1100000);
     let expected = gaps(&storage);
-    assert_eq!(expected.len(), 3);
+    assert_eq!(
+        expected,
+        vec![(
+            "processed".into(),
+            1005100,
+            1100000,
+            "meeting_input_missing".into(),
+            false
+        )]
+    );
     assert_whole_gap_playback(&storage, &meeting, 1100000);
     let mut audio = storage
         .prepare_meeting_audio(&MeetingPlaybackRequest {
@@ -280,30 +275,18 @@ fn capture_ending_interior_and_boundary_gaps_coexist_without_padding_known_runs(
     );
     assert_eq!(
         gaps(&storage),
-        vec![
-            (
-                "mic".into(),
-                500010,
-                700010,
-                "capture_timestamp_gap".into(),
-                false
-            ),
-            (
-                "mic".into(),
-                1200020,
-                1300000,
-                "capture_stop_gap".into(),
-                false
-            ),
-            ("system".into(), 0, 5000, "capture_start_gap".into(), false),
-            (
-                "system".into(),
-                1005100,
-                1300000,
-                "capture_stop_gap".into(),
-                false
-            ),
-        ]
+        vec![(
+            "processed".into(),
+            1200020,
+            1300000,
+            "meeting_input_missing".into(),
+            false
+        )]
+    );
+    let saved_document = canonical_document(&storage, &meeting);
+    assert_eq!(
+        saved_document["microphone"]["clockSegments"],
+        value["microphone"]["clockSegments"]
     );
     let mic = storage.canonical_audio_plan(&meeting).unwrap().tracks[0]
         .id
@@ -326,7 +309,7 @@ fn capture_ending_boundary_gap_insert_failure_rolls_back_assets_session_and_anal
     let storage = Storage::open(root.path().into()).unwrap();
     let (meeting, session, output, _) = ending(&storage);
     let before = originals(&output);
-    storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER refuse_end BEFORE INSERT ON audio_gaps WHEN NEW.reason_code='capture_stop_gap' BEGIN SELECT RAISE(ABORT,'end insert failure'); END;").unwrap();
+    storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER refuse_end BEFORE INSERT ON audio_gaps WHEN NEW.reason_code='meeting_input_missing' BEGIN SELECT RAISE(ABORT,'end insert failure'); END;").unwrap();
     assert!(storage
         .finalize_recording(&session)
         .unwrap_err()
@@ -340,7 +323,7 @@ fn capture_ending_boundary_gap_insert_failure_rolls_back_assets_session_and_anal
         .execute_batch("DROP TRIGGER refuse_end")
         .unwrap();
     assert_eq!(storage.finalize_recording(&session).unwrap().state, "saved");
-    assert!(gaps(&storage).len() >= 3);
+    assert_eq!(gaps(&storage).len(), 1);
 }
 
 #[test]
@@ -464,7 +447,7 @@ fn capture_ending_current_backup_preserves_duration_and_canonical_pcm() {
     let restored = &receipt.meeting_ids[0];
     assert_ne!(restored, &meeting);
     assert_eq!(meeting_duration(&target, restored), 1100000);
-    assert!(gaps(&target).is_empty()); // Retired acquisition tracks are excluded.
+    assert_eq!(gaps(&target), gaps(&storage)); // Only the canonical union of missing intervals is stored.
     assert_whole_gap_playback(&target, restored, 1100000);
     let plan = target.recorded_audio_plan(restored).unwrap();
     for track in &plan.tracks {
@@ -548,23 +531,21 @@ fn swift_generated_capture_ending_clock_recovery_preserves_sleep_gaps_and_actual
     assert_eq!(saved.ended_at_utc_ms, Some(1_700_000_010_059));
     assert_eq!(
         gaps(&storage),
-        vec![
-            (
-                "mic".into(),
-                10_000,
-                10_040_000,
-                "capture_timestamp_gap".into(),
-                false
-            ),
-            (
-                "system".into(),
-                10_000,
-                10_040_000,
-                "capture_timestamp_gap".into(),
-                false
-            ),
-        ]
+        vec![(
+            "processed".into(),
+            10000,
+            10040000,
+            "meeting_input_missing".into(),
+            false
+        )]
     );
+    let saved_document = canonical_document(&storage, &meeting.id);
+    for lane in ["microphone", "system"] {
+        assert_eq!(
+            saved_document[lane]["clockSegments"],
+            manifest[lane]["clockSegments"]
+        );
+    }
     let plan = storage
         .verify_canonical_audio(&meeting.id, &|| false)
         .unwrap();
@@ -671,18 +652,21 @@ fn swift_generated_capture_ending_owner_and_physical_pcm_finalize_without_rewrit
     assert_eq!(saved.ended_at_utc_ms, Some(1700000000049));
     assert_eq!(
         gaps(&storage),
-        vec![
-            ("mic".into(), 10000, 50000, "capture_stop_gap".into(), false),
-            ("system".into(), 0, 5000, "capture_start_gap".into(), false),
-            (
-                "system".into(),
-                15000,
-                50000,
-                "capture_stop_gap".into(),
-                false
-            ),
-        ]
+        vec![(
+            "processed".into(),
+            15000,
+            50000,
+            "meeting_input_missing".into(),
+            false
+        )]
     );
+    let saved_document = canonical_document(&storage, &meeting.id);
+    for lane in ["microphone", "system"] {
+        assert_eq!(
+            saved_document[lane]["clockSegments"],
+            manifest[lane]["clockSegments"]
+        );
+    }
     let plan = storage
         .verify_canonical_audio(&meeting.id, &|| false)
         .unwrap();

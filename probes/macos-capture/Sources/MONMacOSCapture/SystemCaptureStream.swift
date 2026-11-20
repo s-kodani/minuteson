@@ -13,10 +13,13 @@ protocol SystemCaptureStream: AnyObject, Sendable {
   func stop() async throws
   func requestStop(_ completion: @escaping @Sendable (Error?) -> Void)
   func detach() throws
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void)
 }
 
 extension SystemCaptureStream {
   var synchronizationClock: CMClock? { native?.synchronizationClock }
+  // Controlled sources deliver synchronously; queued native sources override.
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void) { observation() }
 }
 
 final class ScreenCaptureStream: SystemCaptureStream, @unchecked Sendable {
@@ -24,15 +27,17 @@ final class ScreenCaptureStream: SystemCaptureStream, @unchecked Sendable {
   let applicationName: String?
   let bundleIdentifier: String?
   private let output: any SCStreamOutput
+  private let sampleHandlerQueue: DispatchQueue
 
   init(
     stream: SCStream, output: any SCStreamOutput, applicationName: String?,
-    bundleIdentifier: String?
+    bundleIdentifier: String?, sampleHandlerQueue: DispatchQueue
   ) {
     native = stream
     self.output = output
     self.applicationName = applicationName
     self.bundleIdentifier = bundleIdentifier
+    self.sampleHandlerQueue = sampleHandlerQueue
   }
 
   func start() async throws { try await native!.startCapture() }
@@ -41,4 +46,7 @@ final class ScreenCaptureStream: SystemCaptureStream, @unchecked Sendable {
     native!.stopCapture(completionHandler: completion)
   }
   func detach() throws { try native!.removeStreamOutput(output, type: .audio) }
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void) {
+    sampleHandlerQueue.async(execute: observation)
+  }
 }

@@ -52,6 +52,63 @@ private final class SilentTapDriver: CoreAudioCaptureDriver, @unchecked Sendable
 }
 
 final class CoreAudioCaptureTests: XCTestCase, @unchecked Sendable {
+  func testIdleObservationWaitsForAcceptedTapDeliveryBeforeAdvancingWav() async throws {
+    let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false)
+    let path = try XCTUnwrap(realpath(temporary.path, nil))
+    defer { free(path) }
+    let root = URL(fileURLWithPath: String(cString: path), isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let owner = UUID().uuidString.lowercased()
+    let commits = RawSegmentCommitWorker()
+    let writer = try LiveWavSession(output: root, owner: owner, commits: commits)
+    let raw = try RawRecordingSegments(
+      output: root, owner: owner, lane: "system", commits: commits, wavSession: writer)
+    let driver = SilentTapDriver()
+    let deliveryEntered = DispatchSemaphore(value: 0)
+    let releaseDelivery = DispatchSemaphore(value: 0)
+    let delivered = DispatchSemaphore(value: 0)
+    defer { releaseDelivery.signal() }
+    let recorder = SystemAudioRecorder(
+      outputURL: root.appendingPathComponent("system.wav"), clock: try CaptureClockDomain.live(),
+      retries: true, backend: "coreaudio",
+      factory: { recorder, _ in
+        CoreAudioCaptureStream(
+          driver: driver,
+          deliver: { source, sample in
+            deliveryEntered.signal()
+            guard releaseDelivery.wait(timeout: .now() + 5) == .success else { return }
+            recorder.receive(
+              from: source, sampleBuffer: sample, observation: .timestamp(1_000_000_000))
+            delivered.signal()
+          }, ended: { source, error in recorder.sourceEnded(source, error: error) })
+      }, rawSegments: raw)
+    try await recorder.start(targetPID: nil)
+    for first in stride(from: 0, to: 16000, by: 4000) {
+      try writer.append(
+        lane: "microphone", epoch: 0, pcm: [Int16](repeating: 3200, count: 4000),
+        start: 1_000_000_000 + Int64(first) * 62500,
+        end: 1_000_000_000 + Int64(first + 4000) * 62500, acquiredNanoseconds: 0)
+    }
+    try writer.observeUnreceived(lane: "microphone", through: 8_000_000_000)
+    driver.emit(try sample())
+    XCTAssertEqual(deliveryEntered.wait(timeout: .now() + 1), .success)
+    // The OS callback has already admitted owned PCM, but Raw's FIFO is empty.
+    // Repeated timer observations must coalesce behind that upstream delivery.
+    for _ in 0..<20 { recorder.observeUnreceived(at: 8_000_000_000) }
+    try raw.drainAcceptedPCM()
+    XCTAssertEqual(writer.snapshot().frames, 0)
+    releaseDelivery.signal()
+    XCTAssertEqual(delivered.wait(timeout: .now() + 1), .success)
+    _ = try await recorder.stopRecording()
+    try raw.drainNormalization()
+    XCTAssertEqual(raw.applyingSavedAudio(to: TrackStats()).frames, 160)
+    try writer.closeLane("microphone")
+    try writer.finish(endNanoseconds: 8_000_000_000)
+    XCTAssertTrue(writer.snapshot().producerClosed)
+    XCTAssertEqual(writer.snapshot().frames, 112000)
+  }
+
   func testQuietPCStopsNormallyWithClosedEmptyRawProofButFailedStopStillFails() async throws {
     for failedStop in [false, true] {
       let created = FileManager.default.temporaryDirectory

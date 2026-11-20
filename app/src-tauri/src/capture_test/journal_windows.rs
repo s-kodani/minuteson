@@ -384,10 +384,14 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         let audio = crate::capture_test::files::verify(&directory, &request, &|| false).unwrap();
-        assert_eq!(audio.system.as_ref().unwrap().info.frames, 240_000);
+        let system = &audio.system.as_ref().unwrap().info;
+        assert_eq!(
+            (system.frames, system.sample_rate, system.channels),
+            (80_000, 16_000, 1)
+        );
         if scenario == "system-only" {
             assert!(audio.microphone.is_none());
-            assert!(!directory.path.join("microphone.caf").exists());
+            assert!(!directory.path.join("microphone.wav").exists());
             assert_eq!(
                 audio
                     .system
@@ -396,10 +400,18 @@ mod tests {
                     .playback(&directory, "system", &|| false)
                     .unwrap()
                     .total_frames(),
-                240_000
+                80_000
             );
         } else {
-            assert_eq!(audio.microphone.as_ref().unwrap().info.frames, 240_000);
+            let microphone = &audio.microphone.as_ref().unwrap().info;
+            assert_eq!(
+                (
+                    microphone.frames,
+                    microphone.sample_rate,
+                    microphone.channels
+                ),
+                (80_000, 16_000, 1)
+            );
         }
         directory.cleanup().unwrap();
     }

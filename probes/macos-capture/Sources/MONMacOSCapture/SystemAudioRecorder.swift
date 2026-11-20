@@ -41,6 +41,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   private let mayContinue: @Sendable () -> Bool
   private let inputEventObserver: InputEventJournal.Observer?
   private let processFamily: CaptureProcessFamily?
+  private let rawSegments: RawRecordingSegments?
+  private var unreceivedObservationQueued = false
   private(set) var targetApplicationName: String?
   private(set) var targetBundleIdentifier: String?
 
@@ -70,6 +72,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     self.mayContinue = mayContinue
     self.inputEventObserver = inputEventObserver
     self.processFamily = processFamily
+    self.rawSegments = rawSegments
   }
 
   private var applicationIdentity: CaptureApplicationIdentity?
@@ -247,7 +250,8 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
     try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
     return ScreenCaptureStream(
-      stream: stream, output: self, applicationName: name, bundleIdentifier: bundle)
+      stream: stream, output: self, applicationName: name, bundleIdentifier: bundle,
+      sampleHandlerQueue: queue)
   }
 
   /// Never stop acquisition on its delegate/sample queue. Awaiting OS
@@ -540,6 +544,35 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
   var acquisitionPending: Bool { lock.withLock { recovery?.operation != nil } }
   var readyForPCM: Bool { lock.withLock { pcm.ready } }
 
+  func observeUnreceived(at now: Int64) {
+    guard rawSegments != nil else { return }
+    let work: (source: (any SystemCaptureStream)?, token: SystemAudioRecovery.Binding?)? =
+      lock.withLock {
+        guard !finished, !stopping, recovery?.operation == nil,
+          !unreceivedObservationQueued
+        else { return nil }
+        unreceivedObservationQueued = true
+        return (stream, streamToken)
+      }
+    guard let work else { return }
+    let source = work.source
+    let observation: @Sendable () -> Void = { [weak self, source] in
+      guard let self else { return }
+      self.lock.withLock {
+        defer { self.unreceivedObservationQueued = false }
+        guard !self.finished, !self.stopping, self.recovery?.operation == nil,
+          self.stream === source, self.streamToken == work.token
+        else { return }
+        self.rawSegments?.observeUnreceived(at: now)
+      }
+    }
+    if let source {
+      source.afterAcceptedPCM(observation)
+    } else {
+      queue.async(execute: observation)
+    }
+  }
+
   func confirmedScope() -> (pid_t?, CaptureApplicationIdentity?) {
     lock.withLock { (recovery?.targetPID, recovery?.applicationIdentity) }
   }
@@ -593,7 +626,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         guard
           let selected = try testWindow.selection(
             observation: observation, frames: sampleBuffer.numSamples,
-            sampleRate: format.mSampleRate, savedFrames: pcm.stats.frames)
+            sampleRate: format.mSampleRate, savedFrames: pcm.acquiredFrames)
         else { return }
         sampleBuffer = try testPCMFrames(sampleBuffer, range: selected.frames)
         testObservation = selected.observation

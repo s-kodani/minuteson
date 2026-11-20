@@ -91,16 +91,23 @@ fn windows_synthetic_capture_case(scenario: &str) {
         serde_json::from_slice(&std::fs::read(directory.path.join("manifest.json")).unwrap())
             .unwrap();
     assert_eq!(raw["consoleWindowPresent"], false);
+    assert_eq!(raw["schemaVersion"], crate::current_formats::CAPTURE);
+    assert_eq!(raw["audioFormat"], "wav");
+    for lane in ["microphone", "system"] {
+        assert_eq!(raw[lane]["sampleRate"], 16_000);
+        assert_eq!(raw[lane]["channels"], 1);
+    }
     if scenario == "--synthetic-clock-overlap" {
-        // Overlap now switches to the monotone sample map before any raw
-        // segment is sealed, rather than adjusting an already appended map.
+        // Overlap switches to the monotone source sample map before PCM
+        // conversion, rather than adjusting an already appended map.
         assert_eq!(raw["timingEstimated"], true);
         let diagnostic: serde_json::Value =
             serde_json::from_reader(directory.open("capture-clock.json", 128 * 1024).unwrap())
                 .unwrap();
         for lane in ["microphone", "system"] {
             assert_eq!(raw[lane]["clockBoundaryAdjustments"], 0);
-            assert_eq!(raw[lane]["frames"], 240_000);
+            assert_eq!(raw[lane]["frames"], 80_000);
+            assert_eq!(diagnostic[lane]["savedFrames"], 240_000);
             assert_eq!(diagnostic[lane]["estimatedPackets"], 499);
             assert_eq!(
                 diagnostic[lane]["firstAnomalies"][0]["reason"],
@@ -130,11 +137,13 @@ fn windows_synthetic_capture_case(scenario: &str) {
                     .unwrap()
                     > 0
             );
-            assert_eq!(diagnostic[lane]["savedFrames"], raw[lane]["frames"]);
             // All selected PCM survives. The only excluded frames are beyond
             // the shared five-second window, including the known 20 ms gap.
+            // Diagnostics count acquired 48 kHz frames; the WAV contains 16 kHz frames.
             let received = diagnostic[lane]["observedPackets"].as_u64().unwrap() * 480;
-            assert_eq!(raw[lane]["frames"], received.min(240_000 - 960));
+            let selected = received.min(240_000 - 960);
+            assert_eq!(diagnostic[lane]["savedFrames"], selected);
+            assert_eq!(raw[lane]["frames"], selected.div_ceil(3));
             let events = diagnostic[lane]["firstAnomalies"].as_array().unwrap();
             assert!(events.iter().any(|e| e["reason"] == "equal_timestamp"));
             assert!(events.iter().any(|e| e["reason"] == "reversed_timestamp"));
@@ -146,6 +155,8 @@ fn windows_synthetic_capture_case(scenario: &str) {
     assert!(ready.microphone.as_ref().unwrap().info.frames > 0);
     assert!(ready.system.is_some());
     directory.cleanup().unwrap();
+    assert!(!directory.path.join("microphone.wav").exists());
+    assert!(!directory.path.join("system.wav").exists());
     assert!(!directory.path.join("microphone.caf").exists());
     assert!(!directory.path.join("system.caf").exists());
     assert!(!directory.path.join("capture-clock.json").exists());
@@ -191,18 +202,22 @@ fn windows_five_second_initialization_failure_retains_the_primary_error() {
     child.terminate().unwrap();
 }
 #[cfg(unix)]
-const FILES: [&str; 5] = [
+const FILES: [&str; 7] = [
     "manifest.json",
     "microphone.caf",
     "system.caf",
+    "microphone.wav",
+    "system.wav",
     "input-levels.json",
     "stop.request",
 ];
 #[cfg(windows)]
-const FILES: [&str; 11] = [
+const FILES: [&str; 13] = [
     "manifest.json",
     "microphone.caf",
     "system.caf",
+    "microphone.wav",
+    "system.wav",
     "input-levels.json",
     "stop.request",
     "input-status.json",
@@ -578,7 +593,11 @@ impl Manifest {
         if self.state != "failed" {
             return Ok(None);
         }
-        if u32::from(self.schema_version) != crate::current_formats::CAPTURE
+        if ![
+            crate::current_formats::CAPTURE,
+            crate::current_formats::LEGACY_CAPTURE,
+        ]
+        .contains(&u32::from(self.schema_version))
             || self.capture_test.owner_id != request.run_id
             || self.capture_test.duration_seconds != 5
             || self.capture_mode != request.capture_scope.mode
@@ -623,7 +642,11 @@ impl Manifest {
     }
 
     pub(super) fn require_owner(&self, request: &super::Request) -> Result<(), String> {
-        if u32::from(self.schema_version) != crate::current_formats::CAPTURE
+        if ![
+            crate::current_formats::CAPTURE,
+            crate::current_formats::LEGACY_CAPTURE,
+        ]
+        .contains(&u32::from(self.schema_version))
             || self.capture_test.owner_id != request.run_id
             || self.capture_test.duration_seconds != 5
             || self.capture_mode != request.capture_scope.mode
@@ -755,7 +778,7 @@ pub(super) fn verify(
     {
         return Err("テストの保存音声の共通原点が不正です".into());
     }
-    let track = |name, t: Track| -> Result<TrackProof, String> {
+    let track = |name: &'static str, t: Track| -> Result<TrackProof, String> {
         if cancelled() {
             return Err("テストの音声検証を取り消しました".into());
         }
@@ -791,8 +814,11 @@ pub(super) fn verify(
         if i128::from(first) + i128::from(layout.end_us) * 1000 > i128::from(end) {
             return Err("テスト音声の取得時刻が共通5秒枠を超えています".into());
         }
-        let (format, size, hash) =
-            crate::audio::inspect_recorded_caf(directory.open(name, AUDIO_LIMIT)?, cancelled)?;
+        let (format, size, hash) = if name.ends_with(".wav") {
+            crate::audio::inspect_recorded_wav(directory.open(name, AUDIO_LIMIT)?, cancelled)?
+        } else {
+            crate::audio::inspect_recorded_caf(directory.open(name, AUDIO_LIMIT)?, cancelled)?
+        };
         if format.frames != t.frames
             || format.sample_rate != rate as u32
             || Some(format.channels) != t.channels
@@ -815,18 +841,20 @@ pub(super) fn verify(
             info,
         })
     };
+    let (microphone_name, system_name) =
+        if u32::from(manifest.schema_version) == crate::current_formats::CAPTURE {
+            ("microphone.wav", "system.wav")
+        } else {
+            ("microphone.caf", "system.caf")
+        };
     let system_unreceived = manifest.system_audio_unreceived;
     let microphone_unreceived = manifest.microphone_audio_unreceived;
     if system_unreceived && microphone_unreceived {
         return Err("マイク・PC音声を取得できませんでした".into());
     }
     for (unreceived, name, t) in [
-        (
-            microphone_unreceived,
-            "microphone.caf",
-            &manifest.microphone,
-        ),
-        (system_unreceived, "system.caf", &manifest.system),
+        (microphone_unreceived, microphone_name, &manifest.microphone),
+        (system_unreceived, system_name, &manifest.system),
     ] {
         if !unreceived {
             continue;
@@ -874,12 +902,12 @@ pub(super) fn verify(
         microphone: if microphone_unreceived {
             None
         } else {
-            Some(track("microphone.caf", manifest.microphone)?)
+            Some(track(microphone_name, manifest.microphone)?)
         },
         system: if system_unreceived {
             None
         } else {
-            Some(track("system.caf", manifest.system)?)
+            Some(track(system_name, manifest.system)?)
         },
     })
 }

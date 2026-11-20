@@ -10,6 +10,14 @@ pub(in crate::storage) struct WorkspaceFiles {
     directories: BTreeSet<String>,
 }
 impl WorkspaceFiles {
+    /// Exact producer-owned audio entries. This does not include unknown
+    /// leftovers or control records and grants no unlink capability itself.
+    pub(in crate::storage) fn audio_paths(&self) -> impl Iterator<Item = &str> {
+        self.files
+            .iter()
+            .filter(|(_, (_, audio))| *audio)
+            .map(|(path, _)| path.as_str())
+    }
     /// Directories admitted through a native producer plan, including tracks
     /// whose only audio is an unclaimed crash leftover.
     pub(in crate::storage) fn directories(&self) -> impl Iterator<Item = &Path> {

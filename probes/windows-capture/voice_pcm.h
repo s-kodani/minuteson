@@ -34,4 +34,10 @@ class VoicePCM {
   static std::vector<std::uint8_t> header(std::uint64_t frames){
     std::vector<std::uint8_t> bytes(68);if(mon_voice_caf_header(frames,bytes.data(),bytes.size())!=68)throw std::runtime_error("invalid voice CAF geometry");return bytes;
   }
+  static std::vector<std::uint8_t> wave_header(std::uint64_t frames){
+    std::vector<std::uint8_t> bytes(80);
+    if(mon_voice_wav_header(frames,bytes.data(),bytes.size())!=80)
+      throw std::runtime_error("invalid voice WAV geometry");
+    return bytes;
+  }
 };

@@ -87,7 +87,7 @@ impl Status {
     }
 }
 
-#[derive(Debug, serde::Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, serde::Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Tip {
     schema_version: u32,
@@ -100,7 +100,7 @@ struct Tip {
     producer_closed: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Entry {
     schema_version: u32,
@@ -124,7 +124,7 @@ pub(crate) struct Entry {
     previous_entry_sha256: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Endpoints {
     start_nanoseconds: i64,
@@ -181,6 +181,7 @@ impl Stamp {
     }
 }
 
+#[derive(Clone)]
 struct BoundEntry {
     entry: Entry,
     json_stamp: Stamp,
@@ -428,6 +429,19 @@ impl Entry {
 }
 
 impl Prefix {
+    /// Clone the already pinned proof, not a fresh directory scan. Readers
+    /// continue to verify the same immutable stamps before and after use.
+    pub(crate) fn try_clone(&self) -> Result<Self, String> {
+        Ok(Self {
+            directory: self
+                .directory
+                .try_clone()
+                .map_err(|error| error.to_string())?,
+            tip: self.tip.clone(),
+            tip_stamp: self.tip_stamp.clone(),
+            entries: self.entries.clone(),
+        })
+    }
     pub(crate) fn lane(&self) -> Lane {
         if self.tip.lane == "microphone" {
             Lane::Microphone
@@ -616,7 +630,7 @@ impl Prefix {
             current: Some((first, audio)),
         })
     }
-    fn verify_entry(&self, index: usize) -> Result<(), String> {
+    pub(crate) fn verify_entry(&self, index: usize) -> Result<(), String> {
         let bound = &self.entries[index];
         let lane = if self.tip.lane == "microphone" {
             Lane::Microphone

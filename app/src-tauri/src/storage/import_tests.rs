@@ -97,6 +97,7 @@ fn pending_with_info(
     options: &audio_import::ImportOptions,
     info: AudioInfo,
 ) -> (ImportSnapshot, PathBuf, ImportManifest) {
+    // Retain a v2 CAF workspace to exercise upgrade and interrupted-import recovery.
     let bytes = wav_for(&info);
     let source = Fingerprint {
         path: s.root.join("not-permanent.wav"),
@@ -152,6 +153,214 @@ fn pending_with_info(
     )
     .unwrap();
     (s.audio_import(&import.id).unwrap(), base, manifest)
+}
+
+fn pending_wav(s: &Storage, operation: &str) -> (ImportSnapshot, PathBuf, ImportManifest) {
+    let (import, base, mut manifest) = pending(s, operation);
+    let path = base.join("recording.wav");
+    write_voice_wav(&path);
+    let bytes = std::fs::read(&path).unwrap();
+    manifest.schema_version = 4;
+    manifest.audio_format = Some("wav".into());
+    manifest.saved_audio = Some(audio_import::SavedAudio::for_source(&manifest.info).unwrap());
+    manifest.audio = FileEvidence {
+        size: bytes.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+    };
+    std::fs::write(
+        base.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    std::fs::remove_file(base.join("decoded.caf")).unwrap();
+    (import, base, manifest)
+}
+
+fn write_voice_wav(path: &Path) {
+    let mut writer = audio_import::VoiceWavWriter::new(path, 16000, 2).unwrap();
+    for first in (0..64000).step_by(4096) {
+        let pcm: Vec<_> = (first..(first + 4096).min(64000))
+            .flat_map(|_| [0.25_f32, -0.5_f32])
+            .collect();
+        writer.push(&pcm).unwrap();
+    }
+    writer.finish().unwrap();
+}
+
+#[test]
+fn canonical_import_adopts_the_decoded_wav_without_copying_pcm() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (import, base, manifest) = pending_wav(&s, "direct-wav");
+    let path = base.join("recording.wav");
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(before.len(), 80 + 64000 * 2);
+    let file = std::fs::File::open(&path).unwrap();
+    let identity = publication_files::Identity::file(&file).unwrap();
+    drop(file);
+
+    assert_eq!(s.finalize_audio_import(&import.id).unwrap().state, "ready");
+    let plan = s
+        .verify_canonical_audio(&import.meeting_id, &|| false)
+        .unwrap();
+    assert_eq!(plan.tracks.len(), 1);
+    assert_eq!(count(&s, "audio_tracks", &import.meeting_id), 1);
+    assert_eq!(count(&s, "audio_chunks", &import.meeting_id), 1);
+    let final_path = s
+        .meeting_mix_path(&import.meeting_id, &plan.tracks[0])
+        .unwrap();
+    identity
+        .require(&std::fs::File::open(&final_path).unwrap())
+        .unwrap();
+    assert_eq!(std::fs::read(&final_path).unwrap(), before);
+    assert_eq!(plan.tracks[0].chunks[0].hash, manifest.audio.sha256);
+    assert_eq!(count(&s, "file_assets", &import.meeting_id), 3);
+    assert!(!base.join("original.wav").exists());
+    assert!(!base.join("decoded.caf").exists());
+    assert!(!base.join("decoded-voice.caf").exists());
+    assert_eq!(s.finalize_audio_import(&import.id).unwrap().state, "ready");
+    identity
+        .require(&std::fs::File::open(&final_path).unwrap())
+        .unwrap();
+}
+
+#[test]
+fn canonical_import_cancellation_from_final_progress_keeps_shared_pcm_for_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (import, base, _) = pending_wav(&s, "direct-wav-progress-cancel");
+    let path = base.join("recording.wav");
+    let before = std::fs::read(&path).unwrap();
+    let identity = publication_files::Identity::file(&std::fs::File::open(&path).unwrap()).unwrap();
+    s.connection.lock().unwrap().execute_batch("CREATE TRIGGER reject_import_wav BEFORE INSERT ON meeting_audio_commits BEGIN SELECT RAISE(ABORT,'injected canonical commit failure'); END;").unwrap();
+    assert!(s.finalize_audio_import(&import.id).is_err());
+    assert_eq!(s.audio_import(&import.id).unwrap().state, "ready");
+    assert_eq!(count(&s, "meeting_audio_commits", &import.meeting_id), 0);
+    s.connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER reject_import_wav")
+        .unwrap();
+
+    let cancelled = Cell::new(false);
+    let error = s
+        .publish_single_wav(&import.meeting_id, &|| cancelled.get(), &|done, total| {
+            if total > 0 && done == total {
+                cancelled.set(true);
+            }
+        })
+        .unwrap_err();
+    assert!(cancelled.get());
+    assert!(error.contains("中断"), "{error}");
+    assert_eq!(count(&s, "meeting_audio_commits", &import.meeting_id), 0);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    identity
+        .require(&std::fs::File::open(&path).unwrap())
+        .unwrap();
+    assert!(base.join("original.wav").exists());
+
+    s.publish_single_wav(&import.meeting_id, &|| false, &|_, _| {})
+        .unwrap();
+    s.verify_canonical_audio(&import.meeting_id, &|| false)
+        .unwrap();
+    identity
+        .require(&std::fs::File::open(&path).unwrap())
+        .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(count(&s, "meeting_audio_commits", &import.meeting_id), 1);
+}
+
+#[test]
+fn canonical_import_rejects_identical_pcm_replacement_from_final_progress() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (import, base, _) = pending_wav(&s, "direct-wav-progress-replacement");
+    let path = base.join("recording.wav");
+    let retained = base.join("retained-recording.wav");
+    let bytes = std::fs::read(&path).unwrap();
+    let identity = publication_files::Identity::file(&std::fs::File::open(&path).unwrap()).unwrap();
+    s.connection.lock().unwrap().execute_batch("CREATE TRIGGER reject_import_wav BEFORE INSERT ON meeting_audio_commits BEGIN SELECT RAISE(ABORT,'injected canonical commit failure'); END;").unwrap();
+    assert!(s.finalize_audio_import(&import.id).is_err());
+    assert_eq!(s.audio_import(&import.id).unwrap().state, "ready");
+    s.connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER reject_import_wav")
+        .unwrap();
+
+    let replaced = Cell::new(false);
+    let error = s
+        .publish_single_wav(&import.meeting_id, &|| false, &|done, total| {
+            if total > 0 && done == total && !replaced.replace(true) {
+                std::fs::rename(&path, &retained).unwrap();
+                let mut options = std::fs::File::options();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut replacement = options.open(&path).unwrap();
+                #[cfg(windows)]
+                crate::windows_files::set_private(&path).unwrap();
+                std::io::Write::write_all(&mut replacement, &bytes).unwrap();
+                replacement.sync_all().unwrap();
+            }
+        })
+        .unwrap_err();
+    assert!(replaced.get());
+    assert!(
+        error.contains("変更") || error.contains("差し替え"),
+        "{error}"
+    );
+    assert_eq!(s.audio_import(&import.id).unwrap().state, "ready");
+    assert_eq!(count(&s, "meeting_audio_commits", &import.meeting_id), 0);
+    assert!(s.canonical_audio_plan(&import.meeting_id).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(std::fs::read(&retained).unwrap(), bytes);
+    identity
+        .require(&std::fs::File::open(&retained).unwrap())
+        .unwrap();
+    assert_ne!(
+        identity,
+        publication_files::Identity::file(&std::fs::File::open(&path).unwrap()).unwrap()
+    );
+    assert!(base.join("original.wav").exists());
+}
+
+#[test]
+fn legacy_compact_import_wraps_pcm_in_wav_without_requantizing() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (import, base, mut manifest) = pending(&s, "compact-caf-v3");
+    let pcm: Vec<_> = (0..64000).flat_map(|i| (i as i16).to_le_bytes()).collect();
+    let mut caf = mon_core::media::caf::voice_header(64000).unwrap().to_vec();
+    caf.extend_from_slice(&pcm);
+    std::fs::write(base.join("decoded-voice.caf"), &caf).unwrap();
+    std::fs::remove_file(base.join("decoded.caf")).unwrap();
+    manifest.schema_version = 3;
+    manifest.saved_audio = Some(audio_import::SavedAudio::for_source(&manifest.info).unwrap());
+    manifest.audio = FileEvidence {
+        size: caf.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(&caf)),
+    };
+    std::fs::write(
+        base.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    s.finalize_audio_import(&import.id).unwrap();
+    let plan = s
+        .verify_canonical_audio(&import.meeting_id, &|| false)
+        .unwrap();
+    let path = s
+        .meeting_mix_path(&import.meeting_id, &plan.tracks[0])
+        .unwrap();
+    let wav = std::fs::read(&path).unwrap();
+    assert_eq!(wav.len(), 80 + pcm.len());
+    assert_eq!(&wav[80..], pcm);
+    assert!(!base.join("decoded-voice.caf").exists());
 }
 
 #[test]
@@ -405,7 +614,7 @@ fn import_commit_is_atomic_scoped_and_never_fabricates_capture_or_speakers() {
         s.get_meeting(&saved.meeting_id).unwrap().unwrap().lifecycle,
         "imported"
     );
-    assert_eq!(count(&s, "file_assets", &saved.meeting_id), 4);
+    assert_eq!(count(&s, "file_assets", &saved.meeting_id), 3);
     assert_eq!(count(&s, "recording_sessions", &saved.meeting_id), 0);
     let plan = s.recorded_audio_plan(&saved.meeting_id).unwrap();
     assert_eq!(plan.tracks.len(), 1);
@@ -421,7 +630,7 @@ fn import_commit_is_atomic_scoped_and_never_fabricates_capture_or_speakers() {
     let pcm = audio.read_pcm(63999, 1).unwrap();
     assert!((f32::from_le_bytes(pcm[..4].try_into().unwrap()) + 0.125).abs() < 0.001);
     assert_eq!(s.finalize_audio_import(&snapshot.id).unwrap(), saved);
-    assert_eq!(count(&s, "file_assets", &saved.meeting_id), 4);
+    assert_eq!(count(&s, "file_assets", &saved.meeting_id), 3);
     assert!(s.cleanup_audio_import(&snapshot.id).is_err());
     assert!(s.fail_audio_import(&snapshot.id, "failed", "bad").is_err());
     assert!(!base.join("original.wav").exists());
@@ -510,8 +719,8 @@ fn import_db_failure_rolls_back_assets_track_lifecycle_and_handoff_then_recovers
     assert_eq!(s.recover_audio_imports().unwrap().len(), 1);
     assert!(s.recover_audio_imports().unwrap().is_empty());
     assert_eq!(s.audio_import(&snapshot.id).unwrap().state, "ready");
-    assert_eq!(count(&s, "audio_tracks", &snapshot.meeting_id), 2);
-    assert_eq!(count(&s, "file_assets", &snapshot.meeting_id), 4);
+    assert_eq!(count(&s, "audio_tracks", &snapshot.meeting_id), 1);
+    assert_eq!(count(&s, "file_assets", &snapshot.meeting_id), 3);
 }
 
 #[test]
@@ -671,7 +880,9 @@ fn import_info_bounds_and_space_estimate_are_checked_before_saved_audio() {
     assert!(info().required_bytes(u64::MAX).is_err());
     assert_eq!(
         info().required_bytes(44).unwrap(),
-        64000 * 2 * 2 + 136 + 44 + 128 * 1024 * 1024
+        // One canonical mono PCM16 WAV, its 80-byte header, the original and
+        // the existing reserve. No second intermediate audio copy is needed.
+        64000 * 2 + 80 + 44 + 128 * 1024 * 1024
     );
 }
 
@@ -696,15 +907,16 @@ fn compact_import_upgrade_retains_old_pcm_until_commit_and_resumes_without_reenc
     assert!(s.finalize_audio_import(&import.id).is_err());
     let manifest: ImportManifest =
         serde_json::from_slice(&std::fs::read(base.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest.schema_version, 3);
+    assert_eq!(manifest.schema_version, 4);
+    assert_eq!(manifest.audio_format.as_deref(), Some("wav"));
     assert_eq!(manifest.info, source);
     let saved = manifest.saved_audio.unwrap();
     assert_eq!(
         (saved.sample_rate, saved.channels, saved.frames),
         (16000, 1, 16003)
     );
-    let path = base.join("decoded-voice.caf");
-    assert_eq!(std::fs::metadata(&path).unwrap().len(), 68 + 16003 * 2);
+    let path = base.join("recording.wav");
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 80 + 16003 * 2);
     let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
     assert_eq!(std::fs::read(base.join("decoded.caf")).unwrap(), old);
     assert_eq!(count(&s, "file_assets", &import.meeting_id), 0);
@@ -720,7 +932,10 @@ fn compact_import_upgrade_retains_old_pcm_until_commit_and_resumes_without_reenc
         .unwrap();
     s.finalize_audio_import(&import.id).unwrap();
     assert_eq!(s.audio_import(&import.id).unwrap().info, source);
-    assert!(!path.exists());
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
     assert!(!base.join("decoded.caf").exists());
     assert!(s
         .verify_canonical_audio(&import.meeting_id, &|| false)
@@ -730,18 +945,14 @@ fn compact_import_upgrade_retains_old_pcm_until_commit_and_resumes_without_reenc
 #[cfg(unix)]
 fn fake_helper(root: &Path) -> Fingerprint {
     use std::os::unix::fs::PermissionsExt;
-    let caf = root.join("fixture.caf");
-    let pcm: Vec<_> = (0..64000)
-        .flat_map(|_| [0.25_f32, -0.5_f32])
-        .flat_map(|n| n.to_le_bytes())
-        .collect();
-    std::fs::write(&caf, caf_fixture(16000, 2, 3, 32, 4, &pcm)).unwrap();
+    let wav = root.join("fixture.wav");
+    write_voice_wav(&wav);
     let helper = root.join("fake-import-helper");
     std::fs::write(
         &helper,
         format!(
             "#!/bin/sh\nif test \"$3\" != '-'; then cp '{}' \"$3\"; fi\nprintf '%s' '{}'\n",
-            caf.display(),
+            wav.display(),
             serde_json::to_string(&info()).unwrap()
         ),
     )

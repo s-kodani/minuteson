@@ -337,7 +337,7 @@ impl Storage {
         manifest.info.validate()?;
         let original_path = base.join(format!("original.{}", manifest.info.detected_format));
         self.checked_import_file(&original_path, Some(&manifest.original), cancelled)?;
-        let decoded_path = base.join("decoded-voice.caf");
+        let decoded_path = base.join("recording.wav");
         self.checked_import_file(&decoded_path, Some(&manifest.audio), cancelled)?;
         let mut audio = VerifiedAudio::open_cancellable(
             File::open(&decoded_path).map_err(|e| e.to_string())?,
@@ -345,7 +345,7 @@ impl Storage {
             &manifest.audio.sha256,
             cancelled,
         )?;
-        audio.require_caf()?;
+        audio.require_wav()?;
         let saved = manifest
             .saved_audio
             .as_ref()
@@ -391,7 +391,7 @@ impl Storage {
             &self.root,
             &decoded_path,
             &manifest.audio,
-            "audio/x-caf",
+            "audio/wav",
             now,
         )?;
         let manifest_id = insert_asset(
@@ -406,7 +406,7 @@ impl Storage {
         tx.execute("UPDATE audio_import_commits SET manifest_asset_id=?2,manifest_hash=?3,error_message=NULL WHERE import_id=?1 AND manifest_asset_id IS NULL",params![id,manifest_id,evidence.sha256]).map_err(|e|e.to_string())?;
         tx.execute("UPDATE audio_imports SET state='ready',original_asset_id=?2,converted_asset_id=?3,error_code=NULL,updated_at=?4 WHERE id=?1",params![id,original,converted,now]).map_err(|e|e.to_string())?;
         let track = Uuid::new_v4().to_string();
-        tx.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'imported','caf',?4,?5,'ready','{\"timeline_alignment\":\"source\"}',?6,?6)",params![track,before.meeting_id,id,saved.sample_rate,saved.channels,now]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO audio_tracks(id,meeting_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,'imported','wav',?4,?5,'ready','{\"timeline_alignment\":\"source\"}',?6,?6)",params![track,before.meeting_id,id,saved.sample_rate,saved.channels,now]).map_err(|e|e.to_string())?;
         let chunk = Uuid::new_v4().to_string();
         tx.execute("INSERT INTO audio_chunks(id,meeting_id,track_id,file_asset_id,sequence,start_us,end_us,frame_count,sample_rate,channels,state,created_at) VALUES(?1,?2,?3,?4,0,0,?5,?6,?7,?8,'ready',?9)",params![chunk,before.meeting_id,track,converted,manifest.info.duration_us,saved.frames as i64,saved.sample_rate,saved.channels,now]).map_err(|e|e.to_string())?;
         // The source duration can end between 16kHz frames. Bind all converted
@@ -477,8 +477,10 @@ impl Storage {
             let entry = entry.map_err(|e| e.to_string())?;
             let name = entry.file_name();
             let name = name.to_str().ok_or("取り込み物の名前が不正です")?;
-            let owned = matches!(name, "decoded.caf" | "decoded-voice.caf" | "manifest.json")
-                || name == format!("original.{}", snapshot.info.detected_format)
+            let owned = matches!(
+                name,
+                "decoded.caf" | "decoded-voice.caf" | "recording.wav" | "manifest.json"
+            ) || name == format!("original.{}", snapshot.info.detected_format)
                 || (name.starts_with(".mon-import-manifest-") && name.ends_with(".part"))
                 || name.starts_with(".mon-import-report-")
                 || (name.starts_with(".mon-import-voice-") && name.ends_with(".part"));

@@ -20,7 +20,11 @@ test-rust-focused:
 rust-test-cache:
 	python3 tools/mon_rust_tests.py --status
 
-check: lint test build-macos-probe check-app check-browser check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-pc-only-capture check-recording-raw-prefix check-speaker-embedding
+check: lint test build-macos-probe check-app check-browser check-caf-playback check-capture-clock check-input-levels check-input-status check-input-history check-input-journal check-capture-test check-microphone-recovery check-system-recovery check-capture-ending check-pc-only-capture check-recording-raw-prefix check-single-wav check-speaker-embedding
+
+.PHONY: check-single-wav
+check-single-wav: build-macos-probe
+	python3 tools/mon_rust_tests.py swift_generated_single_wav_fixture_can_be_published_and_reopened -- --ignored
 
 prepare-capture-core:
 	sh probes/macos-capture/build-core.sh

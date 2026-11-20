@@ -132,6 +132,48 @@ fn payloads(archive: &VerifiedArchive) -> Vec<Vec<u8>> {
 }
 
 #[test]
+fn format8_schema39_portable_contents_restore_then_export_as_schema40() {
+    let root = tempfile::tempdir().unwrap();
+    let source = Storage::open(root.path().into()).unwrap();
+    meeting(&source, "portable-schema39");
+    let out = tempfile::tempdir().unwrap();
+    let (current, _) = write(&source, out.path());
+    let archive = verified(&current, out.path());
+    assert_eq!(archive.manifest.schema_version, 40);
+    let mut old = archive.manifest.clone();
+    // Schema40 changes no portable column or record. This envelope is the
+    // exact format8/schema39 contract, not an executable old SQL database.
+    old.schema_version = 39;
+    let old_path = out.path().join("schema39.monbackup");
+    pack(&old_path, &old, &payloads(&archive));
+    drop(archive);
+    let target_root = tempfile::tempdir().unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let selection = target
+        .prepare_additive_restore(&old_path, &|| false, &|_| {})
+        .unwrap();
+    let restored = selection
+        .publish(
+            &target,
+            &selection.preview().confirmation_id,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    assert_eq!(restored.meeting_ids.len(), 1);
+    target
+        .verify_canonical_audio(&restored.meeting_ids[0], &|| false)
+        .unwrap();
+    verify_database_schema(&target.connection.lock().unwrap()).unwrap();
+    let new_path = out.path().join("schema40.monbackup");
+    target.create_backup_archive(&new_path, &|| false).unwrap();
+    let new_archive = verified(&new_path, out.path());
+    assert_eq!(new_archive.manifest.format_version, 8);
+    assert_eq!(new_archive.manifest.schema_version, 40);
+    verify_database_schema(&new_archive.database).unwrap();
+}
+
+#[test]
 fn current_contents_roundtrip_has_one_baseline_and_no_jobs_or_edits() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
