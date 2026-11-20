@@ -1,6 +1,5 @@
 //! The canonical meeting audio: PCM16, mono, 16 kHz. Sizes and offsets are
 //! 64-bit; RF64 keeps a long recording in one file without truncation.
-use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
 pub(crate) const RATE: u32 = 16_000;
@@ -8,6 +7,23 @@ pub(crate) const RATE: u32 = 16_000;
 pub(crate) struct Layout {
     pub data_offset: u64,
     pub frames: u64,
+}
+
+/// Both historical compact headers and fixed-offset streaming headers are
+/// valid canonical WAVs. The opened file is still parsed before publication.
+pub(crate) fn valid_size(frames: u64, size: u64) -> bool {
+    frames.checked_mul(2).is_some_and(|bytes| {
+        bytes.checked_add(80) == Some(size)
+            || (bytes <= u64::from(u32::MAX) - 36 && bytes.checked_add(44) == Some(size))
+    })
+}
+
+/// Reserve the ds64 slot before PCM is written; growing beyond RIFF never
+/// shifts or copies any already captured samples.
+pub(crate) fn streaming_header(frames: u64) -> Result<Vec<u8>, String> {
+    mon_core::capture::wav::header(frames)
+        .map(|bytes| bytes.to_vec())
+        .map_err(str::to_owned)
 }
 
 pub(crate) fn header(frames: u64) -> Result<Vec<u8>, String> {

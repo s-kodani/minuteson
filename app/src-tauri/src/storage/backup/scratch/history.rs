@@ -180,6 +180,8 @@ pub(in crate::storage::backup) fn write_image(
     deletion_binding: Option<&crate::storage::deletion::relocation::Destination>,
     flac_history: Option<&crate::storage::recordings::flac::relocation::Source>,
     flac_binding: Option<&crate::storage::recordings::flac::relocation::Destination>,
+    wav_history: Option<&crate::storage::backup::relocation::wav::Source>,
+    wav_binding: Option<&crate::storage::backup::relocation::wav::Destination>,
     bindings: &[binding::Record],
 ) -> Result<(), String> {
     let proof = serde_json::to_string(&Identity::read(&private_directory(target)?)?)
@@ -263,6 +265,24 @@ pub(in crate::storage::backup) fn write_image(
         object.insert(
             "flac_binding".into(),
             serde_json::to_value(flac_binding.ok_or("FLACのコピー先がありません")?)
+                .map_err(|e| e.to_string())?,
+        );
+        local_json = serde_json::to_string(&local).map_err(|e| e.to_string())?;
+    }
+    if wav_history.is_some() != wav_binding.is_some() {
+        return Err("WAV履歴とコピー先の所有対応が揃っていません".into());
+    }
+    if let Some(source) = wav_history {
+        let mut local: serde_json::Value =
+            serde_json::from_str(&local_json).map_err(|e| e.to_string())?;
+        let object = local.as_object_mut().ok_or("元のWAV移動履歴が不正です")?;
+        object.insert(
+            "wav_history".into(),
+            serde_json::to_value(source).map_err(|e| e.to_string())?,
+        );
+        object.insert(
+            "wav_binding".into(),
+            serde_json::to_value(wav_binding.ok_or("WAVのコピー先がありません")?)
                 .map_err(|e| e.to_string())?,
         );
         local_json = serde_json::to_string(&local).map_err(|e| e.to_string())?;

@@ -364,6 +364,11 @@ jobs:
         env:
           TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
         run: python tools/mon_ci_native_tests.py --suite full --swift-fixture --timings-json output/rust-tests/${{ runner.os }}.json
+      - name: macOS single WAV publication integration
+        if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
+        env:
+          TAURI_CONFIG: '{"bundle":{"resources":null,"externalBin":null,"active":false}}'
+        run: cargo test --manifest-path app/src-tauri/Cargo.toml --locked --lib swift_generated_single_wav_fixture_can_be_published_and_reopened -- --ignored
       - name: Prepare macOS resident workers for runtime regression
         if: env.MON_CI_FULL == 'true' && runner.os == 'macOS'
         run: python tools/mon_inference_runtime.py

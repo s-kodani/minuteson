@@ -77,24 +77,41 @@ enum CaptureSession {
     var publishedMicrophoneSelection: MicrophoneSelectionStatus?
     defer { journalStatus?.removeIfOwned() }
     let segmentCommits = RawSegmentCommitWorker()
+    let liveWav =
+      try options.writesWav && options.publishesInputStatus
+      ? LiveWavSession(
+        output: options.output, owner: options.inputLevelOwner!, commits: segmentCommits)
+      : nil
+    let testMicWav =
+      try options.writesWav && testWindow != nil
+      ? LiveWavSession(
+        output: options.output, owner: options.inputLevelOwner!, commits: segmentCommits,
+        fileName: "microphone.wav", onlyLane: 0) : nil
+    let testSystemWav =
+      try options.writesWav && testWindow != nil
+      ? LiveWavSession(
+        output: options.output, owner: options.inputLevelOwner!, commits: segmentCommits,
+        fileName: "system.wav", onlyLane: 1) : nil
     let rawMic =
-      options.publishesInputStatus
+      options.publishesInputStatus || testMicWav != nil
       ? try RawRecordingSegments(
         output: options.output, owner: options.inputLevelOwner!, lane: "microphone",
         allowsClockRebasing: options.recoversCaptureClock,
-        commits: segmentCommits) : nil
+        commits: segmentCommits, wavSession: testMicWav ?? liveWav) : nil
     let rawSystem =
-      options.publishesInputStatus
+      options.publishesInputStatus || testSystemWav != nil
       ? try RawRecordingSegments(
         output: options.output, owner: options.inputLevelOwner!, lane: "system",
         allowsClockRebasing: options.recoversCaptureClock,
-        commits: segmentCommits) : nil
+        commits: segmentCommits, wavSession: testSystemWav ?? liveWav) : nil
+    let trackExtension = options.writesWav ? "wav" : "caf"
     let systemStopRequest = options.output.appendingPathComponent("stop.request")
     let systemParentPID = options.parentPID
     let systemControlled = options.stopOnFile
     let processFamily = options.applicationIdentity.map { CaptureProcessFamily(root: $0) }
     let mic = MicrophoneRecorder(
-      outputURL: options.output.appendingPathComponent("microphone.caf"), clock: clock,
+      outputURL: options.output.appendingPathComponent("microphone." + trackExtension),
+      clock: clock,
       microphoneUID: options.microphoneUID,
       applicationIdentity: options.applicationIdentity,
       processFamily: processFamily,
@@ -107,7 +124,7 @@ enum CaptureSession {
             && !parentHasExited(systemParentPID))
       })
     let system = SystemAudioRecorder(
-      outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
+      outputURL: options.output.appendingPathComponent("system." + trackExtension), clock: clock,
       levelsEnabled: options.inputLevelOwner != nil, testWindow: testWindow,
       retries: options.recoversSystemAudio, backend: options.backend,
       mayContinue: {
@@ -117,12 +134,12 @@ enum CaptureSession {
       }, inputEventObserver: inputEvents?.observer(.system), rawSegments: rawSystem,
       processFamily: processFamily)
     let tap = CoreAudioTapRecorder(
-      outputURL: options.output.appendingPathComponent("system.caf"), clock: clock,
+      outputURL: options.output.appendingPathComponent("system." + trackExtension), clock: clock,
       levelsEnabled: options.inputLevelOwner != nil, rawSegments: rawSystem)
     var telemetry: CaptureTelemetryPublisher?
     defer { telemetry?.stop() }
     var manifest = Manifest(
-      schemaVersion: 4,
+      schemaVersion: options.writesWav ? 5 : 4,
       scenario: options.scenario,
       captureMode: options.mode,
       backend: options.backend,
@@ -141,6 +158,7 @@ enum CaptureSession {
     )
     manifest.captureTest = testWindow?.metadata()
     manifest.recordingOwnerId = options.inputLevelOwner
+    manifest.singleWav = liveWav?.snapshot()
     try write(manifest, to: manifestURL)
     let power = RecordingPowerAssertion()
     // Also covers a throw while writing the final manifest. Do not depend on
@@ -273,6 +291,11 @@ enum CaptureSession {
             }
           }
           if !options.usesStandaloneTapProbe { system.maintain() }
+          if liveWav != nil, let now = PCMInputLevel.nowNanoseconds() {
+            mic.observeUnreceived(at: now)
+            system.observeUnreceived(at: now)
+            manifest.singleWav = liveWav?.snapshot()
+          }
           let microphone = mic.snapshot()
           let systemStats = options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot()
           try microphone.requireWritable()
@@ -330,9 +353,9 @@ enum CaptureSession {
       where stats.frames == 0 {
         guard
           !FileManager.default.fileExists(
-            atPath: options.output.appendingPathComponent(lane + ".caf").path)
+            atPath: options.output.appendingPathComponent(lane + "." + trackExtension).path)
         else {
-          throw ProbeError.capture("unreceived input has an unexpected CAF payload")
+          throw ProbeError.capture("unreceived input has an unexpected audio payload")
         }
       }
       if let rawMic {
@@ -358,6 +381,24 @@ enum CaptureSession {
         } else {
           try manifest.finalizeClock(clock)
         }
+      }
+      if let liveWav {
+        guard let ending = manifest.captureEnd,
+          let origin = [micStats.firstCaptureNanoseconds, systemStats.firstCaptureNanoseconds]
+            .compactMap({ $0 }).min()
+        else { throw ProbeError.capture("single WAV has no proven capture ending") }
+        try liveWav.finish(endNanoseconds: origin + ending.endUs * 1000)
+        manifest.singleWav = liveWav.snapshot()
+      }
+      try testMicWav?.finish()
+      try testSystemWav?.finish()
+      if testMicWav != nil, micStats.frames > 0 {
+        try verifyRecordedWAV(
+          options.output.appendingPathComponent("microphone.wav"), expected: micStats)
+      }
+      if testSystemWav != nil, systemStats.frames > 0 {
+        try verifyRecordedWAV(
+          options.output.appendingPathComponent("system.wav"), expected: systemStats)
       }
       manifest.state = "saved"
     } catch {
@@ -386,6 +427,7 @@ enum CaptureSession {
       manifest.inputEventJournalError = String(describing: error)
     }
     manifest.inputEventJournalPersistence = inputEvents?.persistence()
+    manifest.singleWav = liveWav?.snapshot()
     manifest.captureTest = testWindow?.metadata()
     if manifest.state != "saved" {
       manifest.microphone = mic.snapshot()

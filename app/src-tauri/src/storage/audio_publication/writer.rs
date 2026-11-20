@@ -17,7 +17,7 @@ struct Plan {
     identity: Identity,
     hash: Option<String>,
 }
-pub(super) struct Pending {
+pub(in crate::storage) struct Pending {
     directory: Directory,
     plan: Plan,
     stamp: Stamp,

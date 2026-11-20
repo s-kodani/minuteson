@@ -1,8 +1,8 @@
 //! One-time upgrade of pre-compact, uncommitted import workspaces. The old
 //! decoded CAF remains intact until canonical WAV publication retires inputs.
 use super::*;
-use crate::audio_import::{SavedAudio, VoiceCafWriter};
-use std::io::Write;
+use crate::audio_import::{SavedAudio, VoiceWavWriter};
+use std::io::{Seek, Write};
 
 pub(super) fn upgrade(
     storage: &Storage,
@@ -17,7 +17,7 @@ pub(super) fn upgrade(
     }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     let mut manifest: ImportManifest = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    if manifest.schema_version != 2 {
+    if !matches!(manifest.schema_version, 2 | 3) {
         return Ok(());
     }
     let (size, hash): (i64, String) = storage
@@ -31,7 +31,9 @@ pub(super) fn upgrade(
         )
         .map_err(|e| e.to_string())?;
     if manifest.audio_format.as_deref() != Some("caf")
-        || manifest.saved_audio.is_some()
+        || (manifest.schema_version == 2 && manifest.saved_audio.is_some())
+        || (manifest.schema_version == 3
+            && manifest.saved_audio.as_ref() != Some(&SavedAudio::for_source(&manifest.info)?))
         || manifest.import_id != before.id
         || manifest.meeting_id != before.meeting_id
         || manifest.info != before.info
@@ -44,7 +46,11 @@ pub(super) fn upgrade(
     manifest.info.validate()?;
     let original = base.join(format!("original.{}", manifest.info.detected_format));
     storage.checked_import_file(&original, Some(&manifest.original), cancelled)?;
-    let old_path = base.join("decoded.caf");
+    let old_path = base.join(if manifest.schema_version == 2 {
+        "decoded.caf"
+    } else {
+        "decoded-voice.caf"
+    });
     storage.checked_import_file(&old_path, Some(&manifest.audio), cancelled)?;
     let mut audio = VerifiedAudio::open_cancellable(
         File::open(&old_path).map_err(|e| e.to_string())?,
@@ -53,9 +59,16 @@ pub(super) fn upgrade(
         cancelled,
     )?;
     audio.require_caf()?;
-    if audio.format.frames != manifest.info.frames
-        || audio.format.sample_rate != manifest.info.sample_rate
-        || audio.format.channels != manifest.info.channels
+    let expected = SavedAudio::for_source(&manifest.info)?;
+    if (manifest.schema_version == 2
+        && (audio.format.frames != manifest.info.frames
+            || audio.format.sample_rate != manifest.info.sample_rate
+            || audio.format.channels != manifest.info.channels))
+        || (manifest.schema_version == 3
+            && (!audio.format.is_compact_recording_segment()
+                || audio.format.frames != expected.frames
+                || audio.format.sample_rate != expected.sample_rate
+                || audio.format.channels != expected.channels))
     {
         return Err("旧取り込みの音声形式・長さが一致しません".into());
     }
@@ -64,26 +77,55 @@ pub(super) fn upgrade(
         .suffix(".part")
         .tempfile_in(base)
         .map_err(|e| e.to_string())?;
-    let mut writer = VoiceCafWriter::from_file(
-        candidate.reopen().map_err(|e| e.to_string())?,
-        manifest.info.sample_rate,
-        manifest.info.channels,
-    )?;
-    let mut first = 0;
-    while first < manifest.info.frames {
-        if cancelled() {
-            return Err("取り込み形式の移行を停止しました".into());
+    if manifest.schema_version == 3 {
+        // Compact PCM is already canonical. Copy bytes exactly, without a
+        // second normalization or quantization pass.
+        let mut output = candidate.reopen().map_err(|e| e.to_string())?;
+        output
+            .write_all(&crate::audio::wave::streaming_header(audio.format.frames)?)
+            .map_err(|e| e.to_string())?;
+        let mut source = File::open(&old_path).map_err(|e| e.to_string())?;
+        source
+            .seek(std::io::SeekFrom::Start(audio.format.pcm_data_offset()))
+            .map_err(|e| e.to_string())?;
+        let mut left = audio.format.frames * 2;
+        let mut buffer = [0; 65536];
+        while left > 0 {
+            if cancelled() {
+                return Err("取り込み形式の移行を停止しました".into());
+            }
+            let count = (left as usize).min(buffer.len());
+            source
+                .read_exact(&mut buffer[..count])
+                .map_err(|e| e.to_string())?;
+            output
+                .write_all(&buffer[..count])
+                .map_err(|e| e.to_string())?;
+            left -= count as u64;
         }
-        let count = (manifest.info.frames - first).min(4096);
-        let pcm = audio.read_frames(first, count)?;
-        let samples: Vec<f32> = pcm
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-            .collect();
-        writer.push(&samples)?;
-        first += count;
+        output.sync_all().map_err(|e| e.to_string())?;
+    } else {
+        let mut writer = VoiceWavWriter::from_file(
+            candidate.reopen().map_err(|e| e.to_string())?,
+            manifest.info.sample_rate,
+            manifest.info.channels,
+        )?;
+        let mut first = 0;
+        while first < manifest.info.frames {
+            if cancelled() {
+                return Err("取り込み形式の移行を停止しました".into());
+            }
+            let count = (manifest.info.frames - first).min(4096);
+            let pcm = audio.read_frames(first, count)?;
+            let samples: Vec<f32> = pcm
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect();
+            writer.push(&samples)?;
+            first += count;
+        }
+        writer.finish()?;
     }
-    writer.finish()?;
     let proof = storage.checked_import_file(candidate.path(), None, cancelled)?;
     let saved = SavedAudio::for_source(&manifest.info)?;
     let checked = VerifiedAudio::open_cancellable(
@@ -99,7 +141,7 @@ pub(super) fn upgrade(
     storage.checked_import_file(&path, Some(&evidence), cancelled)?;
     storage.checked_import_file(&old_path, Some(&manifest.audio), cancelled)?;
     storage.checked_import_file(&original, Some(&manifest.original), cancelled)?;
-    let target = base.join("decoded-voice.caf");
+    let target = base.join("recording.wav");
     if target.symlink_metadata().is_ok() {
         storage.checked_import_file(&target, Some(&proof), cancelled)?;
     } else {
@@ -108,7 +150,8 @@ pub(super) fn upgrade(
             .map_err(|e| e.to_string())?;
     }
     crate::native_fs::sync_directory(base)?;
-    manifest.schema_version = 3;
+    manifest.schema_version = 4;
+    manifest.audio_format = Some("wav".into());
     manifest.saved_audio = Some(saved);
     manifest.audio = proof;
     let mut pending = tempfile::Builder::new()

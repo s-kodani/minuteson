@@ -238,6 +238,7 @@ final class MicrophoneAudioUnitContext: @unchecked Sendable {
   private var provenRevision: UInt64?
   private var terminalFailure: String?
   private var inFlight = 0
+  private var idleObservation: (@Sendable () -> Void)?
   private var rendering = false
   private var accepting = false
   private var started = false
@@ -255,6 +256,29 @@ final class MicrophoneAudioUnitContext: @unchecked Sendable {
   private var callbackInstalled = false
   private var unitListeners: [AudioUnitPropertyID] = []
   private var deviceListeners: [AudioObjectPropertyAddress] = []
+
+  // The recorder coalesces this to one pending control observation. Render and
+  // metadata callbacks never wait for it; their final release only schedules it.
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void) {
+    let idle = locked {
+      if inFlight == 0 { return true }
+      idleObservation = observation
+      return false
+    }
+    if idle { observation() }
+  }
+
+  private func finishedCallback(rendered: Bool) {
+    let observation = locked { () -> (@Sendable () -> Void)? in
+      if rendered { rendering = false }
+      inFlight -= 1
+      condition.broadcast()
+      guard inFlight == 0 else { return nil }
+      defer { idleObservation = nil }
+      return idleObservation
+    }
+    observation?()
+  }
 
   init(api: any MicrophoneAudioUnitAPI, unit: AudioUnit, binding: MicrophoneRecovery.Binding) {
     self.api = api
@@ -495,12 +519,7 @@ final class MicrophoneAudioUnitContext: @unchecked Sendable {
       return (true, observer)
     }
     guard work.0 else { return }
-    defer {
-      locked {
-        inFlight -= 1
-        condition.broadcast()
-      }
-    }
+    defer { finishedCallback(rendered: false) }
     work.1?()
   }
   private func fail(_ detail: String) {
@@ -537,13 +556,7 @@ final class MicrophoneAudioUnitContext: @unchecked Sendable {
       }
       return noErr
     }
-    defer {
-      locked {
-        rendering = false
-        inFlight -= 1
-        condition.broadcast()
-      }
-    }
+    defer { finishedCallback(rendered: true) }
     buffer.frameLength = frames
     // AVAudioPCMBuffer's list accessor may regenerate its header. Hold the
     // exact list passed to Render so a second accessor cannot hide corruption.

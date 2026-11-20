@@ -10,7 +10,11 @@ mod clock;
 #[cfg(any(unix, windows))]
 pub(in crate::storage) mod flac;
 #[cfg(any(unix, windows))]
+mod legacy_wav;
+#[cfg(any(unix, windows))]
 pub(crate) mod partial;
+#[cfg(any(unix, windows))]
+pub(crate) mod wav;
 use clock::{CaptureClock, CaptureEnd};
 #[cfg(all(test, unix))]
 pub(crate) use flac::tests::{
@@ -452,8 +456,15 @@ impl Storage {
         };
         if registered {
             let _owner = self.begin_meeting_work(&session.meeting_id, "recording", None)?;
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if let Some(saved) = legacy_wav::migrate_registered(self, &session, cancelled)? {
+                return Ok(saved);
+            }
             self.publish_single_wav(&session.meeting_id, cancelled, &|_, _| {})?;
             return Ok(session);
+        }
+        if self.has_single_wav(&session)? {
+            return self.finalize_single_wav_recording(&session, cancelled);
         }
         match self.finalize_recording(session_id) {
             Ok(saved) => return Ok(saved),
@@ -700,7 +711,7 @@ impl Storage {
                     prefixes.push(prefix);
                 }
                 (Some(prefix), Some(status))
-                    if manifest.schema_version == crate::current_formats::CAPTURE
+                    if manifest.schema_version == crate::current_formats::LEGACY_CAPTURE
                         && manifest.recording_owner_id.as_deref() == Some(owner)
                         && status.agrees_with_completed(&prefix, track.frames as u64) =>
                 {
@@ -726,8 +737,16 @@ impl Storage {
         };
         let _meeting_owner = self.begin_meeting_work(&session.meeting_id, "recording", None)?;
         if session.state == "saved" {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if let Some(saved) = legacy_wav::migrate_registered(self, &session, &|| false)? {
+                return Ok(saved);
+            }
             self.publish_single_wav(&session.meeting_id, &|| false, &|_, _| {})?;
             return Ok(session);
+        }
+        if self.has_single_wav(&session)? {
+            drop(_meeting_owner);
+            return self.finalize_single_wav_recording(&session, &|| false);
         }
         if !matches!(
             session.state.as_str(),
@@ -751,7 +770,7 @@ impl Storage {
             .join(session_id);
         let manifest_file = self.checked_capture_file(&base.join("manifest.json"), None)?;
         let mut manifest = self.read_capture_manifest(&manifest_file)?;
-        if manifest.schema_version != crate::current_formats::CAPTURE
+        if manifest.schema_version != crate::current_formats::LEGACY_CAPTURE
             || manifest.state != "saved"
             || !manifest.errors.is_empty()
         {
@@ -878,29 +897,35 @@ impl Storage {
             "{\"timeline_alignment\":\"unverified\"}".into()
         };
         #[cfg(any(unix, windows))]
-        let publication = if let Some(prefixes) = &raw_prefixes {
+        if let Some(prefixes) = &raw_prefixes {
             let origin = prefixes
                 .iter()
-                .filter(|prefix| prefix.frames() > 0)
-                .map(|prefix| prefix.first_capture_nanoseconds())
+                .filter(|p| p.frames() > 0)
+                .map(|p| p.first_capture_nanoseconds())
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .min()
                 .ok_or("保存音声がありません")?;
-            Some(flac::Publication::prepare_completed(
+            let document: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(self.managed_path(&manifest_file.relative)?)
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            self.read_capture_manifest(&manifest_file)?;
+            return legacy_wav::save(
                 self,
+                &session,
                 &base,
-                &manifest_file.hash,
-                origin,
+                document,
                 prefixes,
+                origin,
+                duration_us,
+                started_at,
+                ended_at,
+                None,
                 &|| false,
-            )?)
-        } else {
-            None
-        };
-        #[cfg(any(unix, windows))]
-        let segmented = publication.is_some();
-        #[cfg(not(any(unix, windows)))]
+            );
+        }
         let segmented = false;
         let mic_file = if mic_unreceived {
             let directory = crate::input_levels::open_capture_directory(&self.root.join(&base))?;
@@ -970,18 +995,6 @@ impl Storage {
             "application/json",
             now,
         )?;
-        #[cfg(any(unix, windows))]
-        if let Some(publication) = &publication {
-            publication.verify(self)?;
-            publication.insert_completed(
-                &transaction,
-                &session.meeting_id,
-                session_id,
-                &processing_config,
-                duration_us,
-                now,
-            )?;
-        }
         if !segmented {
             let mut tracks = Vec::new();
             if let (Some(mic_file), Some(mic_format)) = (&mic_file, mic_format) {
@@ -1049,16 +1062,10 @@ impl Storage {
         }
         self.require_data_writable()?;
         self.read_capture_manifest(&manifest_file)?;
-        #[cfg(any(unix, windows))]
-        if let Some(publication) = &publication {
-            publication.verify(self)?;
-        }
         #[cfg(test)]
         flac::crash_point("completed-before-db-commit");
         transaction.commit().map_err(|error| error.to_string())?;
         drop(connection);
-        #[cfg(any(unix, windows))]
-        drop(publication);
         self.publish_single_wav(&session.meeting_id, &|| false, &|completed, total| {
             crate::operation_observation::report("mixing_audio", completed, total, "frames");
         })?;
@@ -1603,6 +1610,16 @@ pub(in crate::storage) mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+        for name in ["manifest.json", "microphone.caf", "system.caf"] {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(output.join(name), std::fs::Permissions::from_mode(0o600))
+                    .unwrap();
+            }
+            #[cfg(windows)]
+            crate::windows_files::set_private(&output.join(name)).unwrap();
+        }
         (meeting.id, session.id, output, manifest)
     }
 

@@ -24,6 +24,8 @@ final class SystemPCMWriter: @unchecked Sendable {
       return rawSegments?.applyingSavedAudio(to: result) ?? result
     }
   }
+  // Test-window limits use native frames before the normalized public view.
+  var acquiredFrames: Int64 { lock.withLock { savedStats.frames } }
 
   init(outputURL: URL, rawSegments: RawRecordingSegments? = nil) {
     self.outputURL = outputURL

@@ -51,6 +51,7 @@ impl DriftFixture {
             .join(&session.id);
         fs::create_dir_all(&directory).unwrap();
         let output = Command::new(helper())
+            .args(["--capture-format", "wav-v1"])
             .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
             .args([
                 "--backend",
@@ -84,15 +85,31 @@ impl DriftFixture {
 }
 
 #[test]
-fn windows_clock_drift_uses_the_same_committed_raw_maps_and_finalizes() {
+fn windows_clock_drift_uses_the_single_wav_proofs_and_finalizes_without_rewriting_pcm() {
     let f = DriftFixture::new();
     let value: serde_json::Value =
         serde_json::from_slice(&fs::read(f.directory.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(value["clockMappingSource"], "sealed_raw_v1");
+    assert_eq!(value["schemaVersion"], 5);
+    assert_eq!(value["audioFormat"], "wav");
+    assert_eq!(value["clockMappingSource"], "single_wav_v1");
+    let mut cursor = crate::storage::recordings::wav::Cursor::default();
+    let tip = cursor
+        .read(&f.directory, &f.session, &|| false)
+        .unwrap()
+        .unwrap();
+    assert!(tip.checkpoints >= 2);
+    assert!(cursor.coverage.iter().all(|frames| *frames > 0));
+    assert_eq!(value["singleWav"]["frames"], tip.frames);
+    let original = fs::read(f.directory.join("recording.wav")).unwrap();
     f.storage.finalize_recording(&f.session).unwrap();
+    assert_eq!(
+        fs::read(f.directory.join("recording.wav")).unwrap(),
+        original
+    );
     let plan = f.storage.recorded_audio_plan(&f.meeting).unwrap();
     assert_eq!(plan.tracks.len(), 1);
     assert_eq!(plan.tracks[0].kind, "processed");
+    assert_eq!(plan.tracks[0].chunks[0].frames as u64, tip.frames);
     assert_eq!(
         plan.tracks[0].end_us,
         plan.tracks[0].chunks[0].frames * 1000000 / 16000
@@ -100,80 +117,121 @@ fn windows_clock_drift_uses_the_same_committed_raw_maps_and_finalizes() {
     f.storage
         .verify_canonical_audio(&f.meeting, &|| false)
         .unwrap();
-}
-
-#[test]
-fn windows_finalization_requires_current_seals_and_exact_clock_maps() {
-    for (problem, expected) in [
-        ("missing_marker", "録音の時計対応の出所がありません"),
-        ("unknown_marker", "録音の時計対応の出所が不正です"),
-        ("missing_raw", "録音の時計対応の出所が不正です"),
-        (
-            "mismatched_maps",
-            "原音声と録音全体の共通時計対応が一致しません",
-        ),
-    ] {
-        let f = DriftFixture::new();
-        let path = f.directory.join("manifest.json");
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let mut original_raw = Vec::new();
-        for lane in ["microphone", "system"] {
-            let segments = value[lane]["rawSegments"]["sealedSegments"]
-                .as_u64()
-                .unwrap();
-            assert!(segments > 0);
-            for sequence in 1..=segments {
-                let audio = f.directory.join(format!("raw-{lane}-{sequence:08}.caf"));
-                original_raw.push((audio.clone(), fs::read(&audio).unwrap()));
-            }
-        }
-        match problem {
-            "missing_marker" => {
-                value.as_object_mut().unwrap().remove("clockMappingSource");
-            }
-            "unknown_marker" => value["clockMappingSource"] = serde_json::json!("unknown"),
-            "missing_raw" => {
-                for lane in ["microphone", "system"] {
-                    value[lane].as_object_mut().unwrap().remove("rawSegments");
-                }
-            }
-            "mismatched_maps" => {
-                for lane in ["microphone", "system"] {
-                    let maps = value[lane]["clockSegments"].as_array().unwrap();
-                    assert!(maps.len() >= 2);
-                    let mut whole = maps[0].clone();
-                    whole["sourceFrameEnd"] = value[lane]["frames"].clone();
-                    whole["timelineEndUs"] = maps.last().unwrap()["timelineEndUs"].clone();
-                    value[lane]["clockSegments"] = serde_json::json!([whole]);
-                }
-            }
-            _ => unreachable!(),
-        }
-        let original = serde_json::to_vec(&value).unwrap();
-        fs::write(&path, &original).unwrap();
-        let error = f.storage.finalize_recording(&f.session).unwrap_err();
-        assert_eq!(error, expected, "{problem}");
-        assert_eq!(fs::read(&path).unwrap(), original);
-        for (audio, original_audio) in original_raw {
-            assert!(
-                fs::read(&audio).unwrap() == original_audio,
-                "{problem}: manifest rejection changed sealed audio {}",
-                audio.display()
-            );
-        }
-        for lane in ["microphone", "system"] {
-            assert!(
-                !f.directory.join(format!("{lane}.caf")).exists(),
-                "{problem}"
-            );
-        }
-        assert!(f.storage.recorded_audio_plan(&f.meeting).is_err());
+    for entry in fs::read_dir(&f.directory).unwrap() {
+        assert!(!matches!(
+            entry.unwrap().path().extension().and_then(|v| v.to_str()),
+            Some("caf" | "flac")
+        ));
     }
 }
 
 #[test]
-fn windows_resampled_packets_cross_raw_seal_without_reversing_or_losing_pcm() {
+fn windows_finalization_requires_exact_single_wav_ownership_clock_and_receipt_order() {
+    for problem in [
+        "missing_marker",
+        "unknown_marker",
+        "missing_receipt",
+        "reordered_receipts",
+        "wrong_owner",
+        "wrong_tip_frames",
+        "wrong_origin",
+        "wrong_manifest_tip",
+        "wrong_clock_domain",
+        "wrong_capture_end",
+        "changed_pcm",
+    ] {
+        let f = DriftFixture::new();
+        let manifest_path = f.directory.join("manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let first_path = f.directory.join("wav-00000001.json");
+        let second_path = f.directory.join("wav-00000002.json");
+        assert!(
+            second_path.is_file(),
+            "fixture must cross a durability checkpoint"
+        );
+        match problem {
+            "missing_marker" => {
+                manifest
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("clockMappingSource");
+            }
+            "unknown_marker" => manifest["clockMappingSource"] = serde_json::json!("unknown"),
+            "missing_receipt" => fs::remove_file(&first_path).unwrap(),
+            "reordered_receipts" => {
+                let first = fs::read(&first_path).unwrap();
+                let second = fs::read(&second_path).unwrap();
+                fs::write(&first_path, second).unwrap();
+                fs::write(&second_path, first).unwrap();
+            }
+            "wrong_owner" => {
+                let path = f.directory.join("single-wav-owner.json");
+                let mut owner: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                owner["inode"] = serde_json::json!(owner["inode"].as_u64().unwrap() ^ 1);
+                fs::write(path, serde_json::to_vec(&owner).unwrap()).unwrap();
+            }
+            "wrong_tip_frames" | "wrong_origin" => {
+                let path = f.directory.join("single-wav.json");
+                let mut tip: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                let field = if problem == "wrong_origin" {
+                    "captureOriginNanoseconds"
+                } else {
+                    "frames"
+                };
+                tip[field] = serde_json::json!(tip[field].as_u64().unwrap() + 1);
+                fs::write(path, serde_json::to_vec(&tip).unwrap()).unwrap();
+            }
+            "wrong_manifest_tip" => manifest["singleWav"]["frames"] = serde_json::json!(1),
+            "wrong_clock_domain" => {
+                manifest["captureClock"]["domain"] = serde_json::json!("unknown")
+            }
+            "wrong_capture_end" => {
+                let end = manifest["captureEnd"]["endUs"].as_i64().unwrap() + 1000;
+                for field in ["endUs", "microphoneClosedUs", "systemClosedUs"] {
+                    manifest["captureEnd"][field] = serde_json::json!(end);
+                }
+            }
+            "changed_pcm" => {
+                use std::io::{Seek, SeekFrom, Write};
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .open(f.directory.join("recording.wav"))
+                    .unwrap();
+                file.seek(SeekFrom::Start(80)).unwrap();
+                file.write_all(&[0xff]).unwrap();
+                file.sync_all().unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let original_manifest = serde_json::to_vec(&manifest).unwrap();
+        fs::write(&manifest_path, &original_manifest).unwrap();
+        let original_audio = fs::read(f.directory.join("recording.wav")).unwrap();
+        assert!(
+            f.storage.finalize_recording(&f.session).is_err(),
+            "{problem}"
+        );
+        assert_eq!(
+            fs::read(&manifest_path).unwrap(),
+            original_manifest,
+            "{problem}"
+        );
+        assert_eq!(
+            fs::read(f.directory.join("recording.wav")).unwrap(),
+            original_audio,
+            "{problem}"
+        );
+        assert!(
+            f.storage.recorded_audio_plan(&f.meeting).is_err(),
+            "{problem}"
+        );
+    }
+}
+
+#[test]
+fn windows_resampled_packets_cross_wav_checkpoint_without_reversing_or_losing_pcm() {
     use std::os::windows::process::CommandExt;
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().canonicalize().unwrap();
@@ -182,6 +240,8 @@ fn windows_resampled_packets_cross_raw_seal_without_reversing_or_losing_pcm() {
     let output = Command::new(helper())
         .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
         .args([
+            "--capture-format",
+            "wav-v1",
             "--backend",
             "wasapi",
             "--mode",
@@ -205,36 +265,27 @@ fn windows_resampled_packets_cross_raw_seal_without_reversing_or_losing_pcm() {
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest["state"], "saved");
+    assert_eq!(manifest["schemaVersion"], 5);
     assert_eq!(manifest["timingEstimated"], true);
-    // 500 packets of 479 frames at 48 kHz become mono 16 kHz PCM, with
-    // the fractional final frame retained across packet and raw-seal boundaries.
+    // The fractional 48k -> 16k tail survives the converter and checkpoint.
     let saved_frames = (500_u64 * 479 * 16000).div_ceil(48000);
-    for lane in [
-        crate::recording_segments::Lane::Microphone,
-        crate::recording_segments::Lane::System,
-    ] {
-        let prefix = crate::recording_segments::Prefix::read_optional(
-            crate::input_levels::open_capture_directory(&directory).unwrap(),
-            &owner,
-            lane,
-            &|| false,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(prefix.frames(), saved_frames);
-        assert!(prefix.entries().len() >= 2, "fixture must cross a raw seal");
-        for entry in prefix.entries() {
-            assert_eq!((entry.sample_rate, entry.channels), (16000, 1));
-        }
-        prefix.verify_unchanged(&|| false).unwrap();
-        let groups = prefix
-            .flac_groups(prefix.first_capture_nanoseconds().unwrap())
-            .unwrap();
-        assert_eq!(
-            groups.iter().map(|group| group.frames).sum::<u64>(),
-            saved_frames
-        );
+    let mut cursor = crate::storage::recordings::wav::Cursor::default();
+    let tip = cursor.read(&directory, &owner, &|| false).unwrap().unwrap();
+    assert!(tip.checkpoints >= 2);
+    assert!(tip.frames >= saved_frames);
+    for (index, lane) in ["microphone", "system"].into_iter().enumerate() {
+        assert_eq!(manifest[lane]["frames"], saved_frames);
+        assert_eq!(cursor.coverage[index], saved_frames);
     }
+    let mut file = fs::File::open(directory.join("recording.wav")).unwrap();
+    let size = file.metadata().unwrap().len();
+    let layout = crate::audio::wave::inspect(&mut file, size).unwrap();
+    assert_eq!(layout.frames, tip.frames);
+    assert_eq!(layout.data_offset, 80);
+    let mut sample = [0; 2];
+    crate::native_fs::read_exact_at(&file, &mut sample, 80 + 16000 * 2).unwrap();
+    // Received zero-valued PC audio still participates in the interval mean.
+    assert_eq!(i16::from_le_bytes(sample), 2048);
     let diagnostics: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.join("capture-clock.json")).unwrap()).unwrap();
     assert_eq!(diagnostics["microphone"]["estimatedPackets"], 499);
@@ -517,9 +568,12 @@ fn windows_real_import_four_formats_aac_alac_and_invalid_containers() {
         let base = storage.audio_import_directory(&imported).unwrap();
         let manifest: crate::audio_import::ImportManifest =
             serde_json::from_slice(&fs::read(base.join("manifest.json")).unwrap()).unwrap();
-        assert_eq!(manifest.schema_version, 2);
+        assert_eq!(manifest.schema_version, 4);
         manifest.validate_format().unwrap();
+        assert!(base.join("recording.wav").is_file());
         assert!(!base.join("audio.flac").exists());
+        assert!(!base.join("decoded.caf").exists());
+        assert!(!base.join("decoded-voice.caf").exists());
         assert_eq!(
             before,
             crate::local_engine::Fingerprint::capture(&original, &|| false).unwrap()
@@ -701,6 +755,12 @@ fn windows_real_worker_reuses_cpu_model_and_runs_available_vulkan() {
     assert!(adapters.iter().any(|adapter| log.contains(&adapter.name)));
 }
 fn synthetic_recording(scenario: &str) -> (tempfile::TempDir, Storage, String, String, PathBuf) {
+    synthetic_recording_result(scenario, true)
+}
+fn synthetic_recording_result(
+    scenario: &str,
+    normal: bool,
+) -> (tempfile::TempDir, Storage, String, String, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let storage = Storage::open(root.join("会議データ")).unwrap();
@@ -728,6 +788,7 @@ fn synthetic_recording(scenario: &str) -> (tempfile::TempDir, Storage, String, S
         .join(&session.id);
     fs::create_dir_all(&output).unwrap();
     let mut child = Command::new(helper())
+        .args(["--capture-format", "wav-v1"])
         .arg("--backend")
         .arg("wasapi")
         .arg("--output")
@@ -751,16 +812,24 @@ fn synthetic_recording(scenario: &str) -> (tempfile::TempDir, Storage, String, S
         }
         std::thread::sleep(Duration::from_millis(25));
     };
-    assert!(status.success());
+    assert_eq!(status.success(), normal);
     storage
         .request_recording_stop(&session.id, &Uuid::new_v4().to_string())
         .unwrap();
-    storage.finalize_recording(&session.id).unwrap();
+    if normal {
+        storage.finalize_recording(&session.id).unwrap();
+    } else {
+        storage.interrupt_recording(&session.id).unwrap();
+        storage
+            .finalize_available_recording(&session.id, &|| false)
+            .unwrap();
+    }
     (temp, storage, meeting.id, session.id, output)
 }
 #[test]
-fn windows_delayed_endpoint_packets_continue_through_mixer_and_finalize() {
-    let (_temp, storage, meeting, _session, output) = synthetic_recording("endpoint-switch-late");
+fn windows_delayed_endpoint_packets_fail_without_retiming_and_keep_the_durable_prefix() {
+    let (_temp, storage, meeting, _session, output) =
+        synthetic_recording_result("endpoint-switch-late", false);
     let diagnostics: serde_json::Value =
         serde_json::from_slice(&fs::read(output.join("capture-clock.json")).unwrap()).unwrap();
     assert!(
@@ -783,16 +852,22 @@ fn windows_delayed_endpoint_packets_continue_through_mixer_and_finalize() {
             <= 32
     );
     assert_eq!(diagnostics["endpointAlignment"]["discardedFrames"], 0);
-    assert!(
-        diagnostics["endpointAlignment"]["retimedFrames"]
-            .as_u64()
-            .unwrap()
-            > 0
-    );
+    assert_eq!(diagnostics["endpointAlignment"]["retimedFrames"], 0);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["state"], "saved");
-    assert!(manifest["errors"].as_array().unwrap().is_empty());
+    assert_eq!(manifest["state"], "failed");
+    assert!(manifest["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value
+            .as_str()
+            .is_some_and(|s| s.contains("endpoint packet precedes committed audio"))));
+    let tip: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("single-wav.json")).unwrap()).unwrap();
+    assert!(tip["frames"].as_u64().unwrap() >= 64_000);
+    assert_eq!(tip["producerClosed"], false);
+    assert!(output.join("wav-00000001.json").is_file());
     storage.verify_canonical_audio(&meeting, &|| false).unwrap();
 }
 
@@ -927,6 +1002,7 @@ fn windows_capture_stop_restores_current_audio_without_capture_history() {
         .join(&session.id);
     fs::create_dir_all(&output).unwrap();
     let mut child = Command::new(helper())
+        .args(["--capture-format", "wav-v1"])
         .arg("--backend")
         .arg("wasapi")
         .arg("--output")

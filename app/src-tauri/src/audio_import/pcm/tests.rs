@@ -132,11 +132,11 @@ fn malformed_valid_bits_and_float_nonfinite_values_are_rejected() {
 }
 
 #[test]
-fn shared_decoder_publishes_valid24_in32_as_compact_caf() {
+fn shared_decoder_publishes_valid24_in32_as_canonical_wav() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().canonicalize().unwrap();
     let input = directory.join("valid24-in32.wav");
-    let output = directory.join("decoded.caf");
+    let output = directory.join("recording.wav");
     let raw: Vec<_> = [i32::MIN, -1073741824, 0, 1073741824]
         .iter()
         .flat_map(|s| s.to_le_bytes())
@@ -146,19 +146,22 @@ fn shared_decoder_publishes_valid24_in32_as_compact_caf() {
     let info = decode(&input, Some(&output), &|| false).unwrap();
     assert_eq!(info.frames, 4);
     assert_eq!(info.sample_rate, 48000);
-    let caf = std::fs::read(&output).unwrap();
-    assert_eq!(caf.len(), 68 + 2 * 2);
+    let wav = std::fs::read(&output).unwrap();
+    assert_eq!(wav.len(), 80 + 2 * 2);
+    assert_eq!(&wav[..4], b"RIFF");
     let proof = Fingerprint::capture(&output, &|| false).unwrap();
-    let audio = VerifiedAudio::open_cancellable(
+    let mut audio = VerifiedAudio::open_cancellable(
         File::open(&output).unwrap(),
         proof.size,
         &proof.sha256,
         &|| false,
     )
     .unwrap();
-    assert!(audio.format.is_compact_recording_segment());
+    audio.require_wav().unwrap();
+    assert_eq!(audio.format.sample_rate, 16000);
+    assert_eq!(audio.format.channels, 1);
     assert_eq!(audio.format.frames, 2);
     assert_eq!(std::fs::read(&input).unwrap(), original);
     assert!(decode(&input, Some(&output), &|| false).is_err());
-    assert_eq!(std::fs::read(&output).unwrap(), caf);
+    assert_eq!(std::fs::read(&output).unwrap(), wav);
 }

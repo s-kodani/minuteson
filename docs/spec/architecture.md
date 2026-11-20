@@ -39,7 +39,7 @@ flowchart TB
 
     subgraph local["ローカルデータ"]
         db[("SQLite<br/>会議・解析・編集・処理履歴")]
-        audio["管理音声・作業領域<br/>原PCM / CAF・保存FLAC・解析WAV"]
+        audio["管理音声・作業領域<br/>単一WAV・確定記録・時計<br/>旧音声の移行"]
         models["AIモデル・推論ランタイム"]
         logs["内部ログ"]
     end
@@ -60,7 +60,7 @@ flowchart TB
 | --- | --- |
 | `app/src` | React／TypeScriptの画面、編集状態、通知、生成IPCの利用 |
 | `app/src-tauri` | Tauri本体、永続化、ジョブ、操作受付、モデル管理、OS連携 |
-| `crates/mon-core` | OSに依存しない録音・モデル・メディア等の共通判定 |
+| `crates/mon-core` | OSに依存しない録音ミックス・WAV形式・確定記録と、モデル・メディア等の共通判定 |
 | `crates/mon-native` | OS別のファイル・プロセス・転送などのネイティブ境界 |
 | `crates/mon-contracts` | 共通の構造型・契約 |
 | `crates/mon-capture-ffi` | 録音のFFI連携 |
@@ -68,6 +68,10 @@ flowchart TB
 | `tools` | 資材準備、契約生成、配布、テスト・評価ツール |
 
 Rust workspaceと`Cargo.lock`をルートで共有します。録音・解析・データ操作の成功判定はネイティブ側で行い、画面だけで保存済みと推測しません。
+
+録音ヘルパー内では、取得、正規化・時刻整列・合成、同期保存を分離します。Swift／C++の取得処理は接続世代・連番とPCMを順序付きで渡し、共通Rustミキサーが単一の16 kHz・モノラル・PCM16 WAVを作ります。保存ワーカーの同期・読戻し・確定記録公開は取得コールバックを待たせません。アプリ本体はヘルパー終了後に同じWAVと証拠を検証してDBへ登録し、停止後に全体を再ミックスしません。
+
+録音manifestはversion 5、取り込みmanifestはversion 4を使い、録音FFIは既存ABI 1への関数追加で共有します。旧CAF・FLACの未完了処理は専用の救出入口へ隔離し、新規録音・取り込みの保存経路へ中間音声を増やしません。互換性の方向と保持条件は[保存仕様](storage.md#107との互換性)、判断理由は[ADR 0014](../adr/0014-direct-wav-recording.md)を参照してください。
 
 ## 処理の流れ
 

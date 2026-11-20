@@ -65,6 +65,7 @@ final class MicrophoneRecorder: @unchecked Sendable {
   private var initialPreparationPending = false
   private var initialNativePending = false
   private var stopped = false
+  private var unreceivedObservationQueued = false
   private var selectedDeviceID: AudioObjectID?
   private var automaticSource: InputDevices.AutomaticSource?
   private(set) var deviceUID: String?
@@ -195,6 +196,31 @@ final class MicrophoneRecorder: @unchecked Sendable {
   }
 
   var initialAcquisitionPending: Bool { lock.withLock { initialPreparationPending } }
+
+  func observeUnreceived(at now: Int64) {
+    guard rawSegments != nil else { return }
+    let work: (engine: (any MicrophoneCaptureEngine)?, revision: UInt64)? = lock.withLock {
+      guard !stopped, !initialPreparationPending, !initialNativePending,
+        normalPreparation == nil, !unreceivedObservationQueued
+      else { return nil }
+      unreceivedObservationQueued = true
+      return (engine, configurationRevision)
+    }
+    guard let work else { return }
+    let source = work.engine
+    let observation: @Sendable () -> Void = { [weak self, source] in
+      guard let self else { return }
+      self.lock.withLock {
+        defer { self.unreceivedObservationQueued = false }
+        guard !self.stopped, !self.initialPreparationPending, !self.initialNativePending,
+          self.normalPreparation == nil, self.engine === source,
+          self.configurationRevision == work.revision
+        else { return }
+        self.rawSegments?.observeUnreceived(at: now)
+      }
+    }
+    if let source { source.afterAcceptedPCM(observation) } else { observation() }
+  }
 
   func selectInput(_ uid: String?) throws {
     guard uid.map(InputDevices.validUID) ?? true else {
@@ -673,10 +699,12 @@ final class MicrophoneRecorder: @unchecked Sendable {
       return engine
     }
     let (token, format) = try lock.withLock {
-      guard testWindow.preparing, stats.frames == 0, let recovery, let file else {
+      guard testWindow.preparing, stats.frames == 0, let recovery,
+        let format = file?.processingFormat ?? (rawSegments == nil ? nil : captureFormat)
+      else {
         throw ProbeError.capture("five-second test microphone preparation is obsolete")
       }
-      return (try recovery.currentBinding(), file.processingFormat)
+      return (try recovery.currentBinding(), format)
     }
     var previousRevision: UInt64?
     var stableProofs = 0

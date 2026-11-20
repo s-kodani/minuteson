@@ -32,6 +32,8 @@ final class InputEventJournalFile {
     case status = "input-journal-status.json"
     case rawMicrophone = "raw-microphone.json"
     case rawSystem = "raw-system.json"
+    case singleWav = "single-wav.json"
+    case singleWavOwner = "single-wav-owner.json"
   }
   private var directory: Int32
   private let leaf: Leaf
@@ -78,6 +80,16 @@ final class InputEventJournalFile {
   }
 
   deinit { if directory >= 0 { close(directory) } }
+
+  /// The WAV and its separately pinned evidence must share the same owned
+  /// directory even if a pathname was replaced while the session opened.
+  func requireDirectoryIdentity(_ descriptor: Int32) throws {
+    var expected = stat()
+    var actual = stat()
+    guard fstat(descriptor, &expected) == 0, fstat(directory, &actual) == 0,
+      Self.same(expected, actual)
+    else { throw ProbeError.capture("WAV and receipt directories do not match") }
+  }
 
   /// Only the ephemeral diagnostic leaf may be removed. Pinning also keeps a
   /// replacement ancestor outside this cleanup; an altered leaf is retained.
@@ -143,13 +155,16 @@ final class InputEventJournalFile {
     try actual.withUnsafeMutableBytes { bytes in
       var offset = 0
       while offset < data.count {
-        let count = Darwin.read(descriptor, bytes.baseAddress!.advanced(by: offset), data.count - offset)
+        let count = Darwin.read(
+          descriptor, bytes.baseAddress!.advanced(by: offset), data.count - offset)
         if count < 0 && errno == EINTR { continue }
         guard count > 0 else { throw ProbeError.capture("input receipt readback failed") }
         offset += count
       }
     }
-    guard actual == data else { throw ProbeError.capture("input receipt differs from committed prefix") }
+    guard actual == data else {
+      throw ProbeError.capture("input receipt differs from committed prefix")
+    }
     try requireExpected()
   }
 

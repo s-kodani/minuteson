@@ -190,7 +190,7 @@ pub(super) fn decode(
     };
     info.validate()?;
     let mut writer = output
-        .map(|p| super::VoiceCafWriter::new(p, rate, channels))
+        .map(|p| super::VoiceWavWriter::new(p, rate, channels))
         .transpose()?;
     let mut first = 0;
     while first < frames {

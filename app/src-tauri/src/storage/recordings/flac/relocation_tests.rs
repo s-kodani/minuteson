@@ -26,15 +26,54 @@ fn control_temp() -> tempfile::TempDir {
 // writes the canonical WAV directly and does not create a final-FLAC plan.
 fn failed() -> Fixture {
     let f = interrupt_fixture(Fixture::new(2, 2000, false));
-    f.reject_partial_commit(true);
     let review = f.storage.review_partial_recording(&f.session.id).unwrap();
-    assert!(f.storage.recover_partial_recording(&review, true).is_err());
-    f.reject_partial_commit(false);
+    drop(review.legacy_publication_for_test(&f.storage).unwrap());
     f
 }
+// Retained FLAC migration tests explicitly resume their historical producer.
+// The public recovery path now writes WAV directly and cannot create this state.
+impl Storage {
+    fn recover_legacy_recording(
+        &self,
+        review: &crate::storage::recordings::partial::Review,
+        consent: bool,
+    ) -> Result<crate::storage::recordings::RecordingSession, String> {
+        if !consent {
+            return self.recover_partial_recording(review, false);
+        }
+        let fresh = self.review_partial_recording(&review.summary.session_id)?;
+        if fresh.summary != review.summary {
+            return Err("旧部分救出の確認対象が変更されています".into());
+        }
+        let publication = review.legacy_publication_for_test(self)?;
+        publication.verify(self)?;
+        drop(publication);
+        self.recover_partial_recording(review, true)
+    }
+}
+
+fn assert_plan_metadata(storage: &Storage, base: &Path, expected: &Plan) {
+    let actual: Plan = serde_json::from_slice(
+        &std::fs::read(storage.root().join(base).join(PARTIAL_PLAN)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(&actual, expected);
+    for track in &actual.tracks {
+        let directory = storage.root().join(base).parent().unwrap().join(&track.id);
+        for id in &track.chunks {
+            let receipt: Checkpoint = serde_json::from_slice(
+                &std::fs::read(directory.join(format!(".{id}.json"))).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(&receipt.chunk_id, id);
+            assert!(receipt.audio.is_some());
+        }
+    }
+}
+
 fn resume(storage: &Storage, session: &str) -> crate::storage::recordings::RecordingSession {
     let review = storage.review_partial_recording(session).unwrap();
-    storage.recover_partial_recording(&review, true).unwrap()
+    storage.recover_legacy_recording(&review, true).unwrap()
 }
 
 fn move_storage(storage: Storage, config: &Path, legacy: &Path, target: &Path) -> Storage {
@@ -144,7 +183,7 @@ fn flac_relocation_normal_rollback_cold_resume_preserves_ids_pcm_and_original_re
     assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 10);
     assert_eq!(
         storage
-            .recover_partial_recording(
+            .recover_legacy_recording(
                 &storage.review_partial_recording(&f.session.id).unwrap(),
                 true
             )
@@ -152,30 +191,7 @@ fn flac_relocation_normal_rollback_cold_resume_preserves_ids_pcm_and_original_re
             .state,
         "interrupted"
     );
-    let db = storage.connection.lock().unwrap();
-    for track in &plan.tracks {
-        assert_eq!(
-            db.query_row(
-                "SELECT id FROM audio_tracks WHERE id=?1",
-                [&track.id],
-                |r| r.get::<_, String>(0)
-            )
-            .unwrap(),
-            track.id
-        );
-        for chunk in &track.chunks {
-            assert_eq!(
-                db.query_row(
-                    "SELECT track_id FROM audio_chunks WHERE id=?1",
-                    [chunk],
-                    |r| r.get::<_, String>(0)
-                )
-                .unwrap(),
-                track.id
-            );
-        }
-    }
-    drop(db);
+    assert_plan_metadata(&storage, &relative, &plan);
     assert_eq!(
         std::fs::read(target.join(&relative).join(PARTIAL_PLAN)).unwrap(),
         copied_plan
@@ -210,7 +226,7 @@ fn flac_relocation_twice_flattens_original_plan_and_checkpoint_identities() {
     let storage = move_storage(storage, &config, &source, &third);
     assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 10);
     storage
-        .recover_partial_recording(
+        .recover_legacy_recording(
             &storage.review_partial_recording(&f.session.id).unwrap(),
             true,
         )
@@ -253,7 +269,7 @@ fn flac_relocation_reserved_unknown_stage_is_retained_and_not_adopted_on_resume(
         Disposition::Unclassified
     );
     storage
-        .recover_partial_recording(
+        .recover_legacy_recording(
             &storage.review_partial_recording(&f.session.id).unwrap(),
             true,
         )
@@ -303,7 +319,7 @@ fn flac_relocation_allocated_stage_resumes_with_new_durable_local_identity() {
         Identity::file(&copied.required(&checkpoint.staging_name, false).unwrap()).unwrap();
     assert_ne!(owned_identity, old_identity);
     storage
-        .recover_partial_recording(
+        .recover_legacy_recording(
             &storage.review_partial_recording(&f.session.id).unwrap(),
             true,
         )
@@ -346,7 +362,7 @@ fn flac_relocation_plain_storage_open_does_not_adopt_copied_plan_or_audio() {
     drop(storage);
     let storage = Storage::open(target.clone()).unwrap();
     assert!(storage
-        .recover_partial_recording(
+        .recover_legacy_recording(
             &storage.review_partial_recording(&f.session.id).unwrap(),
             true
         )
@@ -358,7 +374,7 @@ fn flac_relocation_plain_storage_open_does_not_adopt_copied_plan_or_audio() {
     let storage = bootstrap.open_storage().unwrap();
     assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 10);
     storage
-        .recover_partial_recording(
+        .recover_legacy_recording(
             &storage.review_partial_recording(&f.session.id).unwrap(),
             true,
         )
@@ -400,7 +416,7 @@ fn flac_relocation_replaced_body_or_output_directory_is_retained_not_rebound() {
         }
         let before = tree(&target.join("meetings"));
         assert!(storage
-            .recover_partial_recording(
+            .recover_legacy_recording(
                 &storage.review_partial_recording(&f.session.id).unwrap(),
                 true
             )
@@ -414,10 +430,8 @@ fn flac_relocation_replaced_body_or_output_directory_is_retained_not_rebound() {
 #[test]
 fn flac_relocation_partial_outputs_are_deletable_but_old_consent_is_invalid() {
     let f = partial_fixture();
-    f.reject_partial_commit(true);
     let review = f.storage.review_partial_recording(&f.session.id).unwrap();
-    assert!(f.storage.recover_partial_recording(&review, true).is_err());
-    f.reject_partial_commit(false);
+    drop(review.legacy_publication_for_test(&f.storage).unwrap());
     let source = f.storage.root().to_owned();
     let old = tree(f.base.parent().unwrap());
     let control = control_temp();
@@ -426,10 +440,10 @@ fn flac_relocation_partial_outputs_are_deletable_but_old_consent_is_invalid() {
     let storage = move_storage(f.storage, &config, &source, &target);
     let before = tree(&target.join("meetings"));
     assert_eq!(preview(&storage, &f.session.meeting_id).audio_files, 10);
-    assert!(storage.recover_partial_recording(&review, true).is_err());
+    assert!(storage.recover_legacy_recording(&review, true).is_err());
     let fresh = storage.review_partial_recording(&f.session.id).unwrap();
     assert_ne!(fresh.summary.review_hash, review.summary.review_hash);
-    assert!(storage.recover_partial_recording(&fresh, false).is_err());
+    assert!(storage.recover_legacy_recording(&fresh, false).is_err());
     assert_eq!(tree(&target.join("meetings")), before);
     assert_eq!(tree(f.base.parent().unwrap()), old);
     assert_eq!(remove_reviewed_audio(&storage, &f.session.meeting_id), 10);
@@ -445,10 +459,8 @@ fn flac_relocation_partial_outputs_are_deletable_but_old_consent_is_invalid() {
 
 fn failed_partial() -> Fixture {
     let f = partial_fixture();
-    f.reject_partial_commit(true);
     let review = f.storage.review_partial_recording(&f.session.id).unwrap();
-    assert!(f.storage.recover_partial_recording(&review, true).is_err());
-    f.reject_partial_commit(false);
+    drop(review.legacy_publication_for_test(&f.storage).unwrap());
     f
 }
 
@@ -474,12 +486,10 @@ fn flac_relocation_partial_fresh_consent_resumes_same_ids_and_current_result_aft
         review.content_hash().unwrap(),
         old_review.content_hash().unwrap()
     );
-    assert!(storage
-        .recover_partial_recording(&old_review, true)
-        .is_err());
-    assert!(storage.recover_partial_recording(&review, false).is_err());
+    assert!(storage.recover_legacy_recording(&old_review, true).is_err());
+    assert!(storage.recover_legacy_recording(&review, false).is_err());
     assert_eq!(tree(&target.join("meetings")), before);
-    let result = storage.recover_partial_recording(&review, true).unwrap();
+    let result = storage.recover_legacy_recording(&review, true).unwrap();
     assert_eq!(result.state, "interrupted");
     assert_eq!(result.ended_at_utc_ms, None);
     assert_eq!(
@@ -500,30 +510,7 @@ fn flac_relocation_partial_fresh_consent_resumes_same_ids_and_current_result_aft
     assert_eq!(audio.tracks.len(), 1);
     assert_eq!(known.unwrap().runs.len(), 1);
     assert_partial_whole_meeting_playback(&storage, &f.session.meeting_id, result.duration_us);
-    let db = storage.connection.lock().unwrap();
-    for track in &plan.tracks {
-        assert_eq!(
-            db.query_row(
-                "SELECT count(*) FROM audio_tracks WHERE id=?1",
-                [&track.id],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-            1
-        );
-        for chunk in &track.chunks {
-            assert_eq!(
-                db.query_row(
-                    "SELECT track_id FROM audio_chunks WHERE id=?1",
-                    [chunk],
-                    |r| r.get::<_, String>(0)
-                )
-                .unwrap(),
-                track.id
-            );
-        }
-    }
-    drop(db);
+    assert_plan_metadata(&storage, &relative, &plan);
     assert_eq!(
         std::fs::read(target.join(&relative).join(PARTIAL_PLAN)).unwrap(),
         plan_bytes
@@ -565,9 +552,9 @@ fn flac_relocation_partial_twice_before_resume_flattens_input_and_document_evide
         review_second.summary.review_hash
     );
     assert!(storage
-        .recover_partial_recording(&review_second, true)
+        .recover_legacy_recording(&review_second, true)
         .is_err());
-    storage.recover_partial_recording(&review, true).unwrap();
+    storage.recover_legacy_recording(&review, true).unwrap();
     assert_eq!(tree(&second.join("meetings")), second_tree);
     assert_eq!(tree(f.base.parent().unwrap()), original);
 }
@@ -585,7 +572,7 @@ fn flac_relocation_partial_local_progress_then_second_move_uses_new_consent_agai
     storage.connection.lock().unwrap().execute_batch("CREATE TRIGGER reject_moved_partial BEFORE UPDATE OF audio_manifest_hash ON recording_sessions BEGIN SELECT RAISE(ABORT,'synthetic relocated rollback'); END").unwrap();
     let second_review = storage.review_partial_recording(&f.session.id).unwrap();
     assert!(storage
-        .recover_partial_recording(&second_review, true)
+        .recover_legacy_recording(&second_review, true)
         .is_err());
     storage
         .connection
@@ -609,14 +596,14 @@ fn flac_relocation_partial_local_progress_then_second_move_uses_new_consent_agai
     );
     let storage = move_storage(storage, &config, &source, &third);
     assert!(storage
-        .recover_partial_recording(&second_review, true)
+        .recover_legacy_recording(&second_review, true)
         .is_err());
     let review = storage.review_partial_recording(&f.session.id).unwrap();
     assert_ne!(
         review.summary.review_hash,
         second_review.summary.review_hash
     );
-    storage.recover_partial_recording(&review, true).unwrap();
+    storage.recover_legacy_recording(&review, true).unwrap();
     assert_eq!(tree(&second.join("meetings")), second_tree);
     assert_eq!(tree(f.base.parent().unwrap()), original);
 }
@@ -632,13 +619,13 @@ fn flac_relocation_partial_generic_open_does_not_mint_input_reuse_or_new_consent
     let before = tree(&target.join("meetings"));
     let generic = Storage::open(target.clone()).unwrap();
     let review = generic.review_partial_recording(&f.session.id).unwrap();
-    assert!(generic.recover_partial_recording(&review, true).is_err());
+    assert!(generic.recover_legacy_recording(&review, true).is_err());
     assert_eq!(tree(&target.join("meetings")), before);
     drop(generic);
     let bootstrap = Bootstrap::open(&config, &source).unwrap();
     let storage = bootstrap.open_storage().unwrap();
     let review = storage.review_partial_recording(&f.session.id).unwrap();
-    storage.recover_partial_recording(&review, true).unwrap();
+    storage.recover_legacy_recording(&review, true).unwrap();
 }
 
 #[test]
@@ -669,9 +656,7 @@ fn flac_relocation_partial_changed_tip_or_meeting_invalidates_input_reuse_withou
         }
         let before = tree(&target.join("meetings"));
         let review = storage.review_partial_recording(&f.session.id).unwrap();
-        let error = storage
-            .recover_partial_recording(&review, true)
-            .unwrap_err();
+        let error = storage.recover_legacy_recording(&review, true).unwrap_err();
         assert!(error.contains("移動元から変更"), "{change}: {error}");
         assert_eq!(tree(&target.join("meetings")), before);
         assert_eq!(
@@ -711,7 +696,7 @@ fn flac_relocation_partial_replaced_or_semantically_changed_document_cannot_be_r
         }
         let before = tree(&target.join("meetings"));
         let review = storage.review_partial_recording(&f.session.id).unwrap();
-        assert!(storage.recover_partial_recording(&review, true).is_err());
+        assert!(storage.recover_legacy_recording(&review, true).is_err());
         assert_eq!(tree(&target.join("meetings")), before);
         assert_eq!(
             storage
@@ -871,7 +856,7 @@ fn flac_relocation_partial_crash_child() {
     let review = storage
         .review_partial_recording(&std::env::var("MON_FINAL_FLAC_CRASH_OWNER").unwrap())
         .unwrap();
-    storage.recover_partial_recording(&review, true).unwrap();
+    storage.recover_legacy_recording(&review, true).unwrap();
     panic!("owned partial relocation child missed its crash boundary");
 }
 
@@ -1015,7 +1000,7 @@ fn flac_relocation_partial_owned_sigkill_resumes_with_fresh_consent_and_current_
         // Exercise the manual capability without first running automatic save.
         let review = storage.review_partial_recording(&session.id).unwrap();
         let before = tree(&target.join("meetings"));
-        assert!(storage.recover_partial_recording(&review, false).is_err());
+        assert!(storage.recover_legacy_recording(&review, false).is_err());
         assert_eq!(tree(&target.join("meetings")), before);
         assert_eq!(
             storage
@@ -1027,7 +1012,7 @@ fn flac_relocation_partial_owned_sigkill_resumes_with_fresh_consent_and_current_
                 .unwrap(),
             0
         );
-        let result = storage.recover_partial_recording(&review, true).unwrap();
+        let result = storage.recover_legacy_recording(&review, true).unwrap();
         assert_eq!(result.state, "interrupted");
         assert_eq!(result.ended_at_utc_ms, None);
         assert_eq!(

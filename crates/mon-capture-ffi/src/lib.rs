@@ -1,6 +1,7 @@
 //! Versioned C ABI for shared capture decisions. Borrowed inputs are read only
 //! for the duration of a call. No allocator ownership crosses this boundary.
 use mon_core::capture::commit::RawPrefix;
+use mon_core::capture::wav::{LiveMixer, WavPrefix};
 use mon_core::capture::{limits, request, supervisor::InputLifecycle};
 use mon_core::media::voice::VoiceConverter;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -129,6 +130,188 @@ pub unsafe extern "C" fn mon_voice_caf_header(
         }
         Err(_) => -1,
     }
+}
+
+/// Fixed-offset mono PCM16 WAV header, also used by native import/test writers.
+#[no_mangle]
+pub unsafe extern "C" fn mon_voice_wav_header(
+    frames: u64,
+    output: *mut u8,
+    capacity: usize,
+) -> isize {
+    if output.is_null() || capacity < mon_core::capture::wav::WAV_HEADER_BYTES {
+        return -1;
+    }
+    match mon_core::capture::wav::header(frames) {
+        Ok(bytes) => {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, bytes.len());
+            bytes.len() as isize
+        }
+        Err(_) => -1,
+    }
+}
+
+/// Borrowed mixed PCM belongs to the DSP call. Copy it to the bounded native
+/// save queue; returning false makes the mixer permanently failed.
+pub type WavWrite =
+    Option<unsafe extern "C" fn(*mut std::ffi::c_void, *const i16, usize, u64, i64, u32) -> bool>;
+
+#[no_mangle]
+pub extern "C" fn mon_wav_mixer_new() -> *mut LiveMixer {
+    catch_unwind(|| Box::into_raw(Box::new(LiveMixer::new()))).unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mon_wav_mixer_free(value: *mut LiveMixer) {
+    if !value.is_null() {
+        drop(Box::from_raw(value));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mon_wav_mixer_push(
+    value: *mut LiveMixer,
+    lane: u32,
+    epoch: u64,
+    sequence: u64,
+    samples: *const i16,
+    count: usize,
+    start_ns: i64,
+    end_ns: i64,
+) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(value) = value.as_mut() else { return false; };
+        if samples.is_null() || count == 0 || count > mon_core::media::voice::MAX_OUTPUT_FRAMES {
+            return false;
+        }
+        let result = value.push(lane, epoch, sequence, std::slice::from_raw_parts(samples, count), start_ns, end_ns);
+        if let Err(error) = result { eprintln!("mon_wav_mixer_push: {error}; lane={lane}; sequence={sequence}; start={start_ns}; end={end_ns}"); }
+        result.is_ok()
+    })).unwrap_or(false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mon_wav_mixer_advance(
+    value: *mut LiveMixer,
+    lane: u32,
+    sequence: u64,
+    through_ns: i64,
+) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(value) = value.as_mut() else { return false; };
+        let result = value.advance(lane, sequence, through_ns);
+        if let Err(error) = result { eprintln!("mon_wav_mixer_advance: {error}; lane={lane}; sequence={sequence}; through={through_ns}"); }
+        result.is_ok()
+    })).unwrap_or(false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mon_wav_mixer_drain(
+    value: *mut LiveMixer,
+    through_ns: i64,
+    context: *mut std::ffi::c_void,
+    write: WavWrite,
+) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        let (Some(value), Some(write)) = (value.as_mut(), write) else {
+            return false;
+        };
+        value
+            .drain(through_ns, &mut |pcm, first, origin, coverage| {
+                if write(context, pcm.as_ptr(), pcm.len(), first, origin, coverage) {
+                    Ok(())
+                } else {
+                    Err("live WAV sink failed")
+                }
+            })
+            .is_ok()
+    }))
+    .unwrap_or(false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mon_wav_mixer_finish(
+    value: *mut LiveMixer,
+    context: *mut std::ffi::c_void,
+    write: WavWrite,
+) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        let (Some(value), Some(write)) = (value.as_mut(), write) else {
+            return false;
+        };
+        value
+            .finish(&mut |pcm, first, origin, coverage| {
+                if write(context, pcm.as_ptr(), pcm.len(), first, origin, coverage) {
+                    Ok(())
+                } else {
+                    Err("live WAV sink failed")
+                }
+            })
+            .is_ok()
+    }))
+    .unwrap_or(false)
+}
+
+#[no_mangle]
+pub extern "C" fn mon_wav_prefix_empty() -> WavPrefix {
+    WavPrefix::default()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mon_wav_prepare_commit(
+    prefix: *const WavPrefix,
+    receipt: *const u8,
+    length: usize,
+    next: *mut WavPrefix,
+    tip: *mut u8,
+    capacity: usize,
+) -> isize {
+    catch_unwind(AssertUnwindSafe(|| {
+        let (Some(prefix), Some(next)) = (prefix.as_ref(), next.as_mut()) else {
+            return -1;
+        };
+        let Some(receipt) = utf8(receipt, length, limits::MAX_ENTRY_BYTES as usize) else {
+            return -1;
+        };
+        let Ok(plan) = prefix.prepare(receipt.as_bytes()) else {
+            return -1;
+        };
+        if tip.is_null() || capacity < plan.tip.len() {
+            return -1;
+        }
+        std::ptr::copy_nonoverlapping(plan.tip.as_ptr(), tip, plan.tip.len());
+        *next = plan.next;
+        plan.tip.len() as isize
+    }))
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mon_wav_prefix_tip(
+    prefix: *const WavPrefix,
+    owner: *const u8,
+    owner_len: usize,
+    closed: bool,
+    tip: *mut u8,
+    capacity: usize,
+) -> isize {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(prefix) = prefix.as_ref() else {
+            return -1;
+        };
+        let Some(owner) = utf8(owner, owner_len, 36) else {
+            return -1;
+        };
+        let Ok(bytes) = prefix.tip(owner, closed) else {
+            return -1;
+        };
+        if tip.is_null() || capacity < bytes.len() {
+            return -1;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), tip, bytes.len());
+        bytes.len() as isize
+    }))
+    .unwrap_or(-1)
 }
 
 #[no_mangle]

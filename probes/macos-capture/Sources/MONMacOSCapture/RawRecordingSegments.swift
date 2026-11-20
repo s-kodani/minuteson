@@ -43,6 +43,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     let sourceEpoch: UInt64
     let bytes: Int
     let durationNanoseconds: Int64
+    let sequence: UInt64
   }
   private struct Entry: Encodable {
     let schemaVersion = 3
@@ -98,7 +99,8 @@ final class RawRecordingSegments: @unchecked Sendable {
   private let owner: String
   private let lane: String
   private let directory: Int32
-  private let pointer: InputEventJournalFile
+  private let pointer: InputEventJournalFile?
+  private let wavSession: LiveWavSession?
   private let beforeAppend: @Sendable () -> Void
   private let storageIO: StorageIO
   private let maximumTotalClockSegments: Int
@@ -142,6 +144,10 @@ final class RawRecordingSegments: @unchecked Sendable {
   private var admittedSourceEnd: Int64?
   private var compactStats = TrackStats()
   private var outputEpoch: UInt64 = 0
+  private var lastAdmissionNanoseconds: Int64?
+  private var admittedSequence: UInt64 = 0
+  private var processedSequence: UInt64 = 0
+  private var unreceivedObservationQueued = false
 
   /// Snapshot contains normalized 16kHz frames, never native acquisition frames.
   /// Only rawSegments.sealedFrames describes the durable prefix while recording.
@@ -158,6 +164,13 @@ final class RawRecordingSegments: @unchecked Sendable {
         ownerId: owner, lane: lane, sealedSegments: sealedCount,
         sealedFrames: sealedFrames, lastEntrySHA256: previousHash, producerClosed: closed,
         failure: failure ?? admissionFailure)
+      if let wavSession {
+        result.rawSegments = nil
+        if let detail = failure ?? admissionFailure ?? wavSession.failureDetail {
+          result.appendFailures = max(1, result.appendFailures)
+          result.captureFailureDetail = detail
+        }
+      }
       return result
     }
   }
@@ -168,7 +181,8 @@ final class RawRecordingSegments: @unchecked Sendable {
     tipStorageIO: InputEventJournalFile.StorageIO = InputEventJournalFile.StorageIO(),
     maximumTotalClockSegments: Int = CapturedClockMap.maximumTrackSegments,
     allowsClockRebasing: Bool = false,
-    commits: RawSegmentCommitWorker = RawSegmentCommitWorker()
+    commits: RawSegmentCommitWorker = RawSegmentCommitWorker(),
+    wavSession: LiveWavSession? = nil
   ) throws {
     guard InputLevelReport.validOwner(owner), ["microphone", "system"].contains(lane),
       (1...CapturedClockMap.maximumTrackSegments).contains(maximumTotalClockSegments)
@@ -182,12 +196,17 @@ final class RawRecordingSegments: @unchecked Sendable {
     self.maximumTotalClockSegments = maximumTotalClockSegments
     self.allowsClockRebasing = allowsClockRebasing
     self.commits = commits
+    self.wavSession = wavSession
     directory = try InputEventJournalFile.pin(output)
     do {
-      let data = try CaptureRawPrefix().tip(owner: owner, lane: lane, closed: false)
-      pointer = try InputEventJournalFile(
-        output: output, initial: data, leaf: lane == "microphone" ? .rawMicrophone : .rawSystem,
-        storageIO: tipStorageIO)
+      if wavSession == nil {
+        let data = try CaptureRawPrefix().tip(owner: owner, lane: lane, closed: false)
+        pointer = try InputEventJournalFile(
+          output: output, initial: data, leaf: lane == "microphone" ? .rawMicrophone : .rawSystem,
+          storageIO: tipStorageIO)
+      } else {
+        pointer = nil
+      }
     } catch {
       close(directory)
       if let posix = error as? POSIXError, [.ENOSPC, .EDQUOT, .EIO].contains(posix.code) {
@@ -205,7 +224,8 @@ final class RawRecordingSegments: @unchecked Sendable {
     lock.withLock {
       RawSegmentStatus(
         ownerId: owner, lane: lane, sealedSegments: sealedCount, sealedFrames: sealedFrames,
-        lastEntrySHA256: previousHash, producerClosed: closed, failure: failure ?? admissionFailure)
+        lastEntrySHA256: previousHash, producerClosed: closed,
+        failure: failure ?? admissionFailure ?? wavSession?.failureDetail)
     }
   }
 
@@ -246,6 +266,9 @@ final class RawRecordingSegments: @unchecked Sendable {
     try lock.withLock {
       guard accepting, failure == nil, admissionFailure == nil else {
         throw ProbeError.capture("raw segment writer is closed or failed")
+      }
+      guard admittedSequence < UInt64.max else {
+        throw ProbeError.capture("recording input sequence exceeded its capacity")
       }
       if let admittedEpoch {
         guard sourceEpoch >= admittedEpoch else {
@@ -295,7 +318,8 @@ final class RawRecordingSegments: @unchecked Sendable {
         }
         let payload = Payload(
           buffer: copy, observation: observation, sourceFrame: sourceFrame,
-          sourceEpoch: sourceEpoch, bytes: bytes, durationNanoseconds: duration)
+          sourceEpoch: sourceEpoch, bytes: bytes, durationNanoseconds: duration,
+          sequence: admittedSequence + 1)
         // Keep admission and queue ordering under one lock. finish() cannot drain
         // before an already accepted callback has actually entered the queue.
         queue.async { [self] in
@@ -320,6 +344,8 @@ final class RawRecordingSegments: @unchecked Sendable {
         admittedEpoch = sourceEpoch
         admittedFormat = buffer.format
         admittedSourceEnd = sourceEnd
+        admittedSequence = payload.sequence
+        lastAdmissionNanoseconds = PCMInputLevel.nowNanoseconds()
       } catch {
         pendingBytes -= bytes
         pendingNanoseconds -= duration
@@ -345,6 +371,36 @@ final class RawRecordingSegments: @unchecked Sendable {
   func drainNormalization() throws {
     queue.sync {}
     try requireHealthy()
+  }
+
+  /// This event is enqueued behind all admitted PCM under the admission lock.
+  /// A timer cannot bypass a converter or publish a frontier over its backlog.
+  func observeUnreceived(at now: Int64) {
+    guard let wavSession else { return }
+    lock.withLock {
+      guard accepting, failure == nil, admissionFailure == nil, !unreceivedObservationQueued,
+        lastAdmissionNanoseconds.map({ now - $0 > 750_000_000 }) ?? true
+      else { return }
+      let frontier = admittedSequence
+      unreceivedObservationQueued = true
+      queue.async { [self] in
+        defer { lock.withLock { unreceivedObservationQueued = false } }
+        do {
+          try requireHealthy()
+          guard processedSequence == frontier else {
+            throw ProbeError.capture("WAV observation overtook admitted input sequence")
+          }
+          try converter?.finish { [self] pcm, start, end in
+            try appendCompact(pcm, start: start, end: end)
+          }
+          if converter != nil { outputEpoch += 1 }
+          converter = nil
+          try wavSession.observeUnreceived(lane: lane, through: max(0, now - 250_000_000))
+        } catch {
+          lock.withLock { if failure == nil { failure = String(describing: error) } }
+        }
+      }
+    }
   }
 
   /// Control owner only, after native callbacks have quiesced. Preserve the
@@ -382,6 +438,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     {
       throw ProbeError.capture(CaptureFailureGuide.message(failure))
     }
+    try wavSession?.requireHealthy()
   }
 
   /// Called after native callbacks drain. Normalization and durable commits
@@ -398,6 +455,14 @@ final class RawRecordingSegments: @unchecked Sendable {
           try appendCompact(pcm, start: start, end: end)
         }
         converter = nil
+        if let wavSession {
+          guard sourceCredits.isEmpty else {
+            throw ProbeError.capture("WAV conversion retained unmatched acquisition credits")
+          }
+          try wavSession.closeLane(lane)
+          lock.withLock { closed = true }
+          return
+        }
         if let active {
           let maps = try active.timing.finish(
             originNanoseconds: active.origin, expectedFrames: active.frames)
@@ -407,6 +472,7 @@ final class RawRecordingSegments: @unchecked Sendable {
           throw ProbeError.capture("compact conversion retained unmatched acquisition credits")
         }
       }
+      if wavSession != nil { return }
       commits.drain(lane: lane)
       // Accepted audio has been rescued, but refused acquisition must remain a
       // failed, unclosed producer rather than becoming a successful recording.
@@ -416,7 +482,7 @@ final class RawRecordingSegments: @unchecked Sendable {
       commits.submit(lane: lane, bytes: RawSegmentCommitWorker.controlReserveBytes) { [self] in
         guard lock.withLock({ failure == nil }) else { return }
         do {
-          try pointer.replace(try tip(producerClosed: true))
+          try pointer?.replace(try tip(producerClosed: true))
           lock.withLock { closed = true }
         } catch {
           lock.withLock {
@@ -443,15 +509,24 @@ final class RawRecordingSegments: @unchecked Sendable {
   /// Do not require or reconstruct a redundant continuous CAF on normal stop.
   func verifyClosed(expected: TrackStats) throws {
     try requireHealthy()
+    if wavSession != nil {
+      guard lock.withLock({ closed && compactStats.frames == expected.frames }),
+        expected.frames == 0 || (expected.sampleRate == 16000 && expected.channels == 1)
+      else { throw ProbeError.capture("WAV normalized input differs from capture statistics") }
+      return
+    }
     let valid = lock.withLock {
       closed && prefix.frames == expected.frames && compactStats.frames == expected.frames
         && (expected.frames == 0 || (expected.sampleRate == 16000 && expected.channels == 1))
     }
     guard valid else { throw ProbeError.capture("recorded raw prefix differs from saved audio") }
-    try pointer.verifyCurrent(try tip(producerClosed: true))
+    try pointer?.verifyCurrent(try tip(producerClosed: true))
   }
 
   private func appendSource(_ payload: Payload) throws {
+    guard payload.sequence == processedSequence + 1 else {
+      throw ProbeError.capture("recording input sequence is discontinuous")
+    }
     guard case .timestamp(let observedStart) = payload.observation else {
       throw ProbeError.capture("missing compact capture clock")
     }
@@ -516,11 +591,37 @@ final class RawRecordingSegments: @unchecked Sendable {
       try appendCompact(pcm, start: start, end: end)
     }
     lock.withLock { compactStats.clockAlignment = alignment.diagnostics }
+    processedSequence = payload.sequence
   }
 
   private func appendCompact(_ pcm: [Int16], start: Int64, end: Int64) throws {
     guard !pcm.isEmpty else { return }
     let frames = Int64(pcm.count)
+    if let wavSession {
+      try lock.withLock {
+        compactStats.sampleRate = 16000
+        compactStats.channels = 1
+        if compactStats.timing == nil {
+          compactStats.timing = try CaptureTrackTiming(
+            sampleRate: 16000, maximumSegments: maximumTotalClockSegments)
+        }
+        try compactStats.timing?.recordSaved(
+          frames: frames, observation: .timestamp(start), sourceFrame: nil,
+          sourceEpoch: outputEpoch, captureEndNanoseconds: end)
+        compactStats.frames += frames
+      }
+      compactCaptureEnd = end
+      let saved = lock.withLock { compactStats.frames }
+      var acquired: Int64 = 0
+      while let first = sourceCredits.first, first.frameEnd <= saved {
+        acquired += first.nanoseconds
+        sourceCredits.removeFirst()
+      }
+      try wavSession.append(
+        lane: lane, epoch: outputEpoch, pcm: pcm, start: start, end: end,
+        acquiredNanoseconds: acquired)
+      return
+    }
     if let active, active.frames + frames > 64_000 || active.timing.needsSegmentRollover {
       let maps = try active.timing.finishBeforeNext(
         frames: frames, observation: .timestamp(start),
@@ -692,7 +793,7 @@ final class RawRecordingSegments: @unchecked Sendable {
     guard Data(entryRead) == entry else { throw ProbeError.capture("raw segment entry changed") }
     try requireUnmodified(descriptor, frozen: entryFrozen)
     try requireUnmodified(audio, frozen: frozen)
-    try pointer.replace(segment.tip)
+    try pointer?.replace(segment.tip)
     try require(descriptor, name: entryName, identity: identity, size: Int64(entry.count))
     try require(audio, name: name, identity: audioIdentity, size: size)
     try requireUnmodified(descriptor, frozen: entryFrozen)

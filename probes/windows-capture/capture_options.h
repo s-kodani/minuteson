@@ -1,6 +1,6 @@
 #pragma once
 // Included inside namespace product after native metadata adapters.
-struct Settings {fs::path output;std::string owner,mode="system",uid,scenario,identity;DWORD pid=0,parent=0,synthetic_startup_delay_ms=0;bool test=false,synthetic=false,synthetic_clock_overlap=false,synthetic_clock_cases=false,synthetic_clock_resampling=false,synthetic_clock_drift=false,lease_stdin=false;};
+struct Settings {fs::path output;std::string owner,mode="system",uid,scenario,identity,capture_format;DWORD pid=0,parent=0,synthetic_startup_delay_ms=0;bool test=false,synthetic=false,synthetic_clock_overlap=false,synthetic_clock_cases=false,synthetic_clock_resampling=false,synthetic_clock_drift=false,lease_stdin=false;};
 std::string selection_request(const fs::path& path){
   Handle file(CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_SEQUENTIAL_SCAN,nullptr));
   if(file.value==INVALID_HANDLE_VALUE)throw std::runtime_error("microphone selection request cannot be opened");
@@ -45,6 +45,7 @@ Settings parse(int argc,wchar_t** argv) {
     else if(flag==L"--parent-pid")s.parent=capture_integer(value);
     else if(flag==L"--application-identity")s.identity=utf8(value);
     else if(flag==L"--scenario")s.scenario=utf8(value);
+    else if(flag==L"--capture-format"){if(value!=L"wav-v1")throw std::runtime_error("unsupported capture storage contract");s.capture_format="wav-v1";}
     else if(flag==L"--synthetic-startup-delay-ms")s.synthetic_startup_delay_ms=capture_integer(value);
     else if(flag==L"--capture-test-lease-stdin"){if(value!=L"1")throw std::runtime_error("invalid test lease");s.lease_stdin=true;}
     else if(flag==L"--backend"){if(value!=L"wasapi")throw std::runtime_error("unsupported capture backend");}
@@ -56,5 +57,7 @@ Settings parse(int argc,wchar_t** argv) {
     ||(seen.count(L"--input-level-owner")&&seen.count(L"--five-second-test"))
     ||s.synthetic_startup_delay_ms>5000||(!s.synthetic&&(s.synthetic_startup_delay_ms||s.synthetic_clock_overlap||s.synthetic_clock_cases||s.synthetic_clock_resampling||s.synthetic_clock_drift)))
     throw std::runtime_error("invalid product capture ownership or scope");
+  if((seen.count(L"--input-level-owner")||seen.count(L"--five-second-test"))&&s.capture_format!="wav-v1")
+    throw std::runtime_error("capture storage contract must be wav-v1");
   return s;
 }

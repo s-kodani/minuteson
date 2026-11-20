@@ -32,7 +32,7 @@ final class AudioImportTests: XCTestCase {
     return url
   }
 
-  func testWAVContentDetectionAndCompactMonoCAFPreservesDuration() async throws {
+  func testWAVContentDetectionAndCompactMonoWAVPreservesDuration() async throws {
     let root = try directory()
     defer { try? FileManager.default.removeItem(at: root) }
     let source = try wav(root)
@@ -43,7 +43,7 @@ final class AudioImportTests: XCTestCase {
     XCTAssertEqual(inspected.detectedFormat, "wav")
     XCTAssertEqual(inspected.frames, 5000)
     XCTAssertEqual(inspected.durationUs, 312500)
-    let output = root.appendingPathComponent("decoded.caf")
+    let output = root.appendingPathComponent("decoded.wav")
     let converted = try await AudioImporter.decode(input: moved, output: output)
     XCTAssertEqual(converted, inspected)
     XCTAssertEqual(try Data(contentsOf: moved), original)
@@ -56,7 +56,8 @@ final class AudioImportTests: XCTestCase {
     XCTAssertEqual(file.fileFormat.sampleRate, 16000)
     XCTAssertEqual(file.fileFormat.channelCount, 1)
     XCTAssertEqual(file.fileFormat.commonFormat, .pcmFormatInt16)
-    XCTAssertEqual(try Data(contentsOf: output).count, 68 + 5000 * 2)
+    XCTAssertEqual(try Data(contentsOf: output).count, 80 + 5000 * 2)
+    XCTAssertEqual(try Data(contentsOf: output).prefix(4), Data("RIFF".utf8))
     let samples = try XCTUnwrap(buffer.floatChannelData)
     for frame in 0..<5000 {
       XCTAssertEqual(samples[0][frame], -0.125, accuracy: 1.0 / 32768)
@@ -144,7 +145,7 @@ final class AudioImportTests: XCTestCase {
     for fixture in fixtures where fixture.decode {
       let input = fixturesRoot.appendingPathComponent(fixture.file)
       let before = try Data(contentsOf: input)
-      let output = root.appendingPathComponent(fixture.file + ".caf")
+      let output = root.appendingPathComponent(fixture.file + ".wav")
       let info = try await AudioImporter.decode(input: input, output: output)
       XCTAssertEqual(info.codec, fixture.codec)
       XCTAssertEqual(info.detectedFormat, "m4a")

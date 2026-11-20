@@ -1,5 +1,5 @@
 language = "C"
-after_includes = "struct VoiceConverter;"
+after_includes = "struct VoiceConverter;\nstruct LiveMixer;"
 include_guard = "MON_CAPTURE_H"
 cpp_compat = true
 usize_is_size_t = true
@@ -18,6 +18,8 @@ item_types = ["structs", "typedefs", "functions"]
 InputLifecycle = "MonCaptureLifecycle"
 InputRetry = "MonCaptureInputRetry"
 RawPrefix = "MonRawPrefix"
+WavPrefix = "MonWavPrefix"
 ReadAt = "MonMediaReadAt"
 
 VoiceWrite = "MonVoiceWrite"
+WavWrite = "MonWavWrite"

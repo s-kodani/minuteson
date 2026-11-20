@@ -40,6 +40,7 @@ struct Control {
     history: serde_json::Value,
     deletion_history: Option<serde_json::Value>,
     flac_history: Option<serde_json::Value>,
+    wav_history: Option<serde_json::Value>,
     excluded_area: String,
 }
 fn sha(s: &str) -> bool {
@@ -162,7 +163,14 @@ pub(in crate::storage) fn admitted_history(
     let local_json: String = registry.query_row("SELECT local_json FROM relocation_history WHERE operation_id=?1 AND length(CAST(local_json AS BLOB))<=67108864",[admission.operation()],|r|r.get(0)).map_err(|e|e.to_string())?;
     let local: serde_json::Value = serde_json::from_str(&local_json).map_err(|e| e.to_string())?;
     let Some(facts) = control.deletion_history else {
-        if control.version != if control.flac_history.is_some() { 5 } else { 3 }
+        if control.version
+            != if control.wav_history.is_some() {
+                6
+            } else if control.flac_history.is_some() {
+                5
+            } else {
+                3
+            }
             || local.get("deletion_history").is_some()
             || local.get("deletion_binding").is_some()
         {
@@ -173,7 +181,14 @@ pub(in crate::storage) fn admitted_history(
         verify_registry_unchanged(admission, &registry, &local_json)?;
         return Ok(None);
     };
-    if control.version != if control.flac_history.is_some() { 5 } else { 4 }
+    if control.version
+        != if control.wav_history.is_some() {
+            6
+        } else if control.flac_history.is_some() {
+            5
+        } else {
+            4
+        }
         || facts.is_null()
         || local.get("deletion_history") != Some(&facts)
     {

@@ -77,6 +77,42 @@ int main(){
     frames=0;for(const auto& p:output){require(p.position==first+frames,"pressure created a gap");frames+=p.frames;}
     require(frames==125*480&&bounded.diagnostics().pressure_flushes==25&&bounded.diagnostics().reset_frames==0,"pressure discarded a pending buffer");
 
+    // New live-WAV acquisition must not promote buffer pressure to a sealing
+    // decision: another endpoint can still have unread older packets.
+    EndpointMixer ordered(true);EndpointCursor ordered_source;output.clear();
+    for(unsigned i=0;i<EndpointMixer::max_blocks;++i)
+      ordered.add(ordered_source,first+i*480,480,a.data(),0,100000000,emit);
+    bool pressure_rejected=false;
+    try{ordered.add(ordered_source,first+EndpointMixer::max_blocks*480,480,a.data(),0,100000000,emit);}
+    catch(const std::runtime_error&){pressure_rejected=true;}
+    require(pressure_rejected&&output.empty()&&ordered.pending_blocks()==EndpointMixer::max_blocks,
+      "ordered acquisition sealed unread peer audio under pressure");
+
+    // A control timer can see an empty output FIFO while native alignment
+    // still retains an older partial block. Only the acquisition observation
+    // may move the DSP frontier, and it stops before that unread PCM.
+    EndpointMixer observed(true);EndpointCursor observed_source;product::PacketQueue ingress;
+    auto admit=[&](CapturePacket packet){ingress.push(std::move(packet));};
+    observed.add(observed_source,first+353,480,a.data(),0,100000000,admit);
+    observed.flush(first+480,100000000,admit);
+    // The first 127 frames are emitted; the remaining 353 are still held.
+    auto preceding=ingress.pop();require(preceding&&preceding->frames==127,"partial-block fixture changed");
+    require(!ingress.pop()&&observed.pending_blocks()==1,"fixture must have an empty FIFO and buffered PCM");
+    const auto timer=first+48000;
+    ingress.observe(EndpointMixer::ticks_at(observed.observed_through(timer)));
+    require(ingress.observed_through(preceding->sequence)==EndpointMixer::ticks_at(first+480),
+      "timer observation crossed PCM retained inside the endpoint mixer");
+    observed.flush(timer,100000000,admit);
+    ingress.observe(EndpointMixer::ticks_at(observed.observed_through(timer)));
+    require(!ingress.observed_through(preceding->sequence),"frontier overtook buffered PCM after native flush");
+    const auto remaining=ingress.pop();require(remaining&&remaining->frames==353&&remaining->position==first+480
+      &&ingress.observed_through(remaining->sequence)==EndpointMixer::ticks_at(timer),"ordered frontier lost buffered PCM");
+    bool late_rejected=false;
+    try{observed.add(observed_source,first+353,480,a.data(),0,100000000,admit);}
+    catch(const std::runtime_error&){late_rejected=true;}
+    require(late_rejected&&observed.diagnostics().retimed_frames==0&&!ingress.pop(),
+      "live acquisition retimed a packet behind committed output");
+
     // An idle peer does not block progress forever. When it returns late, all
     // its received samples are still represented, with explicitly estimated time.
     EndpointMixer idle;EndpointCursor active,peer;output.clear();

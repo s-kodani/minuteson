@@ -322,6 +322,35 @@ private final class UnitDelivery: @unchecked Sendable {
   var first: (UInt32, Bool, UInt64, Bool, Int64, Double, Float)? { lock.withLock { values.first } }
 }
 final class MicrophoneAudioUnitTests: XCTestCase, @unchecked Sendable {
+  func testIdleObservationWaitsForNativeRenderAndTapDelivery() throws {
+    let api = UnitAPIFake()
+    let delivery = UnitDelivery()
+    let engine = try started(api, delivery)
+    defer { try? engine.stop() }
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let emitted = DispatchSemaphore(value: 0)
+    let observed = DispatchSemaphore(value: 0)
+    api.onRender = {
+      entered.signal()
+      _ = release.wait(timeout: .now() + 5)
+    }
+    defer { release.signal() }
+    DispatchQueue.global().async {
+      _ = api.emit()
+      emitted.signal()
+    }
+    XCTAssertEqual(entered.wait(timeout: .now() + 1), .success)
+    engine.afterAcceptedPCM {
+      XCTAssertEqual(delivery.count, 1)
+      observed.signal()
+    }
+    XCTAssertEqual(observed.wait(timeout: .now() + 0.03), .timedOut)
+    release.signal()
+    XCTAssertEqual(emitted.wait(timeout: .now() + 1), .success)
+    XCTAssertEqual(observed.wait(timeout: .now() + 1), .success)
+  }
+
   private let binding = MicrophoneRecovery.Binding(uid: "powerconf:input", objectID: 101, epoch: 1)
   private func started(_ api: UnitAPIFake, _ delivery: UnitDelivery = UnitDelivery()) throws
     -> NativeMicrophoneCaptureEngine

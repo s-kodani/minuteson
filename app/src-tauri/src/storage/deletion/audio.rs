@@ -373,7 +373,7 @@ fn disposition(entry: &FileEntry, records: &Records) -> Result<Disposition, Stri
     match entry.stage_hint.as_deref() {
         Some("recording_flac") => Ok(Disposition::ProducerAudioLeftover),
         Some("recording")
-            if matches!(leaf, "microphone.caf" | "system.caf")
+            if matches!(leaf, "microphone.caf" | "system.caf" | "recording.wav")
                 || super::files::raw_recording_audio_name(leaf) =>
         {
             Ok(Disposition::ProducerAudioLeftover)
@@ -381,7 +381,13 @@ fn disposition(entry: &FileEntry, records: &Records) -> Result<Disposition, Stri
         Some("import")
             if matches!(
                 leaf,
-                "original.wav" | "original.mp3" | "original.m4a" | "original.flac" | "decoded.caf"
+                "original.wav"
+                    | "original.mp3"
+                    | "original.m4a"
+                    | "original.flac"
+                    | "decoded.caf"
+                    | "decoded-voice.caf"
+                    | "recording.wav"
             ) =>
         {
             Ok(Disposition::ProducerAudioLeftover)

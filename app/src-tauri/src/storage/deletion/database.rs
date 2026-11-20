@@ -132,14 +132,54 @@ struct KnownSchema {
     objects: Schema,
     hash: String,
 }
+#[cfg(test)]
 fn current_schema() -> Result<&'static KnownSchema, String> {
-    // Only repository-owned current SQL is cached, never a live connection's
-    // history, trigger/FK state or rows. Every actual DB is inspected below.
-    static EXPECTED: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
-    EXPECTED
+    current_schema_for(crate::storage::schema_40::Layout::Lf)
+}
+fn current_schema_for(
+    layout: crate::storage::schema_40::Layout,
+) -> Result<&'static KnownSchema, String> {
+    // Cache only the two repository-owned expected inventories. Actual SQL,
+    // trigger/FK settings and rows are inspected on every live call below.
+    static LF: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
+    static CRLF: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
+    let cache = match layout {
+        crate::storage::schema_40::Layout::Lf => &LF,
+        crate::storage::schema_40::Layout::Crlf => &CRLF,
+    };
+    cache
         .get_or_init(|| {
-            let mut expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
-            crate::storage::initialize_database(&mut expected).map_err(|e| e.to_string())?;
+            let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
+            expected
+                .execute_batch(
+                    &crate::storage::schema_40::current_sql(layout).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+            let objects = schema(&expected)?;
+            let hash = crate::storage::schema_40::deletion_v1_schema_hash(&objects)?;
+            Ok(KnownSchema { objects, hash })
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+fn readonly_schema39(
+    layout: crate::storage::schema_40::Layout,
+) -> Result<&'static KnownSchema, String> {
+    static LF: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
+    static CRLF: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
+    let cache = match layout {
+        crate::storage::schema_40::Layout::Lf => &LF,
+        crate::storage::schema_40::Layout::Crlf => &CRLF,
+    };
+    cache
+        .get_or_init(|| {
+            let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
+            expected
+                .execute_batch(
+                    &crate::storage::schema_40::previous_sql_for(layout)
+                        .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
             let objects = schema(&expected)?;
             let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
             Ok(KnownSchema { objects, hash })
@@ -168,8 +208,16 @@ fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
     {
         return Err("削除対象DBに未対応の一時オブジェクトがあります".into());
     }
-    crate::storage::verify_database_schema(db).map_err(|e| e.to_string())?;
-    let expected = current_schema()?;
+    let expected = match crate::storage::schema_40::current_layout(db) {
+        Ok(layout) => current_schema_for(layout)?,
+        Err(original) => {
+            // A selected native history/rebinding image is inspected before
+            // startup migrates it. No writable schema39 capability is minted.
+            let layout = crate::storage::schema_40::verify_readonly_previous(db)
+                .map_err(|_| original.to_string())?;
+            readonly_schema39(layout)?
+        }
+    };
     let actual = schema(db)?;
     if actual != expected.objects {
         return Err("削除対象DBの構造・保護制約が既知の形式と一致しません".into());

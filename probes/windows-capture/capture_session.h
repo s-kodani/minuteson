@@ -7,6 +7,7 @@ struct CaptureSession {
   int run(){
   Json manifest,journal_persistence=nullptr;std::unique_ptr<MetadataWorker> metadata;
   auto storage_pending=std::make_shared<StoragePending>();std::shared_ptr<RawCommitWorker> commits;
+  std::shared_ptr<LiveWav> live_wav;
   std::unique_ptr<Lane> mic_lane,system_lane;
   IdleSleepGuard awake;
   auto diagnostics=[&](const char* state,const Json& error){
@@ -31,10 +32,12 @@ struct CaptureSession {
       if(actual.dwVolumeSerialNumber!=expected.dwVolumeSerialNumber||actual.nFileIndexHigh!=expected.nFileIndexHigh||actual.nFileIndexLow!=expected.nFileIndexLow||ticks(actual.ftCreationTime)!=ticks(expected.ftCreationTime))throw std::runtime_error("録音前テストの永続所有ディレクトリが一致しません");
     }
     auto attributes=GetFileAttributesW(s.output.c_str());if(attributes==INVALID_FILE_ATTRIBUTES||!(attributes&FILE_ATTRIBUTE_DIRECTORY)||(attributes&FILE_ATTRIBUTE_REPARSE_POINT)||!fs::is_empty(s.output))throw std::runtime_error("capture destination must be an empty ordinary directory");
-    mic_lane=std::make_unique<Lane>(s.output/L"microphone.caf",1,s.test);system_lane=std::make_unique<Lane>(s.output/L"system.caf",2,s.test);auto& mic=*mic_lane;auto& system=*system_lane;
+    mic_lane=std::make_unique<Lane>(s.output/L"microphone.wav",1,s.test);system_lane=std::make_unique<Lane>(s.output/L"system.wav",2,s.test);auto& mic=*mic_lane;auto& system=*system_lane;
     mic.holding_for_window=system.holding_for_window=s.test;
-    if(!s.test){commits=std::make_shared<RawCommitWorker>(storage_pending);mic.raw=std::make_unique<RawSegments>(s.output,s.owner,"microphone",1,commits);system.raw=std::make_unique<RawSegments>(s.output,s.owner,"system",2,commits);}
-    manifest=Json{{"schemaVersion",4},{"captureMode",s.mode},{"backend","wasapi"},{"targetPIDs",s.pid?Json::array({s.pid}):Json::array()},{"targetApplicationIdentity",nullptr},{"microphoneDeviceUID",s.uid.empty()?Json(nullptr):Json(s.uid)},{"recordingOwnerId",s.owner},{"inputDiagnosticsState","reported"},{"state","starting"},{"errors",Json::array()}, {"microphone",mic.track(0)}, {"system",system.track(0)}};
+    if(!s.test)live_wav=std::make_shared<LiveWav>(s.output,s.owner,storage_pending);
+    mic.wav=std::make_unique<WavInput>(mic.path,0,1,live_wav);system.wav=std::make_unique<WavInput>(system.path,1,2,live_wav);
+    manifest=Json{{"schemaVersion",5},{"audioFormat","wav"},{"captureMode",s.mode},{"backend","wasapi"},{"targetPIDs",s.pid?Json::array({s.pid}):Json::array()},{"targetApplicationIdentity",nullptr},{"microphoneDeviceUID",s.uid.empty()?Json(nullptr):Json(s.uid)},{"recordingOwnerId",s.owner},{"inputDiagnosticsState","reported"},{"state","starting"},{"errors",Json::array()}, {"microphone",mic.track(0)}, {"system",system.track(0)}};
+    if(live_wav){manifest["singleWav"]=live_wav->status();manifest["clockMappingSource"]="single_wav_v1";}
     manifest["consoleWindowPresent"]=GetConsoleWindow()!=nullptr;
     manifest["clockDiagnosticsFile"]="capture-clock.json";
     // Every publication, including initialization failures, must be decodable
@@ -101,7 +104,7 @@ struct CaptureSession {
     if(s.synthetic){if(selected.empty())selected="synthetic-microphone";choice={selected,s.uid.empty()?"systemDefault":"fixed",s.uid.empty()?"mon_direct_recording":""};mic.binding.connected();system.binding.connected();mic.preparation_schedule.initial_resolved=system.preparation_schedule.initial_resolved=true;}
     else{reconnect(mic,true);reconnect(system,false);}
     mon::capture::SyntheticDriver synthetic({s.scenario,s.synthetic_clock_overlap,s.synthetic_clock_cases,s.synthetic_clock_resampling,s.synthetic_clock_drift});
-    EndpointMixer synthetic_mixer;
+    EndpointMixer synthetic_mixer(true);
     EndpointCursor synthetic_primary,synthetic_delayed;
     const bool synthetic_endpoints=s.synthetic&&(s.scenario=="endpoint-switch-late"||s.scenario=="endpoint-continuity");
     auto emit_synthetic=[&](CapturePacket packet){system.append(packet.samples.data(),packet.frames,packet.time,packet.position,packet.flags,packet.arrival);};
@@ -139,9 +142,12 @@ struct CaptureSession {
           if(system.binding.state=="connected"){
             std::vector<float> signal(packet.frames*2,0.25f);
             synthetic_mixer.add(synthetic_primary,first,packet.frames,signal.data(),packet.flags,packet.arrival,emit_synthetic);
-            // Old Bluetooth callbacks can arrive after newer output samples
-            // have already been sealed. Exercise the real production mixer.
-            if(s.scenario=="endpoint-switch-late"&&packet.position>=4800*5)synthetic_mixer.add(synthetic_delayed,first-24000,packet.frames,signal.data(),packet.flags,packet.arrival,emit_synthetic);
+            // After one durable checkpoint, inject a truly late native packet.
+            // The production path must fail without shifting it into output.
+            if(s.scenario=="endpoint-switch-late"&&packet.position>=4800*45){
+              try{synthetic_mixer.add(synthetic_delayed,first-24000,packet.frames,signal.data(),packet.flags,packet.arrival,emit_synthetic);}
+              catch(...){system.previous_alignment=synthetic_mixer.diagnostics();throw;}
+            }
           }
           auto through=EndpointMixer::frame_at(packet.arrival);
           through=through>EndpointMixer::latency_frames?through-EndpointMixer::latency_frames:0;
@@ -183,6 +189,24 @@ struct CaptureSession {
           metadata->manifest(manifest);
         }
       }
+      if(live_wav){
+        // A frontier follows the complete admitted FIFO. Never let a control
+        // timer seal across unread packets or the converter's retained halo.
+        const auto now=qpc();
+        const auto observed=s.synthetic?static_cast<std::uint64_t>(std::max(mic.wav->normalized_through(),system.wav->normalized_through())/100):now;
+        const auto idle_through=observed>EndpointMixer::latency_frames*10000000/48000?observed-EndpointMixer::latency_frames*10000000/48000:0;
+        for(unsigned index=0;index<2;++index){auto& lane=index?system:mic;
+          if(lane.queued())continue;
+          auto through=lane.wav->normalized_through();
+          if(!lane.measured||now-lane.measured>7500000){
+            if(auto frontier=lane.idle_frontier(idle_through)){
+              lane.wav->drain_converter();through=std::max(through,static_cast<std::int64_t>(*frontier*100));
+            }
+          }
+          live_wav->advance(index,through);
+        }
+        live_wav->drain(static_cast<std::int64_t>(now*100));
+      }
       const auto estimates=mic.clock.estimated_packets+system.clock.estimated_packets;
       if(!last_diagnostics||qpc()-last_diagnostics>=10000000||(estimates&&!reported_estimates)){
         if(s.test){ULARGE_INTEGER available{};if(!GetDiskFreeSpaceExW(s.output.c_str(),&available,nullptr,nullptr))throw std::runtime_error("保存先の空き容量を確認できません。確定済みの音声は保持しています");if(available.QuadPart<16ULL*1024*1024)throw std::runtime_error("保存先の空き容量が不足しています。確定済みの原音声は保持しています");}
@@ -221,12 +245,15 @@ struct CaptureSession {
     // prevents producer-closure proof. Only finish() may publish closed=true.
     if(mic.raw){mic.raw->seal();system.raw->seal();}
     if(!mic.acquisition_closed()||!system.acquisition_closed()){if(commits)commits->wait();throw std::runtime_error("音声入力の準備処理の終了を確認できません。確定済み原音声を保持しています。録音を回復してください");}
-    if(mic.raw){mic.raw->finish();system.raw->finish();commits->wait();}mic.binding.stopped();system.binding.stopped();publish_status(true);metadata->finish();journal_persistence=metadata->persistence();if(!metadata->error().empty()){manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]=metadata->error();}metadata.reset();
+    if(mic.raw){mic.raw->finish();system.raw->finish();commits->wait();}
+    if(live_wav){live_wav->advance(0,static_cast<std::int64_t>(closed*100));live_wav->advance(1,static_cast<std::int64_t>(closed*100));live_wav->drain(static_cast<std::int64_t>(closed*100));live_wav->finish();}
+    mic.binding.stopped();system.binding.stopped();publish_status(true);metadata->finish();journal_persistence=metadata->persistence();if(!metadata->error().empty()){manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]=metadata->error();}metadata.reset();
     if(!mic.frames&&!system.frames)throw std::runtime_error("マイク・PC音声を取得できませんでした。Windowsのマイク権限と入力機器を確認してください");
-    auto origin=mic.frames?(system.frames?std::min(mic.first,system.first):mic.first):system.first;
+    auto origin=live_wav?static_cast<std::uint64_t>(live_wav->origin()/100):mic.frames?(system.frames?std::min(mic.first,system.first):mic.first):system.first;
     manifest["microphone"]=mic.track(origin);manifest["system"]=system.track(origin);manifest["systemAudioUnreceived"]=system.frames==0;
     manifest["microphoneAudioUnreceived"]=mic.frames==0;
     if(mic.raw){manifest["microphone"]["rawSegments"]=mic.raw->status();manifest["system"]["rawSegments"]=system.raw->status();manifest["clockMappingSource"]="sealed_raw_v1";}
+    if(live_wav)manifest["singleWav"]=live_wav->status();
     auto uncertainty=std::max(1000000ULL,std::max(mic.clock.max_boundary_adjustment_ticks,system.clock.max_boundary_adjustment_ticks)*100);
     manifest["timingEstimated"]=(mic.clock.estimated_packets+system.clock.estimated_packets)!=0;
     // Estimated clocks cannot claim the normal 1 ms precision. Retain a
@@ -242,11 +269,13 @@ struct CaptureSession {
     for(auto* lane:{mic_lane.get(),system_lane.get()})if(lane){lane->cancel_preparation();if(lane->reader)lane->reader->stop();}
     for(auto* lane:{mic_lane.get(),system_lane.get()})if(lane){try{lane->close();}catch(...) {}if(lane->raw){try{lane->raw->drain();lane->raw->seal();}catch(...) {}}}
     if(commits){try{commits->wait();}catch(...) {}}
+    if(live_wav){try{live_wav->wait();}catch(...) {}}
     if(metadata){metadata->finish();metadata.reset();}
     try{diagnostics("failed",error.what());}catch(...){}
     if(!manifest.is_null()){
       manifest["inputDiagnosticsState"]="unconfirmed";manifest["inputEventJournalError"]="録音異常終了のため履歴の停止時封印を確認できません";
       if(mic_lane&&system_lane){auto origin=mic_lane->frames?mic_lane->first:system_lane->first;if(system_lane->frames)origin=std::min(origin,system_lane->first);manifest["microphone"]=mic_lane->track(origin);manifest["system"]=system_lane->track(origin);if(mic_lane->raw){manifest["microphone"]["rawSegments"]=mic_lane->raw->status();manifest["system"]["rawSegments"]=system_lane->raw->status();}}
+      if(live_wav)manifest["singleWav"]=live_wav->status();
       manifest["state"]="failed";manifest["errors"]=Json::array({error.what()});try{atomic_json(s.output/L"manifest.json",manifest);}catch(...){}
     }std::cerr<<error.what()<<std::endl;return 1;
   }

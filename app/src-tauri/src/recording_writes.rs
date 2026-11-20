@@ -75,6 +75,7 @@ pub(crate) struct WriteReader {
     revision: u64,
     microphone: TrackReader,
     system: TrackReader,
+    wav: crate::storage::recordings::wav::Cursor,
 }
 impl WriteReader {
     pub(crate) fn pin(directory: &Path) -> Result<Self, String> {
@@ -84,6 +85,7 @@ impl WriteReader {
             revision: 0,
             microphone: Default::default(),
             system: Default::default(),
+            wav: Default::default(),
         })
     }
     pub(crate) fn read(&mut self, directory: &Path, owner: &str) -> Result<Snapshot, String> {
@@ -97,14 +99,47 @@ impl WriteReader {
         self.check_directory(directory)?;
         self.owner = Some(owner.into());
         self.revision += 1;
+        let wav = self.wav.read(directory, owner, &|| false);
+        let shared = if let Ok(Some(_)) = &wav {
+            Some(std::array::from_fn::<_, 2, _>(|index| {
+                let frames = self.wav.coverage[index];
+                if frames == 0 {
+                    return Track::unknown("waiting");
+                }
+                let age = self.wav.coverage_modified[index]
+                    .and_then(|at| SystemTime::now().duration_since(at).ok())
+                    .and_then(|d| milliseconds(d).ok());
+                match age {
+                    Some(age) => Track {
+                        state: "written",
+                        frames: Some(frames),
+                        age_ms: Some(age),
+                    },
+                    None => Track::unknown("unavailable"),
+                }
+            }))
+        } else {
+            None
+        };
         let result = Snapshot {
             schema_version: 1,
             owner_id: owner.into(),
             revision: self.revision,
-            microphone: self
-                .microphone
-                .read(&self.directory, owner, Lane::Microphone),
-            system: self.system.read(&self.directory, owner, Lane::System),
+            microphone: shared.as_ref().map(|t| t[0].clone()).unwrap_or_else(|| {
+                if wav.is_err() {
+                    Track::unknown("unavailable")
+                } else {
+                    self.microphone
+                        .read(&self.directory, owner, Lane::Microphone)
+                }
+            }),
+            system: shared.as_ref().map(|t| t[1].clone()).unwrap_or_else(|| {
+                if wav.is_err() {
+                    Track::unknown("unavailable")
+                } else {
+                    self.system.read(&self.directory, owner, Lane::System)
+                }
+            }),
         };
         self.check_directory(directory)?;
         Ok(result)

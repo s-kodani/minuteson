@@ -276,6 +276,7 @@ fn test_start_command_fixes_uid_owner_stop_parent_and_application_instance() {
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     for (key, value) in [
+        ("--capture-format", "wav-v1"),
         ("--microphone-uid", r.microphone_uid.as_str()),
         ("--five-second-test", r.run_id.as_str()),
         ("--pid", "123"),

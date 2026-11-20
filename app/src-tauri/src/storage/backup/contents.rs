@@ -593,9 +593,9 @@ impl Contents {
                 tx.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,import_id,kind,format,sample_rate,channels,state,processing_config_json,created_at,updated_at) VALUES(?1,?2,?3,?4,'processed','wav',16000,1,?5,?6,?7,?7)",params![track,mid,if source=="recording"{Some(&source_id)}else{None},if source=="audio_import"{Some(&source_id)}else{None},if m.audio.as_ref().is_some_and(|a|!a.deleted){"ready"}else{"failed"},serde_json::json!({"policy":super::super::meeting_audio::POLICY}).to_string(),m.meeting.created_at]).map_err(err)?;
             }
             if let Some(a) = &m.audio {
-                if a.frames <= 0 || a.frames.checked_mul(2).and_then(|n| {
-                    n.checked_add(crate::audio::wave::header(a.frames as u64).ok()?.len() as i64)
-                }) != Some(a.asset.size)
+                if a.frames <= 0
+                    || a.asset.size < 0
+                    || !crate::audio::wave::valid_size(a.frames as u64, a.asset.size as u64)
                 {
                     return Err("会議音声のサイズ・長さが不正です".into());
                 }
@@ -766,18 +766,71 @@ mod tests {
     #[test]
     fn meeting_wav_verification_accepts_riff_and_long_rf64_without_allocating_pcm() {
         for frames in [160, i64::from(u32::MAX) / 2] {
-            let header = crate::audio::wave::header(frames as u64).unwrap();
-            let size = frames as u64 * 2 + header.len() as u64;
-            let mut file = Cursor::new(header.clone());
-            verify_meeting_wav(&mut file, size, frames).unwrap();
-            assert!(verify_meeting_wav(&mut file, size, frames - 1).is_err());
-            assert!(verify_meeting_wav(&mut file, size - 2, frames).is_err());
-            // Corrupt the PCM channel count in either header layout.
-            let mut stereo = header;
-            let channels = stereo.len() - 22;
-            stereo[channels..channels + 2].copy_from_slice(&2u16.to_le_bytes());
-            assert!(verify_meeting_wav(&mut Cursor::new(stereo), size, frames).is_err());
+            for header in [
+                crate::audio::wave::header(frames as u64).unwrap(),
+                mon_core::capture::wav::header(frames as u64)
+                    .unwrap()
+                    .to_vec(),
+            ] {
+                let size = frames as u64 * 2 + header.len() as u64;
+                let mut file = Cursor::new(header.clone());
+                verify_meeting_wav(&mut file, size, frames).unwrap();
+                assert!(verify_meeting_wav(&mut file, size, frames - 1).is_err());
+                assert!(verify_meeting_wav(&mut file, size - 2, frames).is_err());
+                // Corrupt the PCM channel count in either header layout.
+                let mut stereo = header;
+                let channels = stereo.len() - 22;
+                stereo[channels..channels + 2].copy_from_slice(&2u16.to_le_bytes());
+                assert!(verify_meeting_wav(&mut Cursor::new(stereo), size, frames).is_err());
+            }
         }
+    }
+
+    #[test]
+    fn reserved_riff_meeting_wav_survives_format_eight_database_reconstruction() {
+        let root = tempfile::tempdir().unwrap();
+        let stage = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().into()).unwrap();
+        archive::tests::meeting(&storage, "reserved-riff-audio");
+        std::fs::create_dir(stage.path().join("assets")).unwrap();
+        let (mut contents, _) = Contents::capture(
+            &mut storage.connection.lock().unwrap(),
+            stage.path(),
+            &deleted_audio::Native::empty(),
+            &|| false,
+        )
+        .unwrap();
+        let audio = contents.meetings[0].audio.as_mut().unwrap();
+        let mut bytes = mon_core::capture::wav::header(audio.frames as u64)
+            .unwrap()
+            .to_vec();
+        bytes.resize(80 + audio.frames as usize * 2, 0);
+        audio.asset.size = bytes.len() as i64;
+        audio.asset.hash = format!("{:x}", Sha256::digest(&bytes));
+        let asset = audio.asset.clone();
+        let path = stage.path().join("reserved.wav");
+        std::fs::write(&path, &bytes).unwrap();
+        contents
+            .verify_audio(&BTreeMap::from([(asset.id.clone(), path)]), &|| false)
+            .unwrap();
+        let db = contents
+            .write_database(
+                &stage.path().join("restored.sqlite3"),
+                &|_, _, id| Ok(id.into()),
+                &|meeting, id| Ok(format!("meetings/{meeting}/assets/{id}")),
+                &|| false,
+            )
+            .unwrap();
+        let (size, hash): (i64, String) = db
+            .query_row(
+                "SELECT size_bytes,content_hash FROM file_assets WHERE id=?1",
+                [&asset.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(size, bytes.len() as i64);
+        assert_eq!(hash, asset.hash);
+        assert_eq!(&bytes[12..16], b"JUNK");
     }
 
     #[test]

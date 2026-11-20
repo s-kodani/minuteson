@@ -151,6 +151,23 @@ fn raw_recording_metadata_name(leaf: &str) -> bool {
             | "partial-recovery.json"
             | ".final-flac.lock"
     ) || raw_recording_sequence(leaf, ".json").is_some()
+        || single_wav_metadata_name(leaf)
+}
+fn single_wav_metadata_name(leaf: &str) -> bool {
+    if matches!(leaf, "single-wav.json" | "single-wav-owner.json") {
+        return true;
+    }
+    let Some(sequence) = leaf
+        .strip_prefix("wav-")
+        .and_then(|v| v.strip_suffix(".json"))
+    else {
+        return false;
+    };
+    sequence.len() == 8
+        && sequence.bytes().all(|b| b.is_ascii_digit())
+        && sequence
+            .parse::<u32>()
+            .is_ok_and(|n| (1..=32_768).contains(&n))
 }
 pub(super) fn valid_path(s: &str, meeting: &str) -> bool {
     s.len() <= 256
@@ -274,6 +291,7 @@ impl Records {
                     p[4],
                     "microphone.caf"
                         | "system.caf"
+                        | "recording.wav"
                         | "manifest.json"
                         | "input-events.json"
                         | "input-notices.json"
@@ -292,6 +310,8 @@ impl Records {
                         | "original.m4a"
                         | "original.flac"
                         | "decoded.caf"
+                        | "decoded-voice.caf"
+                        | "recording.wav"
                         | "manifest.json"
                 )
             {

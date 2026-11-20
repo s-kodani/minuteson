@@ -88,6 +88,8 @@ fn recording_command(
     let mut command = Command::new(binary);
     mon_native::process::configure(&mut command, mon_native::process::Purpose::Capture);
     command
+        .arg("--capture-format")
+        .arg("wav-v1")
         .arg("--output")
         .arg(output)
         .arg("--mode")
@@ -1145,6 +1147,8 @@ mod tests {
         assert_eq!(command.get_program(), binary.as_os_str());
         let arguments: Vec<_> = command.get_args().collect();
         let expected = [
+            "--capture-format",
+            "wav-v1",
             "--output",
             output.to_str().unwrap(),
             "--mode",

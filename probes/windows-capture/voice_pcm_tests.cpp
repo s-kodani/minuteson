@@ -25,6 +25,11 @@ int main(){try{
       require(std::all_of(output.begin(),output.end(),[](auto n){return n==4096;}),"mono/PCM16 scaling differs");
       if(expected.empty())expected=output;else require(expected==output,"packet boundaries changed PCM");
       const auto header=VoicePCM::header(output.size());require(header.size()==68&&header[51]==16,"compact CAF header differs");
+      const auto wav=VoicePCM::wave_header(output.size());
+      require(wav.size()==80&&std::string(wav.begin(),wav.begin()+4)=="RIFF"
+        &&std::string(wav.begin()+8,wav.begin()+12)=="WAVE"
+        &&std::string(wav.begin()+12,wav.begin()+16)=="JUNK"
+        &&std::string(wav.begin()+72,wav.begin()+76)=="data","compact WAV header differs");
     }
   }
   product::PacketClock compact(product::PacketClock::bounded_capacity,16000);
@@ -36,6 +41,9 @@ int main(){try{
   require(failed,"native IO failure was swallowed");
   failed=false;try{failing.finish([](auto*,auto,auto,auto){});}catch(...){failed=true;}
   require(failed,"failed converter resumed");
-  std::cout<<"voice PCM C ABI: rates, mono, packet independence, compact CAF, clocks and terminal failures passed\n";
+  const auto rf64=VoicePCM::wave_header(std::uint64_t(1)<<31);
+  require(std::string(rf64.begin(),rf64.begin()+4)=="RF64"
+    &&std::string(rf64.begin()+12,rf64.begin()+16)=="ds64","long recording failed RF64 upgrade");
+  std::cout<<"voice PCM C ABI: rates, mono, packet independence, CAF/WAV/RF64, clocks and terminal failures passed\n";
   return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

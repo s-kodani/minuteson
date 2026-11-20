@@ -244,7 +244,7 @@ pub(super) fn decode(
         .make(&p, &DecoderOptions::default())
         .map_err(|e| e.to_string())?;
     let mut output = output
-        .map(|path| super::VoiceCafWriter::new(path, rate, channels))
+        .map(|path| super::VoiceWavWriter::new(path, rate, channels))
         .transpose()?;
     let mut raw_frames = 0;
     let mut frames = 0;
@@ -309,12 +309,6 @@ pub(super) fn decode(
     info.validate()?;
     Ok(info)
 }
-pub(super) fn caf_header(rate: u32, channels: u32, frames: u64) -> Result<Vec<u8>, String> {
-    mon_core::media::caf::header(rate, channels, frames)
-        .map(|header| header.to_vec())
-        .map_err(str::to_owned)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,7 +358,7 @@ mod tests {
             &crate::test_support::never_cancelled
         )
         .is_err());
-        assert!(caf_header(384000, 8, u64::MAX).is_err());
+        assert!(crate::audio::wave::streaming_header(u64::MAX).is_err());
         assert!(decode(&path, None, &|| true).is_err());
     }
 
@@ -409,12 +403,12 @@ mod tests {
             let inspected = decode(&mp3, None, &crate::test_support::never_cancelled).unwrap();
             assert_eq!(inspected.frames, u64::from(rate) * 2);
             assert_eq!(inspected.channels, channels);
-            let caf = root.path().join(format!("{rate}.caf"));
+            let wav = root.path().join(format!("{rate}.wav"));
             assert_eq!(
-                decode(&mp3, Some(&caf), &crate::test_support::never_cancelled).unwrap(),
+                decode(&mp3, Some(&wav), &crate::test_support::never_cancelled).unwrap(),
                 inspected
             );
-            assert!(decode(&mp3, Some(&caf), &crate::test_support::never_cancelled).is_err());
+            assert!(decode(&mp3, Some(&wav), &crate::test_support::never_cancelled).is_err());
             let raw = root.path().join(format!("{rate}.raw"));
             let result = Command::new(&ffmpeg)
                 .args(["-nostdin", "-v", "error", "-i"])
@@ -429,9 +423,10 @@ mod tests {
                 expected.len() as u64,
                 inspected.frames * u64::from(channels) * 4
             );
-            let proof = Fingerprint::capture(&caf, &crate::test_support::never_cancelled).unwrap();
+            let proof = Fingerprint::capture(&wav, &crate::test_support::never_cancelled).unwrap();
             let mut audio =
-                VerifiedAudio::open(File::open(&caf).unwrap(), proof.size, &proof.sha256).unwrap();
+                VerifiedAudio::open(File::open(&wav).unwrap(), proof.size, &proof.sha256).unwrap();
+            audio.require_wav().unwrap();
             let mut converter =
                 mon_core::media::voice::VoiceConverter::new(rate, channels).unwrap();
             let mut compact = Vec::new();
@@ -458,7 +453,11 @@ mod tests {
             }
             converter.finish(&mut sink).unwrap();
             assert_eq!(audio.format.frames as usize, compact.len());
-            assert!(audio.format.is_compact_recording_segment());
+            assert_eq!(
+                (audio.format.sample_rate, audio.format.channels),
+                (16000, 1)
+            );
+            assert_eq!(proof.size, 80 + audio.format.frames * 2);
             let mut offset = 0;
             while offset < audio.format.frames {
                 let n = (audio.format.frames - offset).min(4096);

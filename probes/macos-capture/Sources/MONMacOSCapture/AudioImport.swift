@@ -109,16 +109,15 @@ enum AudioImporter {
     var savedFrames: Int64 = 0
     if let output {
       guard output.isFileURL, output.standardizedFileURL != input.standardizedFileURL else {
-        throw ProbeError.usage("a separate local CAF destination is required")
+        throw ProbeError.usage("a separate local WAV destination is required")
       }
       let descriptor = open(
         output.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
       guard descriptor >= 0 else {
-        throw ProbeError.capture("CAF destination already exists or is unavailable")
+        throw ProbeError.capture("WAV destination already exists or is unavailable")
       }
-      close(descriptor)
-      destination = try FileHandle(forWritingTo: output)
-      try destination?.write(contentsOf: VoicePCM.header(frames: 0))
+      destination = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+      try destination?.write(contentsOf: VoicePCM.wavHeader(frames: 0))
       compact = try VoicePCM(rate: UInt32(rate), channels: channels)
     }
     var frames: UInt64 = 0
@@ -164,10 +163,10 @@ enum AudioImporter {
     }
     if let destination {
       guard savedFrames == Int64((frames * 16000 + UInt64(rate) - 1) / UInt64(rate)) else {
-        throw ProbeError.capture("compact CAF frame count mismatch")
+        throw ProbeError.capture("WAV frame count mismatch")
       }
       try destination.seek(toOffset: 0)
-      try destination.write(contentsOf: VoicePCM.header(frames: savedFrames))
+      try destination.write(contentsOf: VoicePCM.wavHeader(frames: savedFrames))
       try destination.synchronize()
       try destination.close()
     }
@@ -180,7 +179,7 @@ enum AudioImporter {
 
   static func command(_ arguments: [String]) async throws {
     guard arguments.count == 4, let parent = pid_t(arguments[3]), parent > 0 else {
-      throw ProbeError.usage("--import-audio requires input, CAF output or -, and parent PID")
+      throw ProbeError.usage("--import-audio requires input, WAV output or -, and parent PID")
     }
     do {
       let info = try await decode(

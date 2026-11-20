@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 mod recovery;
-pub(super) use recovery::{recovery_input, RecoveryRebind};
+pub(in crate::storage::recordings) use recovery::{recovery_input, RecoveryRebind};
 
 const MAX_WORKSPACES: usize = 4096;
 const MAX_CLAIMS: usize = 32768;
@@ -507,6 +507,7 @@ struct Control {
     history: serde_json::Value,
     deletion_history: Option<serde_json::Value>,
     flac_history: Option<serde_json::Value>,
+    wav_history: Option<serde_json::Value>,
     excluded_area: String,
 }
 pub(in crate::storage) fn admitted_history(
@@ -524,7 +525,9 @@ pub(in crate::storage) fn admitted_history(
         || control.excluded_area.is_empty()
         || control.excluded_area.len() > 255
         || control.version
-            != if control.flac_history.is_some() {
+            != if control.wav_history.is_some() {
+                6
+            } else if control.flac_history.is_some() {
                 5
             } else if control.deletion_history.is_some() {
                 4

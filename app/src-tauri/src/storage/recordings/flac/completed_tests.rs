@@ -84,6 +84,72 @@ fn wave(fixture: &Fixture) -> Vec<u8> {
     std::fs::read(path).unwrap()
 }
 
+fn pending_wave(fixture: &Fixture) -> PathBuf {
+    let directories: Vec<_> =
+        std::fs::read_dir(fixture.base.parent().unwrap().join("meeting-wave"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.join("legacy-canonical-wav.json").is_file())
+            .collect();
+    assert_eq!(directories.len(), 1);
+    let directory = &directories[0];
+    let receipt: Value =
+        serde_json::from_slice(&std::fs::read(directory.join("wave-publication.json")).unwrap())
+            .unwrap();
+    directory.join(receipt["name"].as_str().unwrap())
+}
+
+fn assert_no_flac(fixture: &Fixture) {
+    fn visit(directory: &Path) {
+        for item in std::fs::read_dir(directory).unwrap() {
+            let path = item.unwrap().path();
+            if path.is_dir() {
+                visit(&path);
+            } else {
+                assert_ne!(
+                    path.extension().and_then(|s| s.to_str()),
+                    Some("flac"),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
+    }
+    visit(fixture.base.parent().unwrap());
+    assert!(!fixture.base.join(COMPLETED_PLAN).exists());
+    assert!(!fixture.base.join(PARTIAL_PLAN).exists());
+}
+
+// Explicitly reproduce an older producer workspace. Current finalization must
+// never be used to mint FLAC merely to exercise its retained relocation reader.
+fn legacy_completed_publication(storage: &Storage, session: &str) -> Publication {
+    let session = load_session(&storage.connection.lock().unwrap(), session)
+        .unwrap()
+        .unwrap();
+    let base = Path::new("meetings")
+        .join(&session.meeting_id)
+        .join("audio")
+        .join(&session.id);
+    let proof = storage
+        .checked_capture_file(&base.join("manifest.json"), None)
+        .unwrap();
+    let manifest = storage.read_capture_manifest(&proof).unwrap();
+    let prefixes = storage
+        .verify_completed_raw_prefixes(&base, &manifest, &session.id)
+        .unwrap();
+    let origin = prefixes
+        .iter()
+        .filter(|prefix| prefix.frames() > 0)
+        .map(Prefix::first_capture_nanoseconds)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .into_iter()
+        .min()
+        .unwrap();
+    Publication::prepare_completed(storage, &base, &proof.hash, origin, &prefixes, &|| false)
+        .unwrap()
+}
+
 #[test]
 fn completed_canonical_maps_accept_the_full_raw_recording_capacity() {
     let prefix = crate::recording_segments::maximum_prefix();
@@ -146,31 +212,37 @@ fn completed_prefix_without_continuous_caf_matches_previous_wave_and_keeps_captu
             .unwrap();
         assert_eq!(result.state, "saved");
         assert_eq!(wave(&current), wave(&previous));
-        assert!(current.base.join(COMPLETED_PLAN).is_file());
+        assert_no_flac(&current);
         assert!(!current.base.join(PARTIAL_PLAN).exists());
         assert!(!current.base.join("microphone.caf").exists());
         assert!(!current.base.join("system.caf").exists());
-        let db = current.storage.connection.lock().unwrap();
-        let reasons: Vec<String> = db
-            .prepare("SELECT reason_code FROM audio_gaps ORDER BY reason_code")
+        let gaps: Vec<(i64, i64, String)> = current
+            .storage
+            .connection
+            .lock()
             .unwrap()
-            .query_map([], |row| row.get(0))
+            .prepare("SELECT start_us,end_us,reason_code FROM audio_gaps ORDER BY start_us,end_us")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert!(reasons.iter().any(|reason| reason == "capture_stop_gap"));
-        assert!(!reasons.iter().any(|reason| reason.starts_with("partial_")));
-        assert_eq!(
-            reasons
-                .iter()
-                .any(|reason| reason == "capture_timestamp_gap"),
-            gap
-        );
+        let mut expected = Vec::new();
+        if gap {
+            expected.push((4_050_000, 4_700_000, "meeting_input_missing".into()));
+        }
+        let last_input = if gap { 5_000_000 } else { 4_300_000 };
+        expected.push((
+            last_input,
+            last_input + 600_000,
+            "meeting_input_missing".into(),
+        ));
+        assert_eq!(gaps, expected);
     }
 }
 
 #[test]
-fn completed_flac_missing_or_duplicated_bytes_rebuilds_in_process_and_preserves_timeline() {
+fn completed_wav_tampering_is_rejected_and_verified_raw_is_retained_for_retry() {
     for duplicate in [false, true] {
         let fixture = compact_fixture(true);
         let original = std::fs::read(fixture.base.join("raw-microphone-00000001.caf")).unwrap();
@@ -180,27 +252,24 @@ fn completed_flac_missing_or_duplicated_bytes_rebuilds_in_process_and_preserves_
             .finalize_recording(&fixture.session.id)
             .is_err());
         fixture.assert_no_registration();
-        let plan: Plan =
-            serde_json::from_slice(&std::fs::read(fixture.base.join(COMPLETED_PLAN)).unwrap())
-                .unwrap();
-        let track = &plan.tracks[0];
-        let directory = fixture.directory(track);
-        let name = format!("{}.flac", track.chunks[0]);
-        let path = directory.path.join(&name);
-        let mut bytes = std::fs::read(&path).unwrap();
+        let path = pending_wave(&fixture);
+        let verified = std::fs::read(&path).unwrap();
+        let mut corrupt = verified.clone();
         if duplicate {
-            let audio = bytes[42..].to_vec();
-            bytes.extend(audio);
+            corrupt.extend_from_slice(&verified[44..]);
         } else {
-            bytes.truncate(bytes.len() / 2);
+            corrupt.truncate(corrupt.len() / 2);
         }
-        write(&path, &bytes);
-        let unknown = directory.path.join("keep-unknown.part");
+        write(&path, &corrupt);
+        let unknown = path.parent().unwrap().join("keep-unknown.part");
         write(&unknown, b"not owned by a checkpoint");
+        fixture.allow_db();
         assert!(fixture
             .storage
             .finalize_recording(&fixture.session.id)
             .is_err());
+        fixture.assert_no_registration();
+        assert_eq!(std::fs::read(&path).unwrap(), corrupt);
         assert_eq!(
             std::fs::read(&unknown).unwrap(),
             b"not owned by a checkpoint"
@@ -209,40 +278,32 @@ fn completed_flac_missing_or_duplicated_bytes_rebuilds_in_process_and_preserves_
             std::fs::read(fixture.base.join("raw-microphone-00000001.caf")).unwrap(),
             original
         );
-        fixture.allow_db();
+        assert_no_flac(&fixture);
+        // The test restores the same owned inode from its known verified bytes.
+        // Publication itself must never overwrite the tampered completed WAV.
+        write(&path, &verified);
         let saved = fixture
             .storage
             .finalize_recording(&fixture.session.id)
             .unwrap();
         assert_eq!(saved.state, "saved");
-        fixture
-            .storage
-            .verify_canonical_audio(&saved.meeting_id, &|| false)
-            .unwrap();
-        let baseline = compact_fixture(true);
-        baseline
-            .storage
-            .finalize_recording(&baseline.session.id)
-            .unwrap();
+        assert_eq!(wave(&fixture), verified);
         assert_eq!(
-            wave(&fixture),
-            wave(&baseline),
-            "capture gaps and meeting time must survive repair"
+            std::fs::read(&unknown).unwrap(),
+            b"not owned by a checkpoint"
         );
-        // WAV publication may retire the raw bodies only after successful verification.
-        if let Ok(raw) = std::fs::read(fixture.base.join("raw-microphone-00000001.caf")) {
-            assert_eq!(raw, original);
-        }
-        let again = fixture
-            .storage
-            .finalize_recording(&fixture.session.id)
-            .unwrap();
-        assert_eq!(again, saved, "reconciliation must reuse the same session");
+        assert_eq!(
+            fixture
+                .storage
+                .finalize_recording(&fixture.session.id)
+                .unwrap(),
+            saved
+        );
     }
 }
 
 #[test]
-fn completed_prefix_failed_db_commit_retains_raw_and_reuses_verified_flac_after_restart() {
+fn completed_prefix_failed_db_commit_reuses_the_owned_wav_without_rewriting_pcm() {
     let fixture = compact_fixture(true);
     for lane in ["microphone", "system"] {
         std::fs::remove_file(fixture.base.join(format!("{lane}.caf"))).unwrap();
@@ -258,53 +319,37 @@ fn completed_prefix_failed_db_commit_retains_raw_and_reuses_verified_flac_after_
         std::fs::read(fixture.base.join("raw-microphone-00000001.caf")).unwrap(),
         original
     );
-    let plan_bytes = std::fs::read(fixture.base.join(COMPLETED_PLAN)).unwrap();
-    let plan: Plan = serde_json::from_slice(&plan_bytes).unwrap();
-    let bodies: Vec<_> = plan
-        .tracks
-        .iter()
-        .flat_map(|track| {
-            let directory = fixture.directory(track);
-            track
-                .chunks
-                .iter()
-                .map(|id| {
-                    let name = format!("{id}.flac");
-                    let path = directory.path.join(&name);
-                    (
-                        path,
-                        Stamp::read(&directory.required(&name, false).unwrap()).unwrap(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    let path = pending_wave(&fixture);
+    let stamp = Stamp::read(&File::open(&path).unwrap()).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let receipt = std::fs::read(path.parent().unwrap().join("wave-publication.json")).unwrap();
+    assert_no_flac(&fixture);
     fixture.allow_db();
     drop(fixture.storage);
     let reopened = Storage::open(fixture.temp.path().to_owned()).unwrap();
-    let restored = reopened.recover_completed_recordings().unwrap();
-    assert_eq!(restored.len(), 1);
-    assert_eq!(restored[0], fixture.session.id);
     assert_eq!(
-        std::fs::read(fixture.base.join(COMPLETED_PLAN)).unwrap(),
-        plan_bytes
+        reopened.recover_completed_recordings().unwrap(),
+        vec![fixture.session.id.clone()]
     );
-    // The completed WAV retires FLAC bodies, while their original IDs remain
-    // in the registered source rows and the ownership/checkpoint metadata.
-    let db = reopened.connection.lock().unwrap();
-    for track in &plan.tracks {
-        let count: i64 = db
-            .query_row(
-                "SELECT count(*) FROM audio_tracks WHERE id=?1",
-                [&track.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-    for (path, _) in bodies {
-        assert!(!path.exists());
-    }
+    stamp.require(&File::open(&path).unwrap()).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read(path.parent().unwrap().join("wave-publication.json")).unwrap(),
+        receipt
+    );
+    let canonical = reopened
+        .verify_canonical_audio(&fixture.session.meeting_id, &|| false)
+        .unwrap();
+    assert_eq!(canonical.tracks.len(), 1);
+    assert_eq!(
+        reopened
+            .meeting_mix_path(&fixture.session.meeting_id, &canonical.tracks[0])
+            .unwrap(),
+        path
+    );
+    assert!(!fixture.base.join(COMPLETED_PLAN).exists());
+    assert!(!fixture.base.join(PARTIAL_PLAN).exists());
+    assert!(!fixture.base.join("raw-microphone-00000001.caf").exists());
 }
 
 #[test]
@@ -338,9 +383,36 @@ fn completed_prefix_keeps_unreceived_microphone_empty_without_continuous_files()
         .storage
         .finalize_recording(&fixture.session.id)
         .unwrap();
-    let plan: Plan =
-        serde_json::from_slice(&std::fs::read(fixture.base.join(COMPLETED_PLAN)).unwrap()).unwrap();
-    assert_eq!(plan.tracks.len(), 1);
+    assert_no_flac(&fixture);
+    let canonical = fixture
+        .storage
+        .verify_canonical_audio(&fixture.session.meeting_id, &|| false)
+        .unwrap();
+    assert_eq!(canonical.tracks.len(), 1);
+    assert_eq!(canonical.tracks[0].kind, "processed");
+    let publication: Value = serde_json::from_slice(
+        &std::fs::read(
+            pending_wave(&fixture)
+                .parent()
+                .unwrap()
+                .join("legacy-canonical-wav.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(publication["microphone"]["frames"], 0);
+    assert_eq!(publication["microphone"]["clockSegments"], json!([]));
+    assert_eq!(
+        publication["system"]["clockSegments"][0]["timelineStartUs"],
+        0
+    );
+    let bytes = wave(&fixture);
+    let expected_first = (((31_u64 * 7919) % 60001) as i32 - 30000) as f32 / 32768.0;
+    let expected_first = (expected_first * 32767.0).round() as i16;
+    assert_eq!(
+        i16::from_le_bytes(bytes[44..46].try_into().unwrap()),
+        expected_first
+    );
     let db = fixture.storage.connection.lock().unwrap();
     let mic_tracks: i64 = db
         .query_row(
@@ -410,12 +482,10 @@ fn completed_prefix_native_relocation_resumes_same_plan_and_chunk_ids() {
     for lane in ["microphone", "system"] {
         std::fs::remove_file(fixture.base.join(format!("{lane}.caf"))).unwrap();
     }
-    fixture.fail_db();
-    assert!(fixture
-        .storage
-        .finalize_recording(&fixture.session.id)
-        .is_err());
-    fixture.allow_db();
+    drop(legacy_completed_publication(
+        &fixture.storage,
+        &fixture.session.id,
+    ));
     fixture
         .storage
         .interrupt_recording(&fixture.session.id)
@@ -426,45 +496,32 @@ fn completed_prefix_native_relocation_resumes_same_plan_and_chunk_ids() {
     let plan: Plan = serde_json::from_slice(&plan_bytes).unwrap();
     let (_control, reopened) = relocate_pending(fixture.storage, COMPLETED_PLAN);
     let target = reopened.root().to_owned();
-    let errors = std::sync::Mutex::new(Vec::new());
-    let recovered = reopened
-        .recover_recordings_observed(&|_| {}, &|item| {
-            if let Some(error) = item.error {
-                errors.lock().unwrap().push(error);
-            }
-        })
-        .unwrap();
-    assert_eq!(
-        recovered,
-        vec![fixture.session.id.clone()],
-        "{:?}",
-        errors.lock().unwrap()
-    );
+    let resumed = legacy_completed_publication(&reopened, &fixture.session.id);
+    resumed.verify(&reopened).unwrap();
+    drop(resumed);
+    let rebound: Plan = serde_json::from_slice(
+        &std::fs::read(crate::native_fs::join(&target, &relative).join(COMPLETED_PLAN)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rebound, plan);
     assert_eq!(
         std::fs::read(crate::native_fs::join(&target, &relative).join(COMPLETED_PLAN)).unwrap(),
         plan_bytes
     );
-    let db = reopened.connection.lock().unwrap();
-    for track in &plan.tracks {
-        let count: i64 = db
-            .query_row(
-                "SELECT count(*) FROM audio_tracks WHERE id=?1",
-                [&track.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-        for chunk in &track.chunks {
-            let count: i64 = db
-                .query_row(
-                    "SELECT count(*) FROM audio_chunks WHERE id=?1",
-                    [chunk],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(count, 1);
-        }
-    }
+    // The current reader then rescues the verified old PCM directly to WAV.
+    assert_eq!(
+        reopened.recover_completed_recordings().unwrap(),
+        vec![fixture.session.id.clone()]
+    );
+    let canonical = reopened
+        .verify_canonical_audio(&fixture.session.meeting_id, &|| false)
+        .unwrap();
+    assert_eq!(canonical.tracks.len(), 1);
+    assert_eq!(canonical.tracks[0].kind, "processed");
+    assert_eq!(
+        std::fs::read(crate::native_fs::join(&target, &relative).join(COMPLETED_PLAN)).unwrap(),
+        plan_bytes
+    );
 }
 
 #[test]
@@ -477,24 +534,24 @@ fn completed_publication_crash_child() {
     let root = PathBuf::from(std::env::var_os("MON_FINAL_FLAC_CRASH_ROOT").unwrap());
     let owner = std::env::var("MON_FINAL_FLAC_CRASH_OWNER").unwrap();
     let storage = Storage::open(root).unwrap();
-    storage.finalize_recording(&owner).unwrap();
-    panic!("owned completed-publication child failed to reach its crash point");
+    drop(legacy_completed_publication(&storage, &owner));
+    crash_point("completed-before-db-commit");
+    panic!("owned legacy completed-publication child failed to reach its crash point");
 }
 
 #[cfg(any(target_os = "macos", windows))]
 #[test]
-fn partial_prefix_native_relocation_keeps_consent_and_reuses_plan_and_chunks() {
+fn partial_prefix_native_relocation_preserves_legacy_plan_before_direct_wav_rescue() {
     let fixture = partial_fixture();
     let review = fixture
         .storage
         .review_partial_recording(&fixture.session.id)
         .unwrap();
-    fixture.reject_partial_commit(true);
-    assert!(fixture
-        .storage
-        .recover_partial_recording(&review, true)
-        .is_err());
-    fixture.reject_partial_commit(false);
+    drop(
+        review
+            .legacy_publication_for_test(&fixture.storage)
+            .unwrap(),
+    );
     drop(review);
     let source = fixture.storage.root().to_owned();
     let relative = fixture.base.strip_prefix(&source).unwrap().to_owned();
@@ -505,27 +562,22 @@ fn partial_prefix_native_relocation_keeps_consent_and_reuses_plan_and_chunks() {
         .review_partial_recording(&fixture.session.id)
         .unwrap();
     assert!(reopened.recover_partial_recording(&review, false).is_err());
+    let publication = review.legacy_publication_for_test(&reopened).unwrap();
+    publication.verify(&reopened).unwrap();
+    drop(publication);
+    let relocated_plan = crate::native_fs::join(reopened.root(), &relative).join(PARTIAL_PLAN);
+    let resumed: Plan = serde_json::from_slice(&std::fs::read(&relocated_plan).unwrap()).unwrap();
+    assert_eq!(resumed, plan);
+    assert_eq!(std::fs::read(&relocated_plan).unwrap(), plan_bytes);
     let result = reopened.recover_partial_recording(&review, true).unwrap();
     assert_eq!(result.state, "interrupted");
     assert_eq!(result.ended_at_utc_ms, None);
-    assert_eq!(
-        std::fs::read(crate::native_fs::join(reopened.root(), &relative).join(PARTIAL_PLAN))
-            .unwrap(),
-        plan_bytes
-    );
-    let db = reopened.connection.lock().unwrap();
-    for track in &plan.tracks {
-        for chunk in &track.chunks {
-            let count: i64 = db
-                .query_row(
-                    "SELECT count(*) FROM audio_chunks WHERE id=?1 AND track_id=?2",
-                    params![chunk, track.id],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(count, 1);
-        }
-    }
+    let canonical = reopened
+        .verify_canonical_audio(&fixture.session.meeting_id, &|| false)
+        .unwrap();
+    assert_eq!(canonical.tracks.len(), 1);
+    assert_eq!(canonical.tracks[0].kind, "processed");
+    assert_eq!(std::fs::read(&relocated_plan).unwrap(), plan_bytes);
 }
 
 #[test]

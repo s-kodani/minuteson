@@ -35,13 +35,17 @@ pub(crate) fn prepare(
     source
         .execute_batch("PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=ON;")
         .map_err(err)?;
-    verify_database_schema(&source).map_err(err)?;
+    super::super::schema_40::verify_startup(&source).map_err(err)?;
     let integrity: String = source
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .map_err(err)?;
     if integrity != "ok" {
         return Err("会議DBをすべて回収できません。初期化せず元データを保持します".into());
     }
+    // This path owns a private recovery copy. Upgrade only that admitted copy
+    // after integrity validation; original DB bytes and sidecars stay intact.
+    super::super::schema_40::migrate(&mut source).map_err(err)?;
+    verify_database_schema(&source).map_err(err)?;
     // Unpublished destructive/storage operations and incomplete source audio
     // need resolution first. Transient analysis/export queues are rebuilt;
     // they do not prevent collection of the current committed user content.
@@ -431,6 +435,128 @@ impl Prepared {
         // Keep the scratch registration alive until all staged files are installed.
         let _ = self.stage.path();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod schema40_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn schema39_reconstruction_migrates_only_private_copy_and_retains_original_audio() {
+        for layout in [
+            crate::storage::schema_40::Layout::Lf,
+            crate::storage::schema_40::Layout::Crlf,
+        ] {
+            let original_root = tempfile::tempdir().unwrap();
+            let original = original_root.path().canonicalize().unwrap();
+            let database = original.join("meetings.sqlite3");
+            drop(private_file(&database).unwrap());
+            let variant = crate::storage::schema_40::current_sql(layout).unwrap();
+            let db = Connection::open(&database).unwrap();
+            db.execute_batch(&variant).unwrap();
+            db.execute(
+                "INSERT INTO schema_migrations VALUES(40,?1,0)",
+                [format!("{:x}", Sha256::digest(variant.as_bytes()))],
+            )
+            .unwrap();
+            drop(db);
+            let storage = Storage::open(original.clone()).unwrap();
+            let meeting = archive::tests::meeting(&storage, "private-schema39-recovery");
+            let title = storage.get_meeting(&meeting).unwrap().unwrap().title;
+            let originals: Vec<(String, Vec<u8>)> = {
+                let db = storage.connection.lock().unwrap();
+                let mut query=db.prepare("SELECT relative_path FROM file_assets WHERE meeting_id=?1 AND state='ready' ORDER BY id").unwrap();
+                let paths = query
+                    .query_map([&meeting], |row| row.get::<_, String>(0))
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                paths
+                    .into_iter()
+                    .map(|relative| {
+                        let bytes = std::fs::read(storage.root.join(&relative)).unwrap();
+                        (relative, bytes)
+                    })
+                    .collect()
+            };
+            drop(storage);
+            // Build the real prior schema from its pinned SQL, retaining the
+            // portable meeting/audio rows so reconstruction exercises real data.
+            let old_sql = super::super::super::schema_40::previous_sql_for(layout).unwrap();
+            let start = old_sql
+                .find("CREATE TRIGGER audio_import_ready_assets ")
+                .unwrap();
+            let end = start
+                + old_sql[start..]
+                    .find(if layout == crate::storage::schema_40::Layout::Lf {
+                        "\n\n"
+                    } else {
+                        "\r\n\r\n"
+                    })
+                    .unwrap();
+            let source = Connection::open(&database).unwrap();
+            source
+                .execute_batch(&format!(
+                    "PRAGMA journal_mode=DELETE; DROP TRIGGER audio_import_ready_assets; {}",
+                    &old_sql[start..end]
+                ))
+                .unwrap();
+            source
+                .execute(
+                    "UPDATE schema_migrations SET version=39,checksum=?1",
+                    [format!("{:x}", Sha256::digest(old_sql.as_bytes()))],
+                )
+                .unwrap();
+            super::super::super::schema_40::verify_startup(&source).unwrap();
+            assert!(verify_database_schema(&source).is_err());
+            drop(source);
+            let original_database = std::fs::read(&database).unwrap();
+            let private = tempfile::tempdir().unwrap();
+            let copied = private
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join("recovery-copy.sqlite3");
+            std::fs::copy(&database, &copied).unwrap();
+            let workspace = tempfile::tempdir().unwrap();
+            let models = tempfile::tempdir().unwrap();
+            let prepared = prepare(
+                &copied,
+                &original,
+                &original.join("models"),
+                &workspace.path().canonicalize().unwrap(),
+                &models.path().canonicalize().unwrap(),
+                &|_| {},
+            )
+            .unwrap();
+            let reconstructed = read_only(&prepared.root.join("meetings.sqlite3")).unwrap();
+            verify_database_schema(&reconstructed).unwrap();
+            assert_eq!(
+                reconstructed
+                    .query_row(
+                        "SELECT title FROM meetings WHERE id=?1",
+                        [&meeting],
+                        |row| row.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                title
+            );
+            drop(reconstructed);
+            let upgraded = read_only(&copied).unwrap();
+            verify_database_schema(&upgraded).unwrap();
+            drop(upgraded);
+            assert_eq!(std::fs::read(&database).unwrap(), original_database);
+            for (relative, bytes) in originals {
+                assert_eq!(
+                    std::fs::read(original_root.path().join(relative)).unwrap(),
+                    bytes
+                );
+            }
+            let retained = read_only(&database).unwrap();
+            super::super::super::schema_40::verify_startup(&retained).unwrap();
+            assert!(verify_database_schema(&retained).is_err());
+        }
     }
 }
 

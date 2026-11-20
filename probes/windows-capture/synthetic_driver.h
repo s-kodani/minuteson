@@ -31,7 +31,7 @@ public:
     packet.microphone_connected=index==60&&options_.scenario=="input-recovery";
     packet.system_lost=index==80&&options_.scenario=="input-recovery";
     packet.system_connected=index==120&&options_.scenario=="input-recovery";
-    if(options_.scenario=="device-switch-stop"||options_.scenario=="endpoint-switch-late"){
+    if(options_.scenario=="device-switch-stop"){
       packet.microphone_lost=packet.system_lost=index==25||index==80;
       packet.microphone_connected=packet.system_connected=index==60||index==499;
     }
@@ -53,8 +53,8 @@ public:
     if(options_.scenario=="endpoint-continuity"){
       // The observed 127-frame phase and a delayed/batched host read. A wall
       // clock-only flush used to cut 127 frames out of every 480-frame packet.
-      packet.time+=353*10000000/48000;
-      packet.arrival=std::max(packet.arrival,packet.time+100000+2500000+127*10000000/48000);
+      packet.time+=std::uint64_t(353)*10000000/48000;
+      packet.arrival=std::max(packet.arrival,packet.time+100000+2500000+std::uint64_t(127)*10000000/48000);
     }
     return packet;
   }

@@ -13,7 +13,23 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_current_layout(crate::storage::schema_40::Layout::Lf)
+    }
+    fn with_current_layout(layout: crate::storage::schema_40::Layout) -> Self {
         let root = tempfile::tempdir().unwrap();
+        if layout == crate::storage::schema_40::Layout::Crlf {
+            let path = root.path().join("meetings.sqlite3");
+            drop(private_file(&path).unwrap());
+            let sql = crate::storage::schema_40::current_sql(layout).unwrap();
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(&sql).unwrap();
+            db.execute(
+                "INSERT INTO schema_migrations VALUES(40,?1,0)",
+                [digest(sql.as_bytes())],
+            )
+            .unwrap();
+            drop(db);
+        }
         let storage = Storage::open(root.path().into()).unwrap();
         let meeting = storage.create_meeting("移動前の会議").unwrap().id;
         let relative = format!("meetings/{meeting}/audio/original.flac");
@@ -68,6 +84,87 @@ fn placed_old_database_schema_is_rejected_without_mutation() {
             .unwrap(),
         "keep"
     );
+}
+
+#[test]
+fn first_placement_schema39_validation_keeps_original_census_and_bytes() {
+    for layout in [
+        crate::storage::schema_40::Layout::Lf,
+        crate::storage::schema_40::Layout::Crlf,
+    ] {
+        let f = Fixture::with_current_layout(layout);
+        let saved = snapshot(&f);
+        let destination = tempfile::tempdir().unwrap();
+        for node in &saved.copied {
+            let target = destination.path().join(&node.entry.relative_path);
+            if node.entry.directory {
+                scratch::directories(&target).unwrap();
+            } else {
+                copy_file(
+                    &saved.image.join(&node.entry.relative_path),
+                    &target,
+                    node,
+                    &|| false,
+                )
+                .unwrap();
+            }
+        }
+        let database = destination.path().join("meetings.sqlite3");
+        std::fs::copy(saved.image.join("meetings.sqlite3"), &database).unwrap();
+        let mut expected = saved.manifest.clone();
+        drop(saved);
+        // Simulate the exact sealed image produced by1.0.7. This fixture does not
+        // expose a production path that creates old-schema live snapshots.
+        let sql = crate::storage::schema_40::previous_sql_for(layout).unwrap();
+        let start = sql
+            .find("CREATE TRIGGER audio_import_ready_assets ")
+            .unwrap();
+        let end = start
+            + sql[start..]
+                .find(if layout == crate::storage::schema_40::Layout::Lf {
+                    "\n\n"
+                } else {
+                    "\r\n\r\n"
+                })
+                .unwrap();
+        let mut db = Connection::open(&database).unwrap();
+        db.execute_batch(&format!("PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON; DROP TRIGGER audio_import_ready_assets; {}",&sql[start..end])).unwrap();
+        db.execute(
+            "UPDATE schema_migrations SET version=39,checksum=?1",
+            [digest(sql.as_bytes())],
+        )
+        .unwrap();
+        assert!(
+            validate_placed_database(&mut db, &|| false).is_err(),
+            "writable39 must stay unsupported"
+        );
+        drop(db);
+        let mut db = read_only(&database).unwrap();
+        let (schema, tables) = census(&db, &|| false).unwrap();
+        expected.schema_hash = schema;
+        expected.tables = tables;
+        let (size, hash) = digest_file(&database, &|| false).unwrap();
+        expected.database_size = size;
+        expected.database_hash = hash;
+        let original = std::fs::read(&database).unwrap();
+        validate_placed_database(&mut db, &|| false).unwrap();
+        drop(db);
+        verify_placed_image_with_controls(destination.path(), &expected, &|| false, &[]).unwrap();
+        assert!(
+            verify_placed_image_with_controls(destination.path(), &expected, &|| true, &[])
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&database).unwrap(), original);
+        assert_eq!(
+            std::fs::read(destination.path().join(&f.relative)).unwrap(),
+            b"original audio"
+        );
+        verify_database_schema(&f.storage.connection.lock().unwrap()).unwrap();
+        let mut db = Connection::open(&database).unwrap();
+        db.execute_batch("CREATE TABLE unknown_source(id INTEGER); PRAGMA query_only=ON;")
+            .unwrap();
+        assert!(validate_placed_database(&mut db, &|| false).is_err());
+    }
 }
 
 #[test]

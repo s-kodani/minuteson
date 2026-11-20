@@ -3,11 +3,12 @@ use super::*;
 pub(in crate::storage) mod cleanup;
 #[cfg(test)]
 mod cleanup_tests;
+mod direct;
 pub(in crate::storage) mod inputs;
 mod mix;
 #[cfg(test)]
 pub(in crate::storage) mod tests;
-mod writer;
+pub(in crate::storage) mod writer;
 
 impl Storage {
     pub(crate) fn finish_pending_meeting_audio(&self) -> Result<(), String> {
@@ -60,7 +61,7 @@ impl Storage {
                 .map_err(|_| "DBロックを取得できません")?;
             super::meeting_audio::read(&db, meeting)?
         };
-        if existing.is_none() {
+        if existing.is_none() && !self.adopt_import_wav(meeting, cancelled, progress)? {
             let plan = self.build_pending_meeting_wav(meeting, cancelled, progress)?;
             let source = {
                 let db = self

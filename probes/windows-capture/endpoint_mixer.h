@@ -22,12 +22,18 @@ struct EndpointCursor {
 
 class EndpointMixer {
  public:
+  explicit EndpointMixer(bool ordered_capture=false):ordered_capture_(ordered_capture){}
   static constexpr std::uint64_t block_frames=480,latency_frames=12000,max_blocks=100;
   static std::uint64_t frame_at(std::uint64_t ticks){return ticks/10000000*48000+(ticks%10000000*48000+5000000)/10000000;}
   static std::uint64_t ticks_at(std::uint64_t frame){return frame/48000*10000000+(frame%48000*10000000+47999)/48000;}
   struct AddResult {std::uint32_t accepted=0;bool adjusted=false,pressure=false;};
   const AlignmentDiagnostics& diagnostics()const{return diagnostics_;}
   std::size_t pending_blocks()const{return blocks_.size();}
+  // flush() can retain a partial block or a peer's buffered audio. Neither an
+  // empty output FIFO nor wall time is permission to advance over that PCM.
+  std::uint64_t observed_through(std::uint64_t through)const{
+    return blocks_.empty()?through:std::min(through,blocks_.begin()->first);
+  }
 
   template<class Emit>AddResult add(EndpointCursor& source,std::uint64_t first,
       std::uint32_t frames,const float* samples,std::uint32_t flags,std::uint64_t arrival,Emit emit){
@@ -51,6 +57,10 @@ class EndpointMixer {
         if(!late_noted)++diagnostics_.late_packets;
         diagnostics_.late_frames+=std::min<std::uint64_t>(frames-consumed,sealed_-current);
         late_noted=true;
+        if(ordered_capture_){
+          diagnostics_.loss(current,frames-consumed,"late_endpoint_packet",sealed_);
+          throw std::runtime_error("endpoint packet precedes committed audio");
+        }
       }
       mapped=checked_add(mapped,adjustment);
       source.correction=checked_add(source.correction,adjustment);source.estimated=true;
@@ -65,6 +75,11 @@ class EndpointMixer {
       checked_add(mapped,frames);
       const auto frame=checked_add(mapped,result.accepted),base=frame/block_frames*block_frames;
       if(!blocks_.count(base)&&blocks_.size()>=max_blocks){
+        // A live single-WAV producer must never commit unread peer audio's
+        // time merely to make room. The acquisition owner drains all peers
+        // before it advances the common frontier; pressure is an explicit
+        // bounded-capacity failure instead of a new authority to seal.
+        if(ordered_capture_)throw std::runtime_error("endpoint alignment capacity exhausted before ordered drain completed");
         // Pressure publishes received PCM to the existing bounded writer queue.
         // It never discards pending audio or restarts an otherwise live input.
         diagnostics_.capacity_frames+=frames-result.accepted;
@@ -92,6 +107,7 @@ class EndpointMixer {
   std::map<std::uint64_t,Block> blocks_;
   std::uint64_t sealed_=0;
   AlignmentDiagnostics diagnostics_;
+  bool ordered_capture_=false;
   static std::uint64_t checked_add(std::uint64_t a,std::uint64_t b){
     if(b>std::numeric_limits<std::uint64_t>::max()-a)throw std::runtime_error("endpoint clock overflow");
     return a+b;

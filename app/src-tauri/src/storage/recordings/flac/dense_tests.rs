@@ -82,7 +82,7 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
     std::fs::write(&path, &original).unwrap();
     let saved = storage.finalize_recording(&session.id).unwrap();
     assert_eq!(saved.duration_us, 42_000_000);
-    fn verify(storage: &Storage, meeting: &str, has_capture_source: bool) {
+    fn verify(storage: &Storage, meeting: &str, expected_capture: Option<&Value>) {
         let source_json: String = storage
             .connection
             .lock()
@@ -93,22 +93,23 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
                 |r| r.get(0),
             )
             .unwrap();
-        if has_capture_source {
-            let original: crate::storage::RecordedAudioPlan =
-                serde_json::from_str(&source_json).unwrap();
-            assert_eq!(original.tracks.len(), 2);
-            for track in &original.tracks {
-                // Physical compact-segment boundaries may split one known run;
-                // every measured gap must still survive the roundtrip.
-                assert!(
-                    track
-                        .chunks
-                        .iter()
-                        .map(|c| c.clock_segments.len())
-                        .sum::<usize>()
-                        >= 2048
+        if let Some(expected_capture) = expected_capture {
+            let relative: String = storage.connection.lock().unwrap().query_row(
+                "SELECT f.relative_path FROM meeting_audio_commits a JOIN file_assets f ON f.id=a.manifest_asset_id WHERE a.meeting_id=?1",
+                [meeting], |row| row.get(0),
+            ).unwrap();
+            let document: Value =
+                serde_json::from_slice(&std::fs::read(storage.root().join(relative)).unwrap())
+                    .unwrap();
+            for lane in ["microphone", "system"] {
+                // Original dense acquisition maps remain manifest evidence;
+                // the processed WAV has one continuous output-frame interval.
+                assert_eq!(document[lane]["frames"], 327_680);
+                assert_eq!(
+                    document[lane]["clockSegments"],
+                    expected_capture[lane]["clockSegments"]
                 );
-                assert_eq!(track.chunks.iter().map(|c| c.frames).sum::<i64>(), 327_680);
+                assert!(document[lane]["clockSegments"].as_array().unwrap().len() >= 2048);
             }
         } else {
             // Portable backups contain the canonical WAV; retired native
@@ -152,7 +153,7 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
         assert!(store.read(&info.token, 320).is_ok());
         store.close(&info.token).unwrap();
     }
-    verify(&storage, &meeting.id, true);
+    verify(&storage, &meeting.id, Some(&good));
     let archives = tempfile::tempdir().unwrap();
     let archive = archives.path().join("dense.monbackup");
     storage
@@ -173,12 +174,12 @@ fn swift_dense_capture_clock_roundtrip_finalizes_replays_and_restores_over_legac
         )
         .unwrap();
     assert_ne!(receipt.meeting_ids[0], meeting.id);
-    verify(&restored, &receipt.meeting_ids[0], false);
+    verify(&restored, &receipt.meeting_ids[0], None);
     assert!(restored.get_meeting(&existing.id).unwrap().is_some());
     assert_eq!(std::fs::read(&path).unwrap(), original);
     drop(storage);
     let cold = Storage::open(root.path().into()).unwrap();
     assert!(cold.recover_completed_recordings().unwrap().is_empty());
-    verify(&cold, &meeting.id, true);
+    verify(&cold, &meeting.id, Some(&good));
     assert_eq!(std::fs::read(path).unwrap(), original);
 }

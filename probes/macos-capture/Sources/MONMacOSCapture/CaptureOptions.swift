@@ -37,6 +37,8 @@ struct Options {
   var startsSystemBeforeMicrophone: Bool { captureTestOwner != nil && backend == "coreaudio" }
   var captureTestOwner: String? = nil
   var captureTestLeaseFD: Int32? = nil
+  var captureFormat: String? = nil
+  var writesWav: Bool { captureFormat == "wav-v1" }
 
   static func parse(_ arguments: [String]) throws -> Self {
     var output: URL?
@@ -54,6 +56,7 @@ struct Options {
     var inputLevelOwner: String?
     var captureTestOwner: String?
     var captureTestLeaseFD: Int32?
+    var captureFormat: String?
     var seen = Set<String>()
     var index = 0
     while index < arguments.count {
@@ -62,6 +65,12 @@ struct Options {
         throw ProbeError.usage("duplicate argument: \(argument)")
       }
       switch argument {
+      case "--capture-format":
+        index += 1
+        guard index < arguments.count, arguments[index] == "wav-v1" else {
+          throw ProbeError.usage("unsupported capture format; expected wav-v1")
+        }
+        captureFormat = arguments[index]
       case "--output":
         index += 1
         guard index < arguments.count else { throw ProbeError.usage("--output requires a path") }
@@ -197,18 +206,26 @@ struct Options {
     if captureTestLeaseFD != nil && captureTestOwner == nil {
       throw ProbeError.usage("an inherited test lease is only valid for a five-second test")
     }
+    if captureFormat != nil {
+      guard inputLevelOwner != nil, untilStopped || captureTestOwner != nil,
+        !(backend == "coreaudio" && !targetPIDs.isEmpty && applicationIdentity == nil)
+      else {
+        throw ProbeError.usage("wav-v1 requires an owned recording or five-second test")
+      }
+    }
     return Self(
       // Foundation rewrites /private/tmp and /private/var into symlink aliases
       // even when the native owner supplied a canonical path. Ordinary owned
       // recordings retain that path for descriptor-relative journal pinning.
-      // Bounded probes/private tests keep their existing path contract.
-      output: untilStopped && captureTestOwner == nil && inputLevelOwner != nil
+      // Legacy bounded probes/private tests keep their existing path contract.
+      output: captureFormat == "wav-v1"
+        || (untilStopped && captureTestOwner == nil && inputLevelOwner != nil)
         ? output : output.standardizedFileURL, duration: untilStopped ? nil : duration,
       scenario: scenario,
       mode: mode, backend: backend, targetPIDs: targetPIDs, stopOnFile: stopOnFile,
       parentPID: parentPID, microphoneUID: microphoneUID, applicationIdentity: applicationIdentity,
       inputLevelOwner: inputLevelOwner, captureTestOwner: captureTestOwner,
-      captureTestLeaseFD: captureTestLeaseFD)
+      captureTestLeaseFD: captureTestLeaseFD, captureFormat: captureFormat)
   }
 
   func shouldContinueRecording(

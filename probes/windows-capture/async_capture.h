@@ -20,12 +20,12 @@ class AsyncCapture final : public CaptureReader {
   bool startup_finished_=false;
   std::exception_ptr startup_error_;
   void startup(std::exception_ptr error=nullptr){std::lock_guard lock(startup_mutex_);if(!startup_finished_){startup_error_=error;startup_finished_=true;startup_changed_.notify_all();}}
-  bool drain(IAudioCaptureClient* capture,EndpointLifetime* lifetime) {
+  bool drain(IAudioCaptureClient* capture,EndpointLifetime* lifetime,bool closing=false) {
     if(lifetime)lifetime->require_current();
     bool received=false;
     UINT32 available=0;
     acquisition(capture->GetNextPacketSize(&available),"poll WASAPI packets");
-    for(UINT32 drained=0;available&&drained<256;++drained) {
+    for(UINT32 drained=0;available&&(closing||drained<256);++drained) {
       BYTE* data=nullptr;UINT32 count=0;DWORD flags=0;UINT64 position=0,time=0;
       acquisition(capture->GetBuffer(&data,&count,&flags,&position,&time),"read WASAPI packet");
       try {
@@ -45,6 +45,10 @@ class AsyncCapture final : public CaptureReader {
       }catch(...){capture->ReleaseBuffer(count);throw;}
       acquisition(capture->ReleaseBuffer(count),"release WASAPI packet");
       acquisition(capture->GetNextPacketSize(&available),"poll next WASAPI packet");
+    }
+    if(!available){
+      const auto now=qpc(),latency=EndpointMixer::latency_frames*10000000/48000;
+      queue.observe(now>latency?now-latency:0);
     }
     return received;
   }
@@ -75,7 +79,7 @@ class AsyncCapture final : public CaptureReader {
             }
             Sleep(1);
           }
-          client->Stop();started=false;drain(capture.Get(),lifetime.get());
+          acquisition(client->Stop(),"stop WASAPI input");started=false;drain(capture.Get(),lifetime.get(),true);
         }catch(...){auto error=std::current_exception();queue.fail(error);if(started)client->Stop();startup(error);}
       }
       client.Reset();

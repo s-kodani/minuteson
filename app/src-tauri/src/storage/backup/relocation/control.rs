@@ -12,6 +12,8 @@ struct Envelope {
     deletion_history: Option<crate::storage::deletion::relocation::Source>,
     #[serde(skip_serializing_if = "Option::is_none")]
     flac_history: Option<crate::storage::recordings::flac::relocation::Source>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wav_history: Option<super::wav::Source>,
     excluded_area: String,
 }
 
@@ -26,6 +28,7 @@ pub(crate) struct ControlHandoff<'a, 'storage> {
     history: scratch::transfer::Bundle,
     deletion_history: Option<crate::storage::deletion::relocation::Source>,
     flac_history: Option<crate::storage::recordings::flac::relocation::Source>,
+    wav_history: Option<super::wav::Source>,
 }
 
 #[allow(dead_code)]
@@ -50,6 +53,12 @@ impl<'storage> NativeSnapshot<'storage> {
             cancelled,
         )
     }
+    fn wav_history(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Option<super::wav::Source>, String> {
+        super::wav::Source::capture(self.maintenance.storage, self, cancelled)
+    }
     pub(crate) fn prepare_control_handoff<'a>(
         &'a self,
         cancelled: &impl Fn() -> bool,
@@ -70,8 +79,11 @@ impl<'storage> NativeSnapshot<'storage> {
         )?;
         let deletion_history = self.deletion_history(cancelled)?;
         let flac_history = self.flac_history(cancelled)?;
+        let wav_history = self.wav_history(cancelled)?;
         let bytes = serde_json::to_vec(&Envelope {
-            version: if flac_history.is_some() {
+            version: if wav_history.is_some() {
+                6
+            } else if flac_history.is_some() {
                 5
             } else if deletion_history.is_some() {
                 4
@@ -82,6 +94,7 @@ impl<'storage> NativeSnapshot<'storage> {
             history: history.clone(),
             deletion_history: deletion_history.clone(),
             flac_history: flac_history.clone(),
+            wav_history: wav_history.clone(),
             excluded_area: self
                 .stage
                 .path()
@@ -110,6 +123,7 @@ impl<'storage> NativeSnapshot<'storage> {
             history,
             deletion_history,
             flac_history,
+            wav_history,
         };
         result.verify(cancelled)?;
         Ok(result)
@@ -139,7 +153,9 @@ impl ControlHandoff<'_, '_> {
             return Err("元の移行確認が安全容量を超えています".into());
         }
         let old: serde_json::Value = serde_json::from_slice(saved).map_err(|e| e.to_string())?;
-        let version = if self.flac_history.is_some() {
+        let version = if self.wav_history.is_some() {
+            6
+        } else if self.flac_history.is_some() {
             5
         } else if self.deletion_history.is_some() {
             4
@@ -149,6 +165,7 @@ impl ControlHandoff<'_, '_> {
         let expected_deletion =
             serde_json::to_value(&self.deletion_history).map_err(|e| e.to_string())?;
         let expected_flac = serde_json::to_value(&self.flac_history).map_err(|e| e.to_string())?;
+        let expected_wav = serde_json::to_value(&self.wav_history).map_err(|e| e.to_string())?;
         if old["version"] != version
             || old["native_manifest_hash"] != self.snapshot.manifest_hash()
             || match &self.deletion_history {
@@ -158,6 +175,10 @@ impl ControlHandoff<'_, '_> {
             || match &self.flac_history {
                 Some(_) => old.get("flac_history") != Some(&expected_flac),
                 None => old.get("flac_history").is_some(),
+            }
+            || match &self.wav_history {
+                Some(_) => old.get("wav_history") != Some(&expected_wav),
+                None => old.get("wav_history").is_some(),
             }
         {
             return Err("元の移行確認と会議コピーが一致しません".into());
@@ -229,6 +250,11 @@ impl ControlHandoff<'_, '_> {
             .as_ref()
             .map(|source| source.bind_destination(self.snapshot, placement, operation, cancelled))
             .transpose()?;
+        let wav_binding = self
+            .wav_history
+            .as_ref()
+            .map(|source| source.bind_destination(self.snapshot, placement, operation, cancelled))
+            .transpose()?;
         let path = self
             .snapshot
             .stage
@@ -251,6 +277,8 @@ impl ControlHandoff<'_, '_> {
             deletion_binding.as_ref(),
             self.flac_history.as_ref(),
             flac_binding.as_ref(),
+            self.wav_history.as_ref(),
+            wav_binding.as_ref(),
             &bindings,
         )?;
         drop(db);
@@ -282,8 +310,11 @@ impl ControlHandoff<'_, '_> {
         )?;
         let deletion_history = self.snapshot.deletion_history(cancelled)?;
         let flac_history = self.snapshot.flac_history(cancelled)?;
+        let wav_history = self.snapshot.wav_history(cancelled)?;
         let actual = serde_json::to_vec(&Envelope {
-            version: if flac_history.is_some() {
+            version: if wav_history.is_some() {
+                6
+            } else if flac_history.is_some() {
                 5
             } else if deletion_history.is_some() {
                 4
@@ -294,6 +325,7 @@ impl ControlHandoff<'_, '_> {
             history,
             deletion_history,
             flac_history,
+            wav_history,
             excluded_area: self
                 .snapshot
                 .stage

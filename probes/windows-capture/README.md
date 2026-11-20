@@ -4,6 +4,8 @@ WASAPI録音ヘルパーの時間指定による検証用CLI。マイクは録�
 
 Windows 11 24H2以降・x64を対象とし、デスクトップの録音ヘルパーとして構築・同梱します。製品側の録音・5秒テスト・入力列挙・取り込み・保存との接続は[録音仕様](../../docs/spec/recording.md)、アプリ全体の準備は[Windowsビルド](../../docs/guides/build-windows.md)を参照してください。
 
+製品から起動する経路は`--capture-format wav-v1`で保存契約を指定します。通常録音は共通Rustコアで取得時刻を揃えて合成し、16 kHz・モノラル・PCM16の`recording.wav`へ追記します。音声本体を複製せず、`single-wav-owner.json`、`single-wav.json`、`wav-00000001.json`等で所有と確定範囲を記録します。5秒テストは個別確認用の`microphone.wav`と`system.wav`、取り込みは直接WAVを作成します。以下の時間指定の計測CLIは、製品の単一WAV保存とは別の診断経路です。
+
 製品の「PC全体」は全ての有効な出力エンドポイントを直接取得し、QPC時刻に合わせて合成します。以下の時間指定CLIの標準モードは、指定または既定の出力エンドポイント1件を検証する用途です。アプリ選択録音だけがApplication Loopbackを使います。
 
 ## ビルド

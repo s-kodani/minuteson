@@ -709,6 +709,55 @@ fn native_raw_audio_census_uses_exact_names_and_session_membership_and_retains_e
 }
 
 #[test]
+fn single_wav_audio_census_requires_session_membership_and_retains_recovery_proofs() {
+    let f = Fixture::new();
+    f.file(&format!("audio/{}/recording.wav", f.session), None);
+    for leaf in [
+        "single-wav-owner.json",
+        "single-wav.json",
+        "wav-00000001.json",
+        "wav-00032768.json",
+    ] {
+        f.file(&format!("audio/{}/{leaf}", f.session), None);
+    }
+    for leaf in [
+        "recording.wav.part",
+        "wav-00000000.json",
+        "wav-00032769.json",
+        "wav-1.json",
+    ] {
+        f.file(&format!("audio/{}/{leaf}", f.session), None);
+    }
+    f.file(
+        &format!("audio/{}/recording.wav", uuid::Uuid::new_v4()),
+        None,
+    );
+    f.file(&format!("audio/{}/nested/recording.wav", f.session), None);
+    let preview = f.preview();
+    assert_eq!(preview.audio_files, 2);
+    assert_eq!(preview.unregistered_audio_files, 1);
+    assert_eq!(preview.unclassified_files, 6);
+    let expected = format!("meetings/{}/audio/{}/recording.wav", f.meeting, f.session);
+    assert_eq!(
+        preview
+            .entries
+            .iter()
+            .find(|item| item.relative_path == expected)
+            .unwrap()
+            .disposition,
+        Disposition::ProducerAudioLeftover
+    );
+    for leaf in [
+        "single-wav-owner.json",
+        "single-wav.json",
+        "wav-00000001.json",
+        "wav-00032768.json",
+    ] {
+        assert_eq!(entry(&preview, leaf).disposition, Disposition::Retain);
+    }
+}
+
+#[test]
 fn audio_only_census_never_promotes_unknown_files_from_extensions_or_neighbor_session_ids() {
     let f = Fixture::new();
     f.file("notes/audio.wav", None);

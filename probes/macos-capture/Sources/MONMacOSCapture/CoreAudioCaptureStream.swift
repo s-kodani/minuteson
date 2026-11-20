@@ -11,6 +11,11 @@ protocol CoreAudioCaptureDriver: AnyObject, Sendable {
   ) throws
   func stop() throws
   func detach() throws
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void)
+}
+extension CoreAudioCaptureDriver {
+  // Test drivers invoke sample synchronously and own no upstream queue.
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void) { observation() }
 }
 
 final class CoreAudioCaptureStream: SystemCaptureStream, @unchecked Sendable {
@@ -126,18 +131,29 @@ final class CoreAudioCaptureStream: SystemCaptureStream, @unchecked Sendable {
 
   private struct OwnedSample: @unchecked Sendable { let value: CMSampleBuffer }
 
-  private func receive(_ sample: CMSampleBuffer) {
-    guard lock.withLock({ acceptsSamples && !detached && !failureReported }) else { return }
-    guard pending.wait(timeout: .now()) == .success else {
-      fail(ProbeError.capture("tap delivery queue exceeded its bounded capacity"))
-      return
+  func afterAcceptedPCM(_ observation: @escaping @Sendable () -> Void) {
+    driver.afterAcceptedPCM { [self] in
+      // Share admission ordering with receive: an accepted sample cannot sit
+      // between its state check and dispatch while this fence passes it.
+      lock.withLock { deliveryQueue.async(execute: observation) }
     }
-    let owned = OwnedSample(value: sample)
-    deliveryQueue.async { [self] in
-      defer { pending.signal() }
-      // Samples admitted before the actual OS stop are drained, not replaced
-      // with invented silence. Recorder ownership still rejects retired epochs.
-      if lock.withLock({ !detached && !failureReported }) { deliver(self, owned.value) }
+  }
+
+  private func receive(_ sample: CMSampleBuffer) {
+    let overflow = lock.withLock {
+      guard acceptsSamples && !detached && !failureReported else { return false }
+      guard pending.wait(timeout: .now()) == .success else { return true }
+      let owned = OwnedSample(value: sample)
+      deliveryQueue.async { [self] in
+        defer { pending.signal() }
+        // Samples admitted before the actual OS stop are drained, not replaced
+        // with invented silence. Recorder ownership still rejects retired epochs.
+        if lock.withLock({ !detached && !failureReported }) { deliver(self, owned.value) }
+      }
+      return false
+    }
+    if overflow {
+      fail(ProbeError.capture("tap delivery queue exceeded its bounded capacity"))
     }
   }
 

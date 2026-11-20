@@ -25,10 +25,21 @@ pub struct PcmFormat {
 }
 
 impl PcmFormat {
+    pub(crate) fn pcm_data_offset(&self) -> u64 {
+        self.data_offset
+    }
     pub(crate) fn is_voice_clip(&self) -> bool {
         self.sample_rate == 16_000
             && self.channels == 1
             && self.data_offset == 44
+            && self.bytes_per_frame == 2
+            && !self.float
+            && self.little_endian
+    }
+    pub(crate) fn is_canonical_wav(&self) -> bool {
+        self.sample_rate == 16000
+            && self.channels == 1
+            && matches!(self.data_offset, 44 | 80)
             && self.bytes_per_frame == 2
             && !self.float
             && self.little_endian
@@ -181,6 +192,15 @@ impl VerifiedAudio {
             .map_err(|e| e.to_string())?;
         if &magic != b"caff" {
             return Err("復号した音声がCAF形式ではありません".into());
+        }
+        self.check_unchanged()
+    }
+
+    pub(crate) fn require_wav(&mut self) -> Result<(), String> {
+        self.file.rewind().map_err(|e| e.to_string())?;
+        let layout = wave::inspect(&mut self.file, self.size)?;
+        if layout.frames != self.format.frames {
+            return Err("WAVの保存フレーム数が一致しません".into());
         }
         self.check_unchanged()
     }
@@ -404,8 +424,32 @@ fn read_caf_format(file: &mut File, size: u64) -> Result<PcmFormat, String> {
 // every PCM sample and the new hash to one unchanged file descriptor. Hash the
 // payload once; keep only a hash block and a partial sample, not the whole file.
 pub(crate) fn inspect_recorded_caf(
+    file: File,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(PcmFormat, u64, String), String> {
+    inspect_recorded_pcm(file, cancelled, false, None)
+}
+
+pub(crate) fn inspect_recorded_wav(
+    file: File,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(PcmFormat, u64, String), String> {
+    inspect_recorded_pcm(file, cancelled, true, None)
+}
+
+pub(crate) fn inspect_recorded_wav_bound(
+    file: File,
+    cancelled: &impl Fn() -> bool,
+    expected_pcm: &str,
+) -> Result<(PcmFormat, u64, String), String> {
+    inspect_recorded_pcm(file, cancelled, true, Some(expected_pcm))
+}
+
+fn inspect_recorded_pcm(
     mut file: File,
     cancelled: &impl Fn() -> bool,
+    wav: bool,
+    expected_pcm: Option<&str>,
 ) -> Result<(PcmFormat, u64, String), String> {
     let before = crate::native_fs::metadata(&file).map_err(|error| error.to_string())?;
     if !before.is_file() {
@@ -413,12 +457,26 @@ pub(crate) fn inspect_recorded_caf(
     }
     let size = before.len();
     let modified = before.modified().map_err(|error| error.to_string())?;
-    let format = read_caf_format(&mut file, size)?;
+    let format = if wav {
+        let layout = wave::inspect(&mut file, size)?;
+        PcmFormat {
+            sample_rate: 16000,
+            channels: 1,
+            frames: layout.frames,
+            data_offset: layout.data_offset,
+            bytes_per_frame: 2,
+            float: false,
+            little_endian: true,
+        }
+    } else {
+        read_caf_format(&mut file, size)?
+    };
     let data_end = format.data_offset + format.frames * u64::from(format.bytes_per_frame);
     let sample_bytes = (format.bytes_per_frame / format.channels) as usize;
     file.rewind().map_err(|error| error.to_string())?;
     crate::operation_observation::file_check();
     let mut hasher = Sha256::new();
+    let mut pcm_hasher = expected_pcm.map(|_| Sha256::new());
     let mut buffer = [0_u8; 65_536];
     let mut pending = Vec::with_capacity(buffer.len() + 8);
     let mut position = 0_u64;
@@ -435,6 +493,13 @@ pub(crate) fn inspect_recorded_caf(
             .filter(|end| *end <= size)
             .ok_or("録音音声が検証中に変更されました")?;
         hasher.update(&buffer[..count]);
+        if let Some(pcm) = &mut pcm_hasher {
+            let from = position.max(format.data_offset);
+            let to = end.min(data_end);
+            if from < to {
+                pcm.update(&buffer[(from - position) as usize..(to - position) as usize]);
+            }
+        }
         crate::operation_observation::read(count);
         // Every supported integer bit pattern is finite. Floating-point samples
         // need a full check, including samples split by a hash block boundary.
@@ -453,6 +518,11 @@ pub(crate) fn inspect_recorded_caf(
             }
         }
         position = end;
+    }
+    if let (Some(expected), Some(pcm)) = (expected_pcm, pcm_hasher) {
+        if format!("{:x}", pcm.finalize()) != expected {
+            return Err("録音WAVの確定PCMと保存内容が一致しません".into());
+        }
     }
     let after = crate::native_fs::metadata(&file).map_err(|error| error.to_string())?;
     if position != size

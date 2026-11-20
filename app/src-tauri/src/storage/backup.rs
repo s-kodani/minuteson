@@ -449,6 +449,28 @@ fn read_only(path: &Path) -> Result<Connection, String> {
 fn validate_database(db: &mut Connection, cancelled: &impl Fn() -> bool) -> Result<(), String> {
     check_cancelled(cancelled)?;
     verify_database_schema(db).map_err(|e| e.to_string())?;
+    validate_database_contents(db, cancelled)
+}
+
+// Only the sealed native placement verifier uses this prior-version path,
+// after comparing the owned image bytes to its pinned native manifest. The
+// image remains unchanged until first admission permits ordinary migration.
+#[cfg(any(target_os = "macos", windows))]
+fn validate_placed_database(
+    db: &mut Connection,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    check_cancelled(cancelled)?;
+    if verify_database_schema(db).is_err() {
+        super::schema_40::verify_readonly_previous(db).map_err(|error| error.to_string())?;
+    }
+    validate_database_contents(db, cancelled)
+}
+
+fn validate_database_contents(
+    db: &mut Connection,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
     super::model_profiles::portable::export(db, cancelled)?;
     ledger::validate_provenance(db, cancelled)?;
     let result: String = db

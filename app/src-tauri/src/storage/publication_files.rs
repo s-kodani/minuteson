@@ -351,9 +351,26 @@ impl Directory {
         if bytes.len() > 512 * 1024 {
             return Err("音声保存確定記録が大きすぎます".into());
         }
+        self.json_bytes(leaf, &bytes, previous)
+    }
+
+    /// Capture maps have a separate, explicitly bounded decoding contract.
+    /// Ordinary receipts retain the smaller limit above.
+    pub(in crate::storage) fn capture_json(
+        &self,
+        leaf: &str,
+        value: &impl Serialize,
+        previous: Option<&Stamp>,
+    ) -> Result<(), String> {
+        let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+        crate::capture_manifest::validate_size(&bytes)?;
+        self.json_bytes(leaf, &bytes, previous)
+    }
+
+    fn json_bytes(&self, leaf: &str, bytes: &[u8], previous: Option<&Stamp>) -> Result<(), String> {
         let temporary = format!(".{}.json.part", uuid::Uuid::new_v4());
         let mut file = self.create(&temporary)?;
-        file.write_all(&bytes).map_err(|e| e.to_string())?;
+        file.write_all(bytes).map_err(|e| e.to_string())?;
         crate::native_fs::sync_handle(&file).map_err(|e| e.to_string())?;
         if let Some(stamp) = previous {
             stamp.require(&self.required(leaf, false)?)?;

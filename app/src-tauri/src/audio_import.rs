@@ -81,8 +81,7 @@ impl AudioInfo {
             .map(|n| n.div_ceil(u64::from(self.sample_rate)))
             .and_then(|n| n.checked_mul(2))
             .ok_or("音声保存に必要な容量が範囲外です")?;
-        wav.checked_mul(2)
-            .and_then(|n| n.checked_add(136))
+        wav.checked_add(80)
             .and_then(|n| n.checked_add(original))
             .and_then(|n| n.checked_add(128 * 1024 * 1024))
             .ok_or("音声保存に必要な容量が範囲外です".into())
@@ -109,15 +108,15 @@ impl SavedAudio {
         })
     }
     pub(crate) fn matches(&self, format: &crate::audio::PcmFormat) -> bool {
-        format.is_compact_recording_segment()
+        format.is_canonical_wav()
             && format.frames == self.frames
             && format.sample_rate == self.sample_rate
             && format.channels == self.channels
     }
 }
 
-/// Writes compact CAF directly; no full-rate decoded file is ever created.
-pub(crate) struct VoiceCafWriter {
+/// Streams directly into the canonical WAV; no full-rate decoded copy is created.
+pub(crate) struct VoiceWavWriter {
     file: std::io::BufWriter<File>,
     converter: mon_core::media::voice::VoiceConverter,
     rate: u32,
@@ -125,7 +124,7 @@ pub(crate) struct VoiceCafWriter {
     source_frames: u64,
     saved_frames: u64,
 }
-impl VoiceCafWriter {
+impl VoiceWavWriter {
     pub(crate) fn new(path: &Path, rate: u32, channels: u32) -> Result<Self, String> {
         let mut options = File::options();
         options.write(true).create_new(true);
@@ -141,7 +140,7 @@ impl VoiceCafWriter {
     }
     pub(crate) fn from_file(file: File, rate: u32, channels: u32) -> Result<Self, String> {
         let mut file = std::io::BufWriter::new(file);
-        file.write_all(&mon_core::media::caf::voice_header(0).map_err(str::to_owned)?)
+        file.write_all(&crate::audio::wave::streaming_header(0)?)
             .map_err(|e| e.to_string())?;
         Ok(Self {
             file,
@@ -166,7 +165,7 @@ impl VoiceCafWriter {
                 let bytes: Vec<_> = pcm.iter().flat_map(|v| v.to_le_bytes()).collect();
                 if let Err(e) = file.write_all(&bytes) {
                     io_error = Some(e.to_string());
-                    return Err("compact CAF write failed");
+                    return Err("WAV write failed");
                 }
                 *saved += pcm.len() as u64;
                 Ok(())
@@ -181,7 +180,7 @@ impl VoiceCafWriter {
             let bytes: Vec<_> = pcm.iter().flat_map(|v| v.to_le_bytes()).collect();
             if let Err(e) = file.write_all(&bytes) {
                 io_error = Some(e.to_string());
-                return Err("compact CAF write failed");
+                return Err("WAV write failed");
             }
             *saved += pcm.len() as u64;
             Ok(())
@@ -193,9 +192,7 @@ impl VoiceCafWriter {
         }
         self.file.rewind().map_err(|e| e.to_string())?;
         self.file
-            .write_all(
-                &mon_core::media::caf::voice_header(self.saved_frames).map_err(str::to_owned)?,
-            )
+            .write_all(&crate::audio::wave::streaming_header(self.saved_frames)?)
             .map_err(|e| e.to_string())?;
         self.file.flush().map_err(|e| e.to_string())?;
         self.file.get_ref().sync_all().map_err(|e| e.to_string())
@@ -439,8 +436,8 @@ pub(crate) struct ImportManifest {
 }
 impl ImportManifest {
     pub(crate) fn validate_format(&self) -> Result<(), String> {
-        if self.schema_version == 3
-            && self.audio_format.as_deref() == Some("caf")
+        if self.schema_version == 4
+            && self.audio_format.as_deref() == Some("wav")
             && self.saved_audio.as_ref() == Some(&SavedAudio::for_source(&self.info)?)
         {
             Ok(())
@@ -558,7 +555,7 @@ pub(crate) fn import_configured(
         if available_bytes(&base)? < selected.info.required_bytes(0)? {
             return Err("変換用音声を保存する容量が不足しています".into());
         }
-        let caf = base.join("decoded-voice.caf");
+        let caf = base.join("recording.wav");
         progress("decoding", 0);
         let decoded = decode(helper, &original, Some(&caf), &base, cancelled)?;
         if decoded != selected.info {
@@ -571,19 +568,18 @@ pub(crate) fn import_configured(
             &proof.sha256,
             cancelled,
         )?;
-        audio.require_caf()?;
+        audio.require_wav()?;
         let saved_audio = SavedAudio::for_source(&decoded)?;
         if !saved_audio.matches(&audio.format) {
             return Err("解析用PCMの形式・長さが復号結果と一致しません".into());
         }
         drop(audio);
-        // Keep verified decoded PCM for the common single-WAV publisher.
-        // It owns resampling, durable publication and retirement of this CAF.
+        // The verified decoded WAV is adopted directly; publication never rewrites PCM.
         progress("converting", decoded.frames);
         check_cancelled(cancelled)?;
         let manifest = ImportManifest {
-            schema_version: 3,
-            audio_format: Some("caf".into()),
+            schema_version: 4,
+            audio_format: Some("wav".into()),
             saved_audio: Some(saved_audio),
             meeting_id: snapshot.meeting_id.clone(),
             import_id: snapshot.id.clone(),

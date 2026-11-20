@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 struct VoiceConverter;
+struct LiveMixer;
 
 typedef struct MonCaptureInputRetry {
   uint32_t failures;
@@ -26,6 +27,21 @@ typedef struct MonCaptureInputRetry {
  * the converter terminal; native IO failures must never drop audio silently.
  */
 typedef bool (*MonVoiceWrite)(void*, const int16_t*, size_t, int64_t, int64_t);
+
+/**
+ * Borrowed mixed PCM belongs to the DSP call. Copy it to the bounded native
+ * save queue; returning false makes the mixer permanently failed.
+ */
+typedef bool (*MonWavWrite)(void*, const int16_t*, size_t, uint64_t, int64_t, uint32_t);
+
+typedef struct MonWavPrefix {
+  uint64_t frames;
+  uint32_t checkpoints;
+  uint64_t metadata_bytes;
+  int64_t origin_nanoseconds;
+  uint8_t last_hash[32];
+  uint8_t owner[36];
+} MonWavPrefix;
 
 /**
  * Shared lifecycle reducer. Native drivers separately own asynchronous OS
@@ -79,6 +95,52 @@ bool mon_voice_push(struct VoiceConverter *value,
 bool mon_voice_finish(struct VoiceConverter *value, void *context, MonVoiceWrite write);
 
 ptrdiff_t mon_voice_caf_header(uint64_t frames, uint8_t *output, size_t capacity);
+
+/**
+ * Fixed-offset mono PCM16 WAV header, also used by native import/test writers.
+ */
+ptrdiff_t mon_voice_wav_header(uint64_t frames, uint8_t *output, size_t capacity);
+
+struct LiveMixer *mon_wav_mixer_new(void);
+
+void mon_wav_mixer_free(struct LiveMixer *value);
+
+bool mon_wav_mixer_push(struct LiveMixer *value,
+                        uint32_t lane,
+                        uint64_t epoch,
+                        uint64_t sequence,
+                        const int16_t *samples,
+                        size_t count,
+                        int64_t start_ns,
+                        int64_t end_ns);
+
+bool mon_wav_mixer_advance(struct LiveMixer *value,
+                           uint32_t lane,
+                           uint64_t sequence,
+                           int64_t through_ns);
+
+bool mon_wav_mixer_drain(struct LiveMixer *value,
+                         int64_t through_ns,
+                         void *context,
+                         MonWavWrite write);
+
+bool mon_wav_mixer_finish(struct LiveMixer *value, void *context, MonWavWrite write);
+
+struct MonWavPrefix mon_wav_prefix_empty(void);
+
+ptrdiff_t mon_wav_prepare_commit(const struct MonWavPrefix *prefix,
+                                 const uint8_t *receipt,
+                                 size_t length,
+                                 struct MonWavPrefix *next,
+                                 uint8_t *tip,
+                                 size_t capacity);
+
+ptrdiff_t mon_wav_prefix_tip(const struct MonWavPrefix *prefix,
+                             const uint8_t *owner,
+                             size_t owner_len,
+                             bool closed,
+                             uint8_t *tip,
+                             size_t capacity);
 
 uint32_t mon_capture_abi_version(void);
 

@@ -5,3 +5,5 @@ third-party/runtime-notices/** -text
 third-party/model-licenses/*.txt -text -whitespace
 # The capture ABI build compares this header with cbindgen's LF output byte for byte.
 crates/mon-capture-ffi/include/mon_capture.h text eol=lf
+# Meeting database provenance hashes the exact embedded SQL bytes on both OSes.
+app/src-tauri/src/schema.sql text eol=lf

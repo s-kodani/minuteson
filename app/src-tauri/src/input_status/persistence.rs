@@ -221,7 +221,12 @@ fn final_issue(directory: &File, owner: &str) -> Result<Option<&'static str>, St
     };
     crate::capture_manifest::validate_size(&data)?;
     let final_report: Final = serde_json::from_slice(&data).map_err(|e| e.to_string())?;
-    if final_report.schema_version != crate::current_formats::CAPTURE {
+    if ![
+        crate::current_formats::CAPTURE,
+        crate::current_formats::LEGACY_CAPTURE,
+    ]
+    .contains(&final_report.schema_version)
+    {
         return Err("非対応の録音診断形式です".into());
     }
     if final_report.recording_owner_id.as_deref() != Some(owner)

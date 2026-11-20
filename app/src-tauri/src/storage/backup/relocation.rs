@@ -14,6 +14,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::fs::OpenOptionsExt;
 
 pub(crate) mod control;
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) mod wav;
 
 const MAX_ENTRIES: usize = 200_000;
 const MAX_ROWS: usize = 2_000_000;
@@ -749,7 +751,7 @@ pub(crate) fn verify_placed_image_with_controls(
         }
     }
     let mut db = read_only(&root.join("meetings.sqlite3"))?;
-    validate_database(&mut db, cancelled)?;
+    validate_placed_database(&mut db, cancelled)?;
     if census(&db, cancelled)? != (expected.schema_hash.clone(), expected.tables.clone())
         || assets(&db, &copied)? != expected.assets
     {
