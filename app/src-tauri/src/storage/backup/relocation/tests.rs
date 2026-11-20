@@ -94,7 +94,8 @@ fn first_placement_schema39_validation_keeps_original_census_and_bytes() {
     ] {
         let f = Fixture::with_current_layout(layout);
         let saved = snapshot(&f);
-        let destination = tempfile::tempdir().unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = scratch::Stage::create(temporary.path()).unwrap();
         for node in &saved.copied {
             let target = destination.path().join(&node.entry.relative_path);
             if node.entry.directory {
