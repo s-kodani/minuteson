@@ -124,18 +124,23 @@ fn recovered_audio_deletion_distinguishes_registered_output_from_retained_native
         let mut deletion =
             Prepared::fresh(&storage, &session.meeting_id, &lease, &|| false).unwrap();
         let confirmation = deletion.preview().confirmation_id;
-        let receipt = deletion
-            .execute(
-                &storage,
-                &lease,
-                &confirmation,
-                include_original,
-                &|| false,
-                &|_| {},
-            )
-            .unwrap();
-        assert!(receipt.audio_deleted);
-        assert!(!output.exists());
+        let result = deletion.execute(
+            &storage,
+            &lease,
+            &confirmation,
+            include_original,
+            &|| false,
+            &|_| {},
+        );
+        if include_original {
+            assert!(result.unwrap().audio_deleted);
+            assert!(!output.exists());
+        } else {
+            // Native producer audio requires explicit consent too: omitting
+            // it must not remove the registered output and claim completion.
+            assert!(result.is_err());
+            assert!(output.exists());
+        }
         assert_eq!(base.join("recording.wav").exists(), !include_original);
         if !include_original {
             assert_eq!(std::fs::read(base.join("recording.wav")).unwrap(), original);

@@ -50,6 +50,7 @@ fn descriptive_manifest_failures_save_all_verified_pcm() {
         "format",
         "errors",
         "duplicate",
+        "diagnostics",
     ] {
         let (_root, storage, session, base) = fixture(true);
         let path = base.join("manifest.json");
@@ -68,6 +69,7 @@ fn descriptive_manifest_failures_save_all_verified_pcm() {
                     }
                     "input" => manifest["targetPIDs"] = serde_json::json!([999]),
                     "format" => manifest["audioFormat"] = "caf".into(),
+                    "diagnostics" => manifest["inputDiagnosticsState"] = "unavailable".into(),
                     "errors" => {
                         manifest["state"] = "failed".into();
                         manifest["errors"] = serde_json::json!(["power release failed"]);
@@ -83,6 +85,12 @@ fn descriptive_manifest_failures_save_all_verified_pcm() {
             .unwrap_or_else(|error| panic!("{condition}: {error}"));
         assert_eq!(saved.duration_us, 2_000_000);
         assert_eq!(std::fs::read(base.join("recording.wav")).unwrap(), before);
+        if condition == "diagnostics" {
+            assert_eq!(
+                value(&base.join("canonical-wav.json"))["inputDiagnosticsState"],
+                "unavailable"
+            );
+        }
         assert!(storage
             .recording_save_warning(&session.id)
             .unwrap()

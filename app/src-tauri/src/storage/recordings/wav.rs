@@ -538,7 +538,7 @@ impl Storage {
             );
         }
         let mut document = serde_json::json!({"schemaVersion":5,"audioFormat":"wav","clockMappingSource":"single_wav_v1",
-            "inputDiagnosticsState":if source.diagnostics_known && source_document.is_some() {"reported"}else{"unconfirmed"},
+            "inputDiagnosticsState":source_document.and_then(|document|document["inputDiagnosticsState"].as_str()).filter(|state|matches!(*state,"reported"|"unconfirmed"|"unavailable")).unwrap_or("unavailable"),
             "recordingOwnerId":session.id,"captureMode":config.mode,"backend":config.backend,"targetPIDs":config.target_pids,
             "microphoneDeviceUID":config.microphone_device_uid,"targetApplicationIdentity":config.target_application_identity,
             "state":if normal {"saved"}else{"interrupted"},"errors":[],"singleWav":tip,
@@ -809,17 +809,15 @@ mod tests {
     }
 
     #[test]
-    fn contradictory_closure_and_out_of_range_utc_never_publish_audio() {
-        for invalid in ["test_marker"] {
+    fn foreign_manifest_and_capture_test_never_publish_audio() {
+        for invalid in ["test_marker", "owner"] {
             let (_root, storage, session, base) = fixture(true);
             let path = base.join("manifest.json");
             let mut value: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             match invalid {
-                "closure" => value["captureEnd"]["systemClosedUs"] = 3_000_000.into(),
-                "utc" => value["captureClock"]["originUtcMs"] = 8_640_000_000_000_000_i64.into(),
-                "format" => value["audioFormat"] = "caf".into(),
                 "test_marker" => value["captureTest"] = serde_json::Value::Null,
+                "owner" => value["recordingOwnerId"] = Uuid::new_v4().to_string().into(),
                 _ => unreachable!(),
             }
             std::fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
