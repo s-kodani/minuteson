@@ -8,6 +8,9 @@ use std::collections::VecDeque;
 
 pub const RATE: u32 = 16_000;
 pub const WAV_HEADER_BYTES: usize = 80;
+/// Four-second live checkpoints must cross RIFF's 4 GiB boundary before this
+/// count limit. The separate 32 MiB evidence budget remains enforced.
+pub const MAX_CHECKPOINTS: u32 = 65_536;
 pub const AUDIO_NAME: &str = "recording.wav";
 pub const TIP_NAME: &str = "single-wav.json";
 pub const MIX_POLICY: &str = "meeting_live_wav_pcm16_16000_interval_gain_v1";
@@ -133,7 +136,7 @@ impl WavPrefix {
         }
         self.frames > 0
             && self.frames <= limits::SAFE_INTEGER
-            && self.checkpoints <= limits::MAX_SEGMENTS
+            && self.checkpoints <= MAX_CHECKPOINTS
             && self.metadata_bytes <= limits::MAX_METADATA_BYTES - limits::TIP_RESERVE_BYTES
             && self.origin_nanoseconds >= 0
             && std::str::from_utf8(&self.owner).is_ok_and(valid_owner)
@@ -192,7 +195,7 @@ impl WavPrefix {
                 .any(|count| *count > receipt.frames)
             || !valid_hash(&receipt.pcm_sha256)
             || receipt.previous_entry_sha256 != self.hash()
-            || self.checkpoints >= limits::MAX_SEGMENTS
+            || self.checkpoints >= MAX_CHECKPOINTS
             || metadata_bytes > limits::MAX_METADATA_BYTES - limits::TIP_RESERVE_BYTES
             || (self.checkpoints > 0
                 && (self.owner.as_slice() != receipt.owner_id.as_bytes()
@@ -648,6 +651,87 @@ mod tests {
             .next
             .prepare(&serde_json::to_vec(&second).unwrap())
             .is_err());
+    }
+
+    #[test]
+    fn four_second_checkpoint_chain_crosses_riff_and_keeps_both_evidence_limits() {
+        const BLOCK_FRAMES: u64 = 64_000;
+        let pcm_hash = hex(&Sha256::digest(vec![0; BLOCK_FRAMES as usize * 2]));
+        let encode = |prefix: &WavPrefix, previous: Option<String>| {
+            serde_json::to_vec(&WavReceipt {
+                schema_version: 1,
+                owner_id: OWNER.into(),
+                sequence: prefix.checkpoints + 1,
+                frame_start: prefix.frames,
+                frames: BLOCK_FRAMES,
+                capture_origin_nanoseconds: 8_000_000_000_000_000_000,
+                pcm_sha256: pcm_hash.clone(),
+                previous_entry_sha256: previous,
+                missing_ranges: vec![],
+                coverage_frames: [BLOCK_FRAMES; 2],
+            })
+            .unwrap()
+        };
+        let mut prefix = WavPrefix::default();
+        let mut expected_chain = None;
+        let mut before_last = None;
+        for sequence in 1..=MAX_CHECKPOINTS {
+            let bytes = encode(&prefix, expected_chain.clone());
+            let next_hash = hex(&Sha256::digest(&bytes));
+            let prepared = prefix.prepare(&bytes).unwrap();
+            prefix = prepared.next;
+            expected_chain = Some(next_hash);
+            assert_eq!(prefix.checkpoints, sequence);
+            assert_eq!(prefix.frames, u64::from(sequence) * BLOCK_FRAMES);
+            assert_eq!(prefix.hash(), expected_chain);
+            if sequence == 33_554 {
+                assert_eq!(&header(prefix.frames).unwrap()[..4], b"RIFF");
+            }
+            if sequence == 33_555 {
+                let header = header(prefix.frames).unwrap();
+                assert_eq!(&header[..4], b"RF64");
+                assert_eq!(&header[12..16], b"ds64");
+                assert_eq!(
+                    u64::from_le_bytes(header[20..28].try_into().unwrap()),
+                    prefix.frames * 2 + 72
+                );
+                assert_eq!(
+                    u64::from_le_bytes(header[28..36].try_into().unwrap()),
+                    prefix.frames * 2
+                );
+                assert_eq!(
+                    u64::from_le_bytes(header[36..44].try_into().unwrap()),
+                    prefix.frames
+                );
+            }
+            if sequence == MAX_CHECKPOINTS - 1 {
+                before_last = Some(prefix);
+            }
+        }
+        // Even a 19-digit origin and two full-coverage lanes fit comfortably
+        // within the existing evidence budget through the WAV count limit.
+        assert!(prefix.metadata_bytes <= u64::from(MAX_CHECKPOINTS) * 389);
+        assert!(prefix.metadata_bytes + limits::TIP_RESERVE_BYTES <= limits::MAX_METADATA_BYTES);
+        let closed: WavTip = serde_json::from_slice(&prefix.tip(OWNER, true).unwrap()).unwrap();
+        assert_eq!(closed.checkpoints, MAX_CHECKPOINTS);
+        assert_eq!(closed.frames, prefix.frames);
+        assert_eq!(closed.last_entry_sha256, expected_chain);
+        assert!(closed.producer_closed);
+        assert!(prefix.prepare(&encode(&prefix, prefix.hash())).is_err());
+
+        let mut metadata_full = before_last.unwrap();
+        metadata_full.metadata_bytes = limits::MAX_METADATA_BYTES - limits::TIP_RESERVE_BYTES;
+        assert!(metadata_full
+            .prepare(&encode(&metadata_full, metadata_full.hash()))
+            .is_err());
+        let mut invalid = prefix;
+        invalid.checkpoints = MAX_CHECKPOINTS + 1;
+        assert!(invalid.tip(OWNER, true).is_err());
+        assert_eq!(
+            limits::MAX_SEGMENTS,
+            32_768,
+            "legacy CAF limit is independent"
+        );
     }
 
     #[test]

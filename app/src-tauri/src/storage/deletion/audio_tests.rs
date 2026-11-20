@@ -717,13 +717,15 @@ fn single_wav_audio_census_requires_session_membership_and_retains_recovery_proo
         "single-wav.json",
         "wav-00000001.json",
         "wav-00032768.json",
+        "wav-00032769.json",
+        "wav-00065536.json",
     ] {
         f.file(&format!("audio/{}/{leaf}", f.session), None);
     }
     for leaf in [
         "recording.wav.part",
         "wav-00000000.json",
-        "wav-00032769.json",
+        "wav-00065537.json",
         "wav-1.json",
     ] {
         f.file(&format!("audio/{}/{leaf}", f.session), None);
@@ -752,6 +754,8 @@ fn single_wav_audio_census_requires_session_membership_and_retains_recovery_proo
         "single-wav.json",
         "wav-00000001.json",
         "wav-00032768.json",
+        "wav-00032769.json",
+        "wav-00065536.json",
     ] {
         assert_eq!(entry(&preview, leaf).disposition, Disposition::Retain);
     }

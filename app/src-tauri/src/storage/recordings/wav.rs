@@ -135,7 +135,7 @@ impl Cursor {
         if tip.schema_version != 1
             || tip.owner_id != owner
             || tip.file_name != "recording.wav"
-            || tip.checkpoints > 32768
+            || tip.checkpoints > mon_core::capture::wav::MAX_CHECKPOINTS
             || tip.checkpoints < self.sequence
             || tip.frames < self.frames
             || tip.frames > 9_007_199_254_740_991

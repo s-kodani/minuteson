@@ -167,7 +167,7 @@ fn single_wav_metadata_name(leaf: &str) -> bool {
         && sequence.bytes().all(|b| b.is_ascii_digit())
         && sequence
             .parse::<u32>()
-            .is_ok_and(|n| (1..=32_768).contains(&n))
+            .is_ok_and(|n| (1..=mon_core::capture::wav::MAX_CHECKPOINTS).contains(&n))
 }
 pub(super) fn valid_path(s: &str, meeting: &str) -> bool {
     s.len() <= 256
