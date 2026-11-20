@@ -113,6 +113,44 @@ impl Stamp {
     }
 }
 
+/// Read-only evidence for the fixed schema4 native manifest. Older macOS
+/// publishers created this file with mode 0644 in an owned recording directory.
+/// It grants no write, rename or deletion capability and is never used for a
+/// new WAV, control record or canonical publication.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::storage) struct LegacyNativeManifestStamp(Stamp);
+impl LegacyNativeManifestStamp {
+    fn read(file: &File) -> Result<Self, String> {
+        let m = crate::native_fs::metadata(file).map_err(|error| error.to_string())?;
+        if !m.is_file()
+            || m.nlink() != 1
+            || m.uid() != crate::native_fs::current_owner()?
+            || m.mode() & 0o022 != 0
+        {
+            return Err("旧録音manifestの実体・所有・書込み権限が不正です".into());
+        }
+        Ok(Self(Stamp {
+            identity: Identity::read(&m)?,
+            size: m.len(),
+            modified: (m.mtime(), m.mtime_nsec()),
+            changed: (m.ctime(), m.ctime_nsec()),
+        }))
+    }
+    fn require_file(&self, file: &File) -> Result<(), String> {
+        if *self != Self::read(file)? {
+            return Err("旧録音manifestが検証後に変更されています".into());
+        }
+        Ok(())
+    }
+    pub(in crate::storage) fn require(&self, directory: &Directory) -> Result<(), String> {
+        let (file, _) = directory
+            .legacy_native_manifest_file()?
+            .ok_or("旧録音manifestが失われています")?;
+        self.require_file(&file)?;
+        directory.verify()
+    }
+}
+
 pub(in crate::storage) struct Directory {
     pub file: File,
     pub path: PathBuf,
@@ -199,6 +237,59 @@ impl Directory {
     pub(in crate::storage) fn required(&self, leaf: &str, writable: bool) -> Result<File, String> {
         self.optional(leaf, writable)?
             .ok_or("音声保存作業の確定証拠が不足しています".into())
+    }
+    fn legacy_native_manifest_file(
+        &self,
+    ) -> Result<Option<(File, LegacyNativeManifestStamp)>, String> {
+        self.verify()?;
+        // Native publishers historically created the leaf directory under
+        // the admitted storage root with umask permissions (often 0755).
+        // Read access is compatible; another owner's write access is not.
+        if self.identity.mode & 0o022 != 0 {
+            return Err("旧録音manifestの管理先を書換え可能な権限があります".into());
+        }
+        let fd = unsafe {
+            libc::openat(
+                self.file.as_raw_fd(),
+                name("manifest.json")?.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+                0,
+            )
+        };
+        if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        let file = descriptor(fd)?;
+        let stamp = LegacyNativeManifestStamp::read(&file)?;
+        Ok(Some((file, stamp)))
+    }
+    pub(in crate::storage) fn read_legacy_native_manifest(
+        &self,
+    ) -> Result<Option<(Vec<u8>, LegacyNativeManifestStamp)>, String> {
+        let Some((mut file, stamp)) = self.legacy_native_manifest_file()? else {
+            return Ok(None);
+        };
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(crate::capture_manifest::MAX_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        crate::capture_manifest::validate_size(&bytes)?;
+        if bytes.len() as u64 != stamp.0.size {
+            return Err("旧録音manifestが読取り中に変更されました".into());
+        }
+        #[derive(Deserialize)]
+        struct Version {
+            #[serde(rename = "schemaVersion")]
+            version: u32,
+        }
+        let version: Version = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        if version.version != crate::current_formats::LEGACY_CAPTURE {
+            return Err("読み取り専用の旧録音manifestではありません".into());
+        }
+        stamp.require_file(&file)?;
+        stamp.require(self)?;
+        Ok(Some((bytes, stamp)))
     }
     pub(in crate::storage) fn create(&self, leaf: &str) -> Result<File, String> {
         self.verify()?;
@@ -376,5 +467,134 @@ impl Directory {
             stamp.require(&self.required(leaf, false)?)?;
         }
         self.rename(&temporary, leaf, previous.is_none())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod legacy_manifest_tests {
+    use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    fn write(path: &Path, bytes: &[u8], mode: u32) {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn legacy644_is_readonly_while_new_publication_guards_stay_private() {
+        let root = tempfile::tempdir_in("/private/tmp").unwrap();
+        let directory = Directory::open(root.path()).unwrap();
+        let bytes = br#"{"schemaVersion":4,"inputDiagnosticsState":"unavailable","state":"saved"}"#;
+        write(&root.path().join("manifest.json"), bytes, 0o644);
+        let (actual, stamp) = directory.read_legacy_native_manifest().unwrap().unwrap();
+        assert_eq!(actual, bytes);
+        stamp.require(&directory).unwrap();
+        assert!(directory.required("manifest.json", false).is_err());
+        assert!(Stamp::read(&File::open(root.path().join("manifest.json")).unwrap()).is_err());
+        for leaf in [
+            "single-wav.json",
+            "legacy-canonical-wav.json",
+            "recording.wav",
+        ] {
+            write(&root.path().join(leaf), bytes, 0o644);
+            assert!(directory.required(leaf, false).is_err(), "{leaf}");
+        }
+        directory
+            .capture_json(
+                "new-canonical.json",
+                &serde_json::json!({"schemaVersion":5,"inputDiagnosticsState":"unavailable"}),
+                None,
+            )
+            .unwrap();
+        directory.required("new-canonical.json", false).unwrap();
+        assert_eq!(
+            std::fs::metadata(root.path().join("manifest.json"))
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o644
+        );
+    }
+
+    #[test]
+    fn legacy_manifest_rejects_writers_links_other_formats_and_writable_parent() {
+        for mode in [0o664, 0o646, 0o666] {
+            let root = tempfile::tempdir_in("/private/tmp").unwrap();
+            write(
+                &root.path().join("manifest.json"),
+                br#"{"schemaVersion":4,"inputDiagnosticsState":"unavailable"}"#,
+                mode,
+            );
+            assert!(Directory::open(root.path())
+                .unwrap()
+                .read_legacy_native_manifest()
+                .is_err());
+        }
+        for bytes in [
+            br#"{"schemaVersion":5,"inputDiagnosticsState":"unavailable"}"#.as_slice(),
+            br#"{"schemaVersion":3,"inputDiagnosticsState":"unavailable"}"#,
+            br#"{"schemaVersion":4,"schemaVersion":4,"inputDiagnosticsState":"unavailable"}"#,
+        ] {
+            let root = tempfile::tempdir_in("/private/tmp").unwrap();
+            write(&root.path().join("manifest.json"), bytes, 0o644);
+            assert!(Directory::open(root.path())
+                .unwrap()
+                .read_legacy_native_manifest()
+                .is_err());
+        }
+        let root = tempfile::tempdir_in("/private/tmp").unwrap();
+        let path = root.path().join("manifest.json");
+        write(
+            &path,
+            br#"{"schemaVersion":4,"inputDiagnosticsState":"unavailable"}"#,
+            0o644,
+        );
+        let directory = Directory::open(root.path()).unwrap();
+        std::fs::hard_link(&path, root.path().join("other.json")).unwrap();
+        assert!(directory.read_legacy_native_manifest().is_err());
+        std::fs::remove_file(&path).unwrap();
+        symlink("other.json", &path).unwrap();
+        assert!(directory.read_legacy_native_manifest().is_err());
+        for mode in [0o755, 0o775, 0o777] {
+            let root = tempfile::tempdir_in("/private/tmp").unwrap();
+            write(
+                &root.path().join("manifest.json"),
+                br#"{"schemaVersion":4,"inputDiagnosticsState":"unavailable"}"#,
+                0o644,
+            );
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+            let result = Directory::open(root.path())
+                .unwrap()
+                .read_legacy_native_manifest();
+            assert_eq!(result.is_ok(), mode == 0o755, "{mode:o}");
+        }
+    }
+
+    #[test]
+    fn legacy_manifest_stamp_rejects_equal_bytes_at_another_inode_and_any_generation_change() {
+        for change in ["replace", "content", "mode"] {
+            let root = tempfile::tempdir_in("/private/tmp").unwrap();
+            let path = root.path().join("manifest.json");
+            let bytes =
+                br#"{"schemaVersion":4,"inputDiagnosticsState":"unavailable","state":"saved"}"#;
+            write(&path, bytes, 0o644);
+            let directory = Directory::open(root.path()).unwrap();
+            let (_, stamp) = directory.read_legacy_native_manifest().unwrap().unwrap();
+            match change {
+                "replace" => {
+                    std::fs::rename(&path, root.path().join("retained.json")).unwrap();
+                    write(&path, bytes, 0o644);
+                }
+                "content" => write(
+                    &path,
+                    br#"{"schemaVersion":4,"inputDiagnosticsState":"unavailable","state":"other"}"#,
+                    0o644,
+                ),
+                _ => {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap()
+                }
+            }
+            assert!(stamp.require(&directory).is_err(), "{change}");
+        }
     }
 }

@@ -34,6 +34,9 @@ final class InputEventJournalFile {
     case rawSystem = "raw-system.json"
     case singleWav = "single-wav.json"
     case singleWavOwner = "single-wav-owner.json"
+    case captureManifest = "manifest.json"
+
+    var maximumBytes: Int { self == .captureManifest ? 32 * 1024 * 1024 : 65 * 1024 }
   }
   private var directory: Int32
   private let leaf: Leaf
@@ -45,6 +48,7 @@ final class InputEventJournalFile {
     output: URL, initial: Data, leaf: Leaf = .journal, synchronizes: Bool = true,
     storageIO: StorageIO = StorageIO()
   ) throws {
+    try Self.requireData(initial, leaf: leaf)
     guard leaf == .status || synchronizes else {
       throw ProbeError.capture("retained input history requires synced writes")
     }
@@ -61,7 +65,7 @@ final class InputEventJournalFile {
     defer { close(descriptor) }
     expected = stat()
     do {
-      guard fstat(descriptor, &expected) == 0, Self.regular(expected) else {
+      guard fstat(descriptor, &expected) == 0, Self.regular(expected, leaf: leaf) else {
         throw ProbeError.capture("input event journal file is invalid")
       }
       try storageIO.write(initial, descriptor)
@@ -69,7 +73,7 @@ final class InputEventJournalFile {
         try storageIO.synchronize(descriptor)
         try storageIO.synchronize(directory)
       }
-      guard fstat(descriptor, &expected) == 0, Self.regular(expected) else {
+      guard fstat(descriptor, &expected) == 0, Self.regular(expected, leaf: leaf) else {
         throw ProbeError.capture("input event journal initial identity is unavailable")
       }
     } catch {
@@ -101,6 +105,7 @@ final class InputEventJournalFile {
   }
 
   func replace(_ data: Data) throws {
+    try Self.requireData(data, leaf: leaf)
     try requireExpected()
     let temporary = ".\(leaf.rawValue)-\(UUID().uuidString.lowercased()).tmp"
     let descriptor = try storageIO.create(directory, temporary)
@@ -111,12 +116,12 @@ final class InputEventJournalFile {
       // Remove only our exact staging inode, never an arbitrary matching name.
       var actual = stat()
       if !renamed, fstatat(directory, temporary, &actual, AT_SYMLINK_NOFOLLOW) == 0,
-        Self.same(owned, actual), Self.regular(actual)
+        Self.same(owned, actual), Self.regular(actual, leaf: leaf)
       {
         _ = unlinkat(directory, temporary, 0)
       }
     }
-    guard fstat(descriptor, &owned) == 0, Self.regular(owned) else {
+    guard fstat(descriptor, &owned) == 0, Self.regular(owned, leaf: leaf) else {
       throw ProbeError.capture("input event journal staging identity is invalid")
     }
     try storageIO.write(data, descriptor)
@@ -124,15 +129,17 @@ final class InputEventJournalFile {
     try requireExpected()
     var staged = stat()
     var current = stat()
-    guard fstat(descriptor, &staged) == 0, Self.same(staged, owned), Self.regular(staged),
+    guard fstat(descriptor, &staged) == 0, Self.same(staged, owned),
+      Self.regular(staged, leaf: leaf),
       fstatat(directory, temporary, &current, AT_SYMLINK_NOFOLLOW) == 0,
-      Self.same(staged, current), Self.regular(current)
+      Self.same(staged, current), Self.regular(current, leaf: leaf)
     else { throw ProbeError.capture("input event journal atomic replacement failed") }
     try storageIO.replace(directory, temporary, leaf.rawValue)
     renamed = true
     // Keep the identity even if directory sync fails after rename. A subsequent
     // attempt can commit the same owned leaf, but this attempt is not a receipt.
-    guard fstat(descriptor, &expected) == 0, Self.same(expected, staged), Self.regular(expected)
+    guard fstat(descriptor, &expected) == 0, Self.same(expected, staged),
+      Self.regular(expected, leaf: leaf)
     else {
       throw ProbeError.capture("input event journal committed identity is unavailable")
     }
@@ -171,7 +178,8 @@ final class InputEventJournalFile {
   private func requireExpected() throws {
     var actual = stat()
     guard fstatat(directory, leaf.rawValue, &actual, AT_SYMLINK_NOFOLLOW) == 0,
-      Self.regular(actual), Self.same(expected, actual), actual.st_size == expected.st_size,
+      Self.regular(actual, leaf: leaf), Self.same(expected, actual),
+      actual.st_size == expected.st_size,
       actual.st_mtimespec.tv_sec == expected.st_mtimespec.tv_sec,
       actual.st_mtimespec.tv_nsec == expected.st_mtimespec.tv_nsec,
       actual.st_ctimespec.tv_sec == expected.st_ctimespec.tv_sec,
@@ -179,10 +187,10 @@ final class InputEventJournalFile {
     else { throw ProbeError.capture("input event journal was replaced or modified") }
   }
 
-  private static func regular(_ info: stat) -> Bool {
+  private static func regular(_ info: stat, leaf: Leaf) -> Bool {
     info.st_mode & S_IFMT == S_IFREG && info.st_uid == geteuid()
       && info.st_nlink == 1 && info.st_mode & 0o077 == 0
-      && info.st_size >= 0 && info.st_size <= 65 * 1024
+      && info.st_size >= 0 && info.st_size <= Int64(leaf.maximumBytes)
   }
 
   private static func same(_ left: stat, _ right: stat) -> Bool {
@@ -191,10 +199,13 @@ final class InputEventJournalFile {
       && left.st_birthtimespec.tv_nsec == right.st_birthtimespec.tv_nsec
   }
 
-  private static func write(_ data: Data, to descriptor: Int32) throws {
-    guard !data.isEmpty, data.count <= 65 * 1024 else {
+  private static func requireData(_ data: Data, leaf: Leaf) throws {
+    guard !data.isEmpty, data.count <= leaf.maximumBytes else {
       throw ProbeError.capture("input event journal data is outside its limit")
     }
+  }
+
+  private static func write(_ data: Data, to descriptor: Int32) throws {
     try data.withUnsafeBytes { buffer in
       guard let base = buffer.baseAddress else { throw ProbeError.capture("empty journal data") }
       var offset = 0

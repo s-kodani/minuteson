@@ -954,6 +954,7 @@ impl Storage {
                 started_at,
                 ended_at,
                 None,
+                Some(&manifest_file),
                 &|| false,
             );
         }
@@ -1663,6 +1664,91 @@ pub(in crate::storage) mod tests {
         )
         .unwrap();
         (meeting, session, output, manifest)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_native_readonly644_manifest_and_rawless_caf_finalize_without_permission_changes() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        for rawless in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let storage = Storage::open(temp.path().into()).unwrap();
+            let (meeting, session, output, _) = if rawless {
+                legacy_rawless_probe_fixture(&storage)
+            } else {
+                saved_probe_fixture(&storage)
+            };
+            // Ordinary native directory creation and Data.write/AVAudioFile
+            // under umask 022 used these modes in the released producer.
+            std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let path = output.join("manifest.json");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            if rawless {
+                for lane in ["microphone.caf", "system.caf"] {
+                    std::fs::set_permissions(
+                        output.join(lane),
+                        std::fs::Permissions::from_mode(0o644),
+                    )
+                    .unwrap();
+                }
+            }
+            let directory = super::super::publication_files::Directory::open(&output).unwrap();
+            let (original, stamp) = directory.read_legacy_native_manifest().unwrap().unwrap();
+            let saved = storage.finalize_recording(&session).unwrap();
+            assert_eq!(saved.state, "saved");
+            assert_eq!(saved.duration_us, 1_000_000);
+            let canonical = storage.verify_canonical_audio(&meeting, &|| false).unwrap();
+            assert_eq!(canonical.tracks.len(), 1);
+            assert_eq!(canonical.tracks[0].chunks.len(), 1);
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o644);
+            stamp.require(&directory).unwrap();
+            let flac: i64 = storage.connection.lock().unwrap().query_row(
+                "SELECT COUNT(*) FROM file_assets WHERE meeting_id=?1 AND media_type='audio/flac'",
+                [&meeting], |row| row.get(0)).unwrap();
+            assert_eq!(flac, 0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_native_manifest_equal_bytes_replacement_during_mix_rejects_publication() {
+        use std::{cell::Cell, os::unix::fs::PermissionsExt, rc::Rc};
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().into()).unwrap();
+        let (meeting, session, output, _) = saved_probe_fixture(&storage);
+        let path = output.join("manifest.json");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let changed = Rc::new(Cell::new(false));
+        let observed = changed.clone();
+        let replace = path.clone();
+        let observations = crate::operation_observation::Scope::enter("recording_save", move |p| {
+            if p.stage == "mixing_audio" && p.completed > 0 && !observed.replace(true) {
+                std::fs::rename(&replace, replace.with_extension("retained")).unwrap();
+                std::fs::write(&replace, &original).unwrap();
+                std::fs::set_permissions(&replace, std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+        });
+        assert!(storage.finalize_recording(&session).is_err());
+        assert!(changed.get());
+        drop(observations);
+        assert_eq!(
+            storage.get_meeting(&meeting).unwrap().unwrap().lifecycle,
+            "recording"
+        );
+        let commits: i64 = storage
+            .connection
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM meeting_audio_commits WHERE meeting_id=?1",
+                [&meeting],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(commits, 0);
+        assert!(output.join("raw-microphone-00000001.caf").exists());
     }
 
     // Make native ownership proofs once, before tests mutate any fields.
