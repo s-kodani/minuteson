@@ -159,7 +159,12 @@ enum CaptureSession {
     manifest.captureTest = testWindow?.metadata()
     manifest.recordingOwnerId = options.inputLevelOwner
     manifest.singleWav = liveWav?.snapshot()
-    try write(manifest, to: manifestURL)
+    // Managed captures already require their canonical owned output. Keep
+    // standalone measurement probes' existing /tmp path contract as well.
+    let manifestOutput =
+      options.publishesInputStatus || options.writesWav
+      ? options.output : options.output.resolvingSymlinksInPath()
+    let manifestFile = try createManifest(manifest, output: manifestOutput)
     let power = RecordingPowerAssertion()
     // Also covers a throw while writing the final manifest. Do not depend on
     // a WebView, the main window, or normal application termination to release.
@@ -216,7 +221,7 @@ enum CaptureSession {
         }
       }
       manifest.captureTest = testWindow?.metadata()
-      try write(manifest, to: manifestURL)
+      try write(manifest, using: manifestFile)
       if let owner = options.inputLevelOwner {
         let standalone = options.usesStandaloneTapProbe
         telemetry = CaptureTelemetryPublisher(
@@ -261,7 +266,7 @@ enum CaptureSession {
               let detail = "microphone selection request was rejected"
               if manifest.microphoneSelectionError != detail {
                 manifest.microphoneSelectionError = detail
-                try write(manifest, to: manifestURL)
+                try write(manifest, using: manifestFile)
               }
             }
           }
@@ -286,7 +291,7 @@ enum CaptureSession {
               let detail = "microphone selection status could not be confirmed"
               if manifest.microphoneSelectionError != detail {
                 manifest.microphoneSelectionError = detail
-                try write(manifest, to: manifestURL)
+                try write(manifest, using: manifestFile)
               }
             }
           }
@@ -309,7 +314,7 @@ enum CaptureSession {
             manifest.system = systemStats
             manifest.timingEstimated =
               microphone.clockAlignment != nil || systemStats.clockAlignment != nil ? true : nil
-            try write(manifest, to: manifestURL)
+            try write(manifest, using: manifestFile)
           }
           try await Task.sleep(for: .milliseconds(options.inputLevelOwner == nil ? 200 : 100))
         }
@@ -439,7 +444,7 @@ enum CaptureSession {
           manifest.system.firstCaptureNanoseconds,
         ].compactMap { $0 }.min())
     }
-    try write(manifest, to: manifestURL)
+    try write(manifest, using: manifestFile)
     if manifest.state != "saved" {
       throw ProbeError.capture(manifest.errors.joined(separator: "; "))
     }
@@ -451,8 +456,13 @@ enum CaptureSession {
     return Darwin.kill(pid, 0) != 0 && errno == ESRCH
   }
 
-  private static func write(_ manifest: Manifest, to url: URL) throws {
-    try manifest.encodedData().write(to: url, options: .atomic)
+  static func createManifest(_ manifest: Manifest, output: URL) throws -> InputEventJournalFile {
+    try InputEventJournalFile(
+      output: output, initial: manifest.encodedData(), leaf: .captureManifest)
+  }
+
+  static func write(_ manifest: Manifest, using file: InputEventJournalFile) throws {
+    try file.replace(manifest.encodedData())
   }
 
   private static func architecture() -> String {

@@ -451,6 +451,7 @@ impl Storage {
             None,
             None,
             Some((&reviewed.meeting_state, reviewed.meeting_version)),
+            None,
             cancelled,
         )
     }

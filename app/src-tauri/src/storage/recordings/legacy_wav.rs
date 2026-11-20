@@ -7,11 +7,12 @@ use crate::playback::{
 };
 use crate::recording_segments::{Lane, Prefix};
 use crate::storage::audio_publication::{cleanup, writer::Pending};
-use crate::storage::publication_files::{Directory, Stamp};
+use crate::storage::publication_files::{Directory, LegacyNativeManifestStamp, Stamp};
 use std::io::{BufWriter, Read, Write};
 use std::sync::Arc;
 
-fn read_document(directory: &Directory, name: &str) -> Result<Option<Vec<u8>>, String> {
+fn read_canonical_document(directory: &Directory) -> Result<Option<Vec<u8>>, String> {
+    let name = "legacy-canonical-wav.json";
     let Some(mut file) = directory.optional(name, false)? else {
         return Ok(None);
     };
@@ -195,13 +196,26 @@ pub(super) fn migrate_registered(
         .min()
         .ok_or(NO_CAPTURED_AUDIO)?;
     let directory = Directory::open(&storage.managed_path(&base)?)?;
-    let bytes = read_document(&directory, "manifest.json")?.ok_or("旧録音manifestがありません")?;
+    let (bytes, stamp) = directory
+        .read_legacy_native_manifest()?
+        .ok_or("旧録音manifestがありません")?;
     if format!("{:x}", Sha256::digest(&bytes)) != proof.hash {
         return Err("旧録音manifestが検証中に変更されました".into());
     }
     let document = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    stamp.require(&directory)?;
     save(
-        storage, session, &base, document, &prefixes, origin, duration, started, ended, None,
+        storage,
+        session,
+        &base,
+        document,
+        &prefixes,
+        origin,
+        duration,
+        started,
+        ended,
+        None,
+        Some(&proof),
         cancelled,
     )
     .map(Some)
@@ -221,6 +235,7 @@ pub(super) fn save(
     started: Option<i64>,
     ended: Option<i64>,
     expected_meeting: Option<(&str, i64)>,
+    expected_manifest: Option<&CapturedFile>,
     cancelled: &impl Fn() -> bool,
 ) -> Result<RecordingSession, String> {
     storage.require_data_writable()?;
@@ -256,10 +271,23 @@ pub(super) fn save(
     } else {
         None
     };
-    let original_manifest: Option<Stamp> = if partial {
+    let original_manifest: Option<LegacyNativeManifestStamp> = if partial {
         None
     } else {
-        Some(Stamp::read(&directory.required("manifest.json", false)?)?)
+        let expected = expected_manifest.ok_or("旧録音manifestの検証証拠がありません")?;
+        let (bytes, stamp) = directory
+            .read_legacy_native_manifest()?
+            .ok_or("旧録音manifestがありません")?;
+        if expected.relative != base.join("manifest.json")
+            || u64::try_from(expected.size_bytes).ok() != Some(bytes.len() as u64)
+            || expected.hash != format!("{:x}", Sha256::digest(&bytes))
+            || serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|error| error.to_string())?
+                != document
+        {
+            return Err("旧録音manifestが検証後に変更されています".into());
+        }
+        Some(stamp)
     };
     let generations = prefixes
         .iter()
@@ -410,7 +438,7 @@ pub(super) fn save(
     }
     document["wavPublication"] = serde_json::json!({"schemaVersion":1,"policy":"legacy_capture_constant_gain_v1","frames":frames,"sha256":hash,"inputHash":key});
     let manifest_bytes = serde_json::to_vec(&document).map_err(|error| error.to_string())?;
-    if let Some(old) = read_document(&wave_directory, "legacy-canonical-wav.json")? {
+    if let Some(old) = read_canonical_document(&wave_directory)? {
         if old != manifest_bytes {
             return Err("旧録音WAVの公開条件が変更されています".into());
         }
@@ -610,7 +638,7 @@ pub(super) fn save(
         }
     }
     if let Some(stamp) = &original_manifest {
-        stamp.require(&directory.required("manifest.json", false)?)?;
+        stamp.require(&directory)?;
     }
     // Only time where no input had any captured samples becomes a canonical
     // missing interval; received zero-valued samples remain valid coverage.
@@ -650,6 +678,9 @@ pub(super) fn save(
             .and_then(|name| name.to_str())
             .ok_or("旧音声の名前が不正です")?;
         stamp.require(&directory.required(name, false)?)?;
+    }
+    if let Some(stamp) = &original_manifest {
+        stamp.require(&directory)?;
     }
     let mut db = storage
         .connection
@@ -814,6 +845,7 @@ mod tests {
 
     #[test]
     fn registered_legacy_save_rescues_raw_without_recreating_flac() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         for damaged_derived in [false, true] {
             let fixture = super::super::partial_test_fixture();
             let write = |path: &Path, value: &serde_json::Value| {
@@ -910,11 +942,22 @@ mod tests {
             )
             .unwrap()
             .unwrap();
+            std::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o644))
+                .unwrap();
+            let directory = Directory::open(&fixture.base).unwrap();
+            let (original_manifest, manifest_stamp) =
+                directory.read_legacy_native_manifest().unwrap().unwrap();
             let saved = migrate_registered(&fixture.storage, &session, &|| false)
                 .unwrap()
                 .unwrap();
             assert_eq!(saved.state, "saved");
             assert_eq!(saved.ended_at_utc_ms, Some(1_700_000_005_600));
+            assert_eq!(std::fs::read(&manifest_path).unwrap(), original_manifest);
+            assert_eq!(
+                std::fs::metadata(&manifest_path).unwrap().mode() & 0o777,
+                0o644
+            );
+            manifest_stamp.require(&directory).unwrap();
             let published: String = fixture.storage.connection.lock().unwrap().query_row(
                 "SELECT f.relative_path FROM meeting_audio_commits a JOIN file_assets f ON f.id=a.manifest_asset_id WHERE a.meeting_id=?1",
                 [&saved.meeting_id],|row|row.get(0)).unwrap();
