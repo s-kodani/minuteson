@@ -91,16 +91,23 @@ fn windows_synthetic_capture_case(scenario: &str) {
         serde_json::from_slice(&std::fs::read(directory.path.join("manifest.json")).unwrap())
             .unwrap();
     assert_eq!(raw["consoleWindowPresent"], false);
+    assert_eq!(raw["schemaVersion"], crate::current_formats::CAPTURE);
+    assert_eq!(raw["audioFormat"], "wav");
+    for lane in ["microphone", "system"] {
+        assert_eq!(raw[lane]["sampleRate"], 16_000);
+        assert_eq!(raw[lane]["channels"], 1);
+    }
     if scenario == "--synthetic-clock-overlap" {
-        // Overlap now switches to the monotone sample map before any raw
-        // segment is sealed, rather than adjusting an already appended map.
+        // Overlap switches to the monotone source sample map before PCM
+        // conversion, rather than adjusting an already appended map.
         assert_eq!(raw["timingEstimated"], true);
         let diagnostic: serde_json::Value =
             serde_json::from_reader(directory.open("capture-clock.json", 128 * 1024).unwrap())
                 .unwrap();
         for lane in ["microphone", "system"] {
             assert_eq!(raw[lane]["clockBoundaryAdjustments"], 0);
-            assert_eq!(raw[lane]["frames"], 240_000);
+            assert_eq!(raw[lane]["frames"], 80_000);
+            assert_eq!(diagnostic[lane]["savedFrames"], 240_000);
             assert_eq!(diagnostic[lane]["estimatedPackets"], 499);
             assert_eq!(
                 diagnostic[lane]["firstAnomalies"][0]["reason"],
@@ -130,11 +137,13 @@ fn windows_synthetic_capture_case(scenario: &str) {
                     .unwrap()
                     > 0
             );
-            assert_eq!(diagnostic[lane]["savedFrames"], raw[lane]["frames"]);
             // All selected PCM survives. The only excluded frames are beyond
             // the shared five-second window, including the known 20 ms gap.
+            // Diagnostics count acquired 48 kHz frames; the WAV contains 16 kHz frames.
             let received = diagnostic[lane]["observedPackets"].as_u64().unwrap() * 480;
-            assert_eq!(raw[lane]["frames"], received.min(240_000 - 960));
+            let selected = received.min(240_000 - 960);
+            assert_eq!(diagnostic[lane]["savedFrames"], selected);
+            assert_eq!(raw[lane]["frames"], selected.div_ceil(3));
             let events = diagnostic[lane]["firstAnomalies"].as_array().unwrap();
             assert!(events.iter().any(|e| e["reason"] == "equal_timestamp"));
             assert!(events.iter().any(|e| e["reason"] == "reversed_timestamp"));
@@ -146,6 +155,8 @@ fn windows_synthetic_capture_case(scenario: &str) {
     assert!(ready.microphone.as_ref().unwrap().info.frames > 0);
     assert!(ready.system.is_some());
     directory.cleanup().unwrap();
+    assert!(!directory.path.join("microphone.wav").exists());
+    assert!(!directory.path.join("system.wav").exists());
     assert!(!directory.path.join("microphone.caf").exists());
     assert!(!directory.path.join("system.caf").exists());
     assert!(!directory.path.join("capture-clock.json").exists());

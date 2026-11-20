@@ -59,6 +59,36 @@ static void failed_checkpoint_preserves_prior_prefix(const char* fault){
     &&fs::exists(directory.path/L"wav-00000001.json"),"WAV failure deleted recovery evidence");
 }
 
+static void fractional_lane_boundaries_keep_every_sample(){
+  Directory directory;auto pending=std::make_shared<product::StoragePending>();
+  auto recording=std::make_shared<product::LiveWav>(directory.path,recording_owner,pending);
+  product::Lane lane(directory.path/L"microphone.wav",1,false);
+  lane.wav=std::make_unique<product::WavInput>(lane.path,0,1,recording);
+  std::vector<float> packet(479,0.125f);constexpr std::uint64_t origin=10000000;
+  for(std::uint64_t index=0;index<500;++index){
+    lane.append(packet.data(),479,origin+index*75000,index*160,0,origin+(index+1)*100000);
+    const auto through=lane.wav->normalized_through();
+    recording->advance(0,through);recording->advance(1,through);recording->drain(through);
+  }
+  lane.close();const auto end=std::int64_t((origin+500ULL*479*10000000/48000)*100);
+  recording->advance(0,end);recording->advance(1,end);recording->drain(end);recording->finish();
+  require(lane.wav->frames==79834&&recording->status()["frames"]==79834,"fractional lane lost normalized PCM");
+  require(recording->origin()==std::int64_t(origin*100),"fractional lane moved capture origin");
+  const auto saved=bytes(directory.path/L"recording.wav");
+  require(saved.size()==80+79834*2,"fractional WAV checkpoint/tail geometry changed");
+  for(std::size_t i=80;i<saved.size();i+=2){std::int16_t sample;std::memcpy(&sample,saved.data()+i,2);require(sample==4096,"fractional lane reordered or changed PCM");}
+  const auto proof=json(directory.path/L"wav-00000002.json");
+  require(proof["frameStart"]==64000&&proof["frames"]==15834&&proof["coverageFrames"][0]==15834,"fractional durable coverage lost tail");
+  Directory clipped_directory;product::Lane clipped(clipped_directory.path/L"microphone.wav",1,true);
+  clipped.wav=std::make_unique<product::WavInput>(clipped.path,0,1);
+  clipped.window_start=origin+100;clipped.window_end=origin+49999999;
+  for(std::uint64_t index=0;index<502;++index)
+    clipped.append(packet.data(),479,origin+index*75000,index*160,0,origin+(index+1)*100000);
+  clipped.close();
+  require(clipped.first==origin+99791/479,"fractional test window moved the first accepted sample");
+  require(clipped.clock.parts.front().start>=clipped.window_start&&clipped.clock.parts.back().last_end<=clipped.window_end,"fractional test window escaped measured packet bounds");
+}
+
 int main(){try{
   using namespace product;constexpr auto owner="735027d4-a03e-43d3-830a-21e767dfaf88";
   Directory directory;auto pending=std::make_shared<StoragePending>();
@@ -69,7 +99,7 @@ int main(){try{
   constexpr std::uint64_t origin=100000000ULL;
   for(unsigned packet=0;packet<800;++packet){
     const auto time=origin+packet*100000ULL;
-    mic->append(microphone.data(),480,time,false,0);pc->append(system.data(),480,time,false,0);
+    mic->append(microphone.data(),480,time,time+100000,false,0);pc->append(system.data(),480,time,time+100000,false,0);
     const auto through=std::min(mic->normalized_through(),pc->normalized_through());
     recording->advance(0,through);recording->advance(1,through);recording->drain(through);
   }
@@ -99,9 +129,10 @@ int main(){try{
   const auto reservation=json(directory.path/L"single-wav-owner.json");require(reservation["ownerId"]==owner&&reservation["fileName"]=="recording.wav","WAV owner reservation missing");
   for(const auto& item:fs::directory_iterator(directory.path))require(item.path().extension()!=L".caf"&&item.path().extension()!=L".flac","normal capture produced intermediate audio");
   Directory test_directory;
-  WavInput test(test_directory.path/L"microphone.wav",0,1);test.append(microphone.data(),480,origin,false,0);test.finish();
+  WavInput test(test_directory.path/L"microphone.wav",0,1);test.append(microphone.data(),480,origin,origin+100000,false,0);test.finish();
   const auto test_audio=bytes(test_directory.path/L"microphone.wav");require(test_audio.size()==80+160*2&&test_audio[0]=='R',"five-second lane did not write compact WAV");
   slow_storage_keeps_dsp_independent();
+  fractional_lane_boundaries_keep_every_sample();
   for(const auto* stage:{"pcm_write","pcm_sync","pcm_verify","receipt","tip","close"})failed_checkpoint_preserves_prior_prefix(stage);
   std::cout<<"live WAV native: exact PCM, single file, reservations, checkpoint failures, 100-second gated storage, closure and test WAV passed\n";
   return 0;

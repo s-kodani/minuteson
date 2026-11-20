@@ -45,8 +45,6 @@ impl Storage {
         if format != "wav" {
             return Ok(false);
         }
-        progress(0, chunk.frames as u64);
-        crate::operation_observation::stage_for("import", "import_verifying_audio", None, "bytes");
         let path = self.managed_path(Path::new(&relative))?;
         let directory = Directory::open(path.parent().ok_or("取り込み音声の保存先がありません")?)?;
         let leaf = path
@@ -55,6 +53,16 @@ impl Storage {
             .ok_or("取り込み音声名が不正です")?;
         let file = directory.required(leaf, false)?;
         let stamp = Stamp::read(&file)?;
+        progress(0, chunk.frames as u64);
+        // The decoder already created this canonical WAV. Finish that count
+        // before entering verification; progress callbacks report creating_wav.
+        progress(chunk.frames as u64, chunk.frames as u64);
+        if cancelled() {
+            return Err("音声保存を中断しました。元音声は保持しています".into());
+        }
+        stamp.require(&file)?;
+        stamp.require(&directory.required(leaf, false)?)?;
+        crate::operation_observation::stage_for("import", "import_verifying_audio", None, "bytes");
         let mut audio = crate::audio::VerifiedAudio::open_cancellable(
             file,
             chunk.size as u64,
@@ -75,7 +83,6 @@ impl Storage {
         }
         audio.check_unchanged()?;
         stamp.require(&directory.required(leaf, false)?)?;
-        progress(chunk.frames as u64, chunk.frames as u64);
         crate::operation_observation::stage_for("import", "import_committing_audio", None, "files");
         if cancelled() {
             return Err("音声保存を中断しました。元音声は保持しています".into());

@@ -271,6 +271,64 @@ fn canonical_import_cancellation_from_final_progress_keeps_shared_pcm_for_retry(
 }
 
 #[test]
+fn canonical_import_rejects_identical_pcm_replacement_from_final_progress() {
+    let root = tempfile::tempdir().unwrap();
+    let s = Storage::open(root.path().into()).unwrap();
+    let (import, base, _) = pending_wav(&s, "direct-wav-progress-replacement");
+    let path = base.join("recording.wav");
+    let retained = base.join("retained-recording.wav");
+    let bytes = std::fs::read(&path).unwrap();
+    let identity = publication_files::Identity::file(&std::fs::File::open(&path).unwrap()).unwrap();
+    s.connection.lock().unwrap().execute_batch("CREATE TRIGGER reject_import_wav BEFORE INSERT ON meeting_audio_commits BEGIN SELECT RAISE(ABORT,'injected canonical commit failure'); END;").unwrap();
+    assert!(s.finalize_audio_import(&import.id).is_err());
+    assert_eq!(s.audio_import(&import.id).unwrap().state, "ready");
+    s.connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER reject_import_wav")
+        .unwrap();
+
+    let replaced = Cell::new(false);
+    let error = s
+        .publish_single_wav(&import.meeting_id, &|| false, &|done, total| {
+            if total > 0 && done == total && !replaced.replace(true) {
+                std::fs::rename(&path, &retained).unwrap();
+                let mut options = std::fs::File::options();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut replacement = options.open(&path).unwrap();
+                #[cfg(windows)]
+                crate::windows_files::set_private(&path).unwrap();
+                std::io::Write::write_all(&mut replacement, &bytes).unwrap();
+                replacement.sync_all().unwrap();
+            }
+        })
+        .unwrap_err();
+    assert!(replaced.get());
+    assert!(
+        error.contains("変更") || error.contains("差し替え"),
+        "{error}"
+    );
+    assert_eq!(s.audio_import(&import.id).unwrap().state, "ready");
+    assert_eq!(count(&s, "meeting_audio_commits", &import.meeting_id), 0);
+    assert!(s.canonical_audio_plan(&import.meeting_id).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(std::fs::read(&retained).unwrap(), bytes);
+    identity
+        .require(&std::fs::File::open(&retained).unwrap())
+        .unwrap();
+    assert_ne!(
+        identity,
+        publication_files::Identity::file(&std::fs::File::open(&path).unwrap()).unwrap()
+    );
+    assert!(base.join("original.wav").exists());
+}
+
+#[test]
 fn legacy_compact_import_wraps_pcm_in_wav_without_requantizing() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();
@@ -822,7 +880,9 @@ fn import_info_bounds_and_space_estimate_are_checked_before_saved_audio() {
     assert!(info().required_bytes(u64::MAX).is_err());
     assert_eq!(
         info().required_bytes(44).unwrap(),
-        64000 * 2 * 2 + 136 + 44 + 128 * 1024 * 1024
+        // One canonical mono PCM16 WAV, its 80-byte header, the original and
+        // the existing reserve. No second intermediate audio copy is needed.
+        64000 * 2 + 80 + 44 + 128 * 1024 * 1024
     );
 }
 

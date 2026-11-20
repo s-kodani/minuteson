@@ -6,6 +6,36 @@ use std::fs::File;
 pub(crate) const NO_CAPTURED_AUDIO: &str =
     "録音失敗: マイク・PC音声のどちらも音声を取得できませんでした";
 
+fn require_unreceived_caf_absent(
+    path: &Path,
+    microphone_missing: bool,
+    system_missing: bool,
+) -> Result<(), String> {
+    if !microphone_missing && !system_missing {
+        return Ok(());
+    }
+    let directory = crate::input_levels::open_capture_directory(path)?;
+    for (missing, name, error) in [
+        (
+            microphone_missing,
+            "microphone.caf",
+            "未取得のマイク音声に音声ファイルがあります",
+        ),
+        (
+            system_missing,
+            "system.caf",
+            "未取得のPC音声に音声ファイルがあります",
+        ),
+    ] {
+        if missing
+            && crate::input_levels::open_capture_file_at_optional(&directory, name)?.is_some()
+        {
+            return Err(error.into());
+        }
+    }
+    Ok(())
+}
+
 mod clock;
 #[cfg(any(unix, windows))]
 pub(in crate::storage) mod flac;
@@ -821,6 +851,7 @@ impl Storage {
         if mic_unreceived && unreceived {
             return Err("両方の入力が未取得の録音は完了できません".into());
         }
+        require_unreceived_caf_absent(&self.root.join(&base), mic_unreceived, unreceived)?;
         #[cfg(any(unix, windows))]
         let raw_prefixes = if manifest.microphone.raw_segments.is_some()
             || manifest.system.raw_segments.is_some()
@@ -927,31 +958,18 @@ impl Storage {
             );
         }
         let segmented = false;
-        let mic_file = if mic_unreceived {
-            let directory = crate::input_levels::open_capture_directory(&self.root.join(&base))?;
-            if crate::input_levels::open_capture_file_at_optional(&directory, "microphone.caf")?
-                .is_some()
-            {
-                return Err("未取得のマイク音声に音声ファイルがあります".into());
-            }
-            None
-        } else if segmented {
-            None
-        } else {
-            Some(
-                self.checked_capture_file(
+        let mic_file =
+            if mic_unreceived {
+                None
+            } else if segmented {
+                None
+            } else {
+                Some(self.checked_capture_file(
                     &base.join("microphone.caf"),
                     Some(&manifest.microphone),
-                )?,
-            )
-        };
+                )?)
+            };
         let system_file = if unreceived {
-            let directory = crate::input_levels::open_capture_directory(&self.root.join(&base))?;
-            if crate::input_levels::open_capture_file_at_optional(&directory, "system.caf")?
-                .is_some()
-            {
-                return Err("未取得のPC音声に音声ファイルがあります".into());
-            }
             None
         } else if segmented {
             None
@@ -2167,10 +2185,8 @@ pub(in crate::storage) mod tests {
         let original = serde_json::to_string(&manifest).unwrap();
         let duplicated = format!("{{\"state\":\"saved\",{}", &original[1..]);
         std::fs::write(output.join("manifest.json"), &duplicated).unwrap();
-        assert!(storage
-            .finalize_recording(&session)
-            .unwrap_err()
-            .contains("duplicate field"));
+        let error = storage.finalize_recording(&session).unwrap_err();
+        assert!(error.contains("duplicate capture field"), "{error}");
         assert_eq!(
             std::fs::read_to_string(output.join("manifest.json")).unwrap(),
             duplicated
@@ -2603,7 +2619,7 @@ pub(in crate::storage) mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!((assets, tracks, chunks), (4, 3, 3));
+        assert_eq!((assets, tracks, chunks), (2, 1, 1));
         drop(db);
         assert_eq!(
             storage.get_meeting(&meeting.id).unwrap().unwrap().lifecycle,

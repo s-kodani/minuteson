@@ -205,12 +205,15 @@ class WavInput {
   std::shared_ptr<StoragePending> pending()const{return recording_?recording_->pending():nullptr;}
   unsigned lane_index()const{return lane_;}
   void drain_converter(){if(converter_){converter_->finish([&](auto pcm,auto count,auto start,auto end){converted(pcm,count,start,end);});converter_.reset();}}
-  void append(const float* pcm,UINT32 count,std::uint64_t time,bool boundary,std::uint64_t source_end){
+  void append(const float* pcm,UINT32 count,std::uint64_t time,std::uint64_t end,bool boundary,std::uint64_t source_end){
     if(recording_&&!source_end)source_end=recording_->pending()->acquire(lane_,count);
     if(boundary){drain_converter();boundary_=true;++epoch_;}
     if(!converter_){converter_=std::make_unique<VoicePCM>(48000,channels_);source_base_=source_end>=count?source_end-count:0;converted_=0;}
     submitted_=source_end;
-    converter_->push(pcm,std::size_t(count)*channels_,static_cast<std::int64_t>(time*100),static_cast<std::int64_t>(time*100+std::uint64_t(count)*1000000000/48000),
+    // Keep the PacketClock's measured 100 ns boundaries. Reconstructing an
+    // exact frame-duration nanosecond end can extend a fractional 48 kHz
+    // packet past the next mapped start when a boundary drains the converter.
+    converter_->push(pcm,std::size_t(count)*channels_,static_cast<std::int64_t>(time*100),static_cast<std::int64_t>(end*100),
       [&](auto samples,auto n,auto start,auto end){converted(samples,n,start,end);});
   }
   void finish(){drain_converter();if(test_file_.value!=INVALID_HANDLE_VALUE){auto h=VoicePCM::wave_header(frames);LARGE_INTEGER zero{};if(!SetFilePointerEx(test_file_.value,zero,nullptr,FILE_BEGIN))throw std::runtime_error("テストWAVの確定位置が不正です");write_all(test_file_.value,h.data(),h.size());if(!capture_flush(test_file_.value,"test_wav_sync"))throw std::runtime_error("テストWAVを同期できません");CloseHandle(test_file_.value);test_file_.value=INVALID_HANDLE_VALUE;}}

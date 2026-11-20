@@ -102,6 +102,7 @@ pub(super) fn migrate_registered(
     if mic_missing && system_missing {
         return Err(NO_CAPTURED_AUDIO.into());
     }
+    require_unreceived_caf_absent(&storage.root.join(&base), mic_missing, system_missing)?;
     if !mic_missing {
         manifest.microphone.validated_format()?;
     }

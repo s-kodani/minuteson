@@ -271,7 +271,18 @@ class Lane {
     const auto packet=clock.observe(count,raw,position,flags,arrival);
     auto time=packet.start;const auto original_count=count;UINT32 skipped=0;
     if(window_end){
-      if(time>=window_end)count=0;
+      if(wav){
+        if(packet.start>=window_end||packet.end<=window_start)count=0;
+        else{
+          const auto width=packet.end-packet.start;
+          const auto skip=packet.start<window_start?((window_start-packet.start)*original_count+width-1)/width:0;
+          const auto after=packet.end>window_end?(window_end-packet.start)*original_count/width:original_count;
+          skipped=UINT32(skip);count=after>skip?UINT32(after-skip):0;
+          time=packet.start+width*skip/original_count;
+          if(!silent)samples+=skip*channels;
+        }
+      }
+      else if(time>=window_end)count=0;
       else {
         if(time<window_start){auto skip=std::min<std::uint64_t>(count,((window_start-time)*48000+9999999)/10000000);time+=skip*10000000/48000;count-=UINT32(skip);skipped=UINT32(skip);if(!silent)samples+=skip*channels;}
         count=UINT32(std::min<std::uint64_t>(count,(window_end-time)*48000/10000000));
@@ -284,9 +295,10 @@ class Lane {
     std::vector<float> zeros;if(silent){zeros.assign(std::size_t(count)*channels,0);samples=zeros.data();}
     double sum=0,maximum=0;for(std::size_t i=0;i<std::size_t(count)*channels;++i){if(!std::isfinite(samples[i])||std::abs(samples[i])>16)throw std::runtime_error("invalid captured PCM amplitude");sum+=double(samples[i])*samples[i];maximum=std::max(maximum,double(std::abs(samples[i])));}
     const auto previous_maps=clock.parts.size();
-    clock.append(frames,count,time,packet.boundary);
+    const auto selected_end=packet.start+(packet.end-packet.start)*(std::uint64_t(skipped)+count)/original_count;
+    clock.append(frames,count,time,packet.boundary,wav?selected_end:0);
     if(this->raw)this->raw->append(samples,count,clock.parts.back().last_end-std::uint64_t(count)*10000000/48000,packet.boundary||clock.parts.size()!=previous_maps||clock.stream_epoch!=converted_epoch,storage_end);
-    else if(wav)wav->append(samples,count,clock.parts.back().last_end-std::uint64_t(count)*10000000/48000,packet.boundary||clock.parts.size()!=previous_maps||clock.stream_epoch!=converted_epoch,storage_end);
+    else if(wav)wav->append(samples,count,time,selected_end,packet.boundary||clock.parts.size()!=previous_maps||clock.stream_epoch!=converted_epoch,storage_end);
     converted_epoch=clock.stream_epoch;
     if(!this->raw&&!wav)write_all(file.value,samples,std::size_t(count)*channels*4);frames+=count;++packets;rms=std::sqrt(sum/(double(count)*channels));peak=maximum;window_frames=count;measured=qpc();
     if(started)mon_capture_input_valid(&input_retry,GetTickCount64()*1000000ULL);

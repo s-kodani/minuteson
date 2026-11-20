@@ -3,10 +3,52 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <memory>
 #include <vector>
 
 static void require(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
+static void fractional_mapped_boundaries_survive_converter_epochs(){
+  // WASAPI's clock is quantized to 100 ns. A 479-frame 48 kHz packet is
+  // 9,979,166 2/3 ns, so deriving its end independently overlaps the next
+  // sample-clock boundary by 66 ns when an overlap starts a converter epoch.
+  constexpr std::uint64_t origin=10000000;
+  product::PacketClock clock;
+  std::unique_ptr<VoicePCM> converter;
+  std::unique_ptr<LiveMixer,decltype(&mon_wav_mixer_free)> mixer(mon_wav_mixer_new(),mon_wav_mixer_free);
+  require(bool(mixer),"fractional mixer unavailable");
+  std::vector<float> packet(479,0.125f);
+  std::vector<std::int16_t> mixed;
+  std::uint64_t sequence=0,epoch=0,frames=0;
+  std::int64_t last=0;
+  auto sink=[&](const std::int16_t* pcm,std::size_t n,std::int64_t start,std::int64_t end){
+    require(start>=last&&end>start,"mapped converter epochs overlap");
+    require(mon_wav_mixer_push(mixer.get(),0,epoch,++sequence,pcm,n,start,end),"fractional mixer order rejected");
+    frames+=n;last=end;
+  };
+  auto write=[](void* context,const std::int16_t* pcm,std::size_t n,std::uint64_t first,std::int64_t start,std::uint32_t mask)->bool{
+    auto& output=*static_cast<std::vector<std::int16_t>*>(context);
+    if(first!=output.size()||start!=std::int64_t(origin*100)||mask!=1)return false;
+    output.insert(output.end(),pcm,pcm+n);return true;
+  };
+  auto drain=[&]{
+    require(mon_wav_mixer_advance(mixer.get(),0,sequence,last)&&mon_wav_mixer_advance(mixer.get(),1,0,last),"fractional frontier rejected");
+    require(mon_wav_mixer_drain(mixer.get(),last,&mixed,write),"fractional mixed output failed");
+  };
+  for(std::uint64_t index=0;index<500;++index){
+    const auto mapped=clock.observe(479,origin+index*75000,index*160,0,origin+(index+1)*100000);
+    if(mapped.boundary){if(converter)converter->finish(sink);converter.reset();++epoch;}
+    if(!converter)converter=std::make_unique<VoicePCM>(48000,1);
+    converter->push(packet.data(),packet.size(),mapped.start*100,mapped.end*100,sink);
+    drain();
+  }
+  converter->finish(sink);drain();
+  require(mon_wav_mixer_finish(mixer.get(),&mixed,write),"fractional mixer close failed");
+  require(frames==79834&&last==std::int64_t((origin+500ULL*479*10000000/48000)*100),"fractional mapped tail changed");
+  require(mixed.size()==79834&&std::all_of(mixed.begin(),mixed.end(),[](auto n){return n==4096;}),"fractional mixer moved or changed PCM");
+  require(clock.estimated_packets==499,"fractional clock lost anomaly evidence");
+}
 int main(){try{
+  fractional_mapped_boundaries_survive_converter_epochs();
   for(const auto rate:{8000u,16000u,44100u,48000u,96000u}){
     const std::size_t frames=rate*4+7;
     std::vector<float> input(frames*2);
