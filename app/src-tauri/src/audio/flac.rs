@@ -517,6 +517,15 @@ fn open_reader(
     let audio_offset = check_metadata(file, size, cancelled)?;
     let mut header = read_at(file, 0, 42)?;
     header[4] = 0x80;
+    // Some legacy files have contradictory STREAMINFO byte-size hints even
+    // though the encoded audio is intact. FLAC defines zero as "unknown" for
+    // these optional hints. Discard only the contradictory pair in the decoder
+    // view; retain the original bytes for hashes and all audio/CRC/MD5 checks.
+    let minimum = u32::from_be_bytes([0, header[12], header[13], header[14]]);
+    let maximum = u32::from_be_bytes([0, header[15], header[16], header[17]]);
+    if minimum > 0 && maximum > 0 && maximum < minimum {
+        header[12..18].fill(0);
+    }
     let source = MediaSourceStream::new(
         Box::new(EssentialFlacSource {
             file: file.try_clone().map_err(|e| e.to_string())?,
