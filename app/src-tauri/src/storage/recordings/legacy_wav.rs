@@ -455,6 +455,48 @@ pub(super) fn save(
         }
         prefix.verify_at(&base_path, cancelled)?;
     }
+    if !partial {
+        // The admitted closed native manifest owns these two continuous
+        // working copies. Their verified raw prefixes already supplied the
+        // final WAV, so retire only the positively received fixed-name lanes.
+        // Partial/unreceived lanes grant no authority over a leftover CAF.
+        for lane in ["microphone", "system"] {
+            if !document[lane]["frames"]
+                .as_u64()
+                .is_some_and(|frames| frames > 0)
+                || !prefixes
+                    .iter()
+                    .any(|prefix| prefix.lane().name() == lane && prefix.frames() > 0)
+            {
+                continue;
+            }
+            let leaf = format!("{lane}.caf");
+            let snapshot = || -> Result<Option<cleanup::RetiredAudio>, String> {
+                let Some(file) = directory.optional(&leaf, false)? else {
+                    return Ok(None);
+                };
+                let stamp = Stamp::read(&file)?;
+                let relative = base.join(&leaf).to_string_lossy().replace('\\', "/");
+                let (owned, _) =
+                    cleanup::snapshot(storage, &session.meeting_id, &relative, cancelled)?;
+                stamp.require(&file)?;
+                stamp.require(&directory.required(&leaf, false)?)?;
+                Ok(Some(owned))
+            };
+            match snapshot() {
+                Ok(Some(owned)) => retired.push(owned),
+                Ok(None) => {}
+                Err(error) if !cancelled() => crate::internal_logs::detail(
+                    crate::internal_logs::current_context("recording"),
+                    "legacy_continuous_cleanup_deferred",
+                    "warning",
+                    std::time::Duration::ZERO,
+                    &error,
+                ),
+                Err(error) => return Err(error),
+            }
+        }
+    }
     let sessions = std::collections::BTreeSet::from([session.id.clone()]);
     if registered_source.is_none() {
         match flac::inspect_workspaces(storage, &session.meeting_id, &sessions, cancelled) {
@@ -908,6 +950,9 @@ mod tests {
                         "missing"
                     }
                 );
+            }
+            for lane in ["microphone", "system"] {
+                assert!(!fixture.base.join(format!("{lane}.caf")).exists());
             }
             #[cfg(target_os = "macos")]
             drop(

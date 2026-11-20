@@ -239,7 +239,24 @@ final class LiveWavSessionTests: XCTestCase {
       clock, microphoneClosure: micClosure, systemClosure: systemClosure)
     try writer.finish(endNanoseconds: 3_000_000_000)
     manifest.singleWav = writer.snapshot()
-    try manifest.encodedData().write(to: root.appendingPathComponent("manifest.json"))
+    // XCTest does not inherit the helper CLI's private umask. Create the
+    // fixture manifest privately without changing process-global permissions.
+    let descriptor = open(
+      root.appendingPathComponent("manifest.json").path,
+      O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    defer { close(descriptor) }
+    let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+    try file.write(contentsOf: manifest.encodedData())
+    try file.synchronize()
+    for name in [
+      "recording.wav", "manifest.json", "single-wav-owner.json", "single-wav.json",
+      "wav-00000001.json",
+    ] {
+      var metadata = stat()
+      XCTAssertEqual(lstat(root.appendingPathComponent(name).path, &metadata), 0)
+      XCTAssertEqual(metadata.st_mode & 0o777, 0o600, name)
+    }
     XCTAssertEqual(writer.snapshot().frames, 32000)
     XCTAssertTrue(writer.snapshot().producerClosed)
   }
