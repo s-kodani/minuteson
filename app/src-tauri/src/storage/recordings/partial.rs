@@ -135,6 +135,8 @@ impl Review {
             "targetPIDs":self.config.target_pids,"recordingOwnerId":self.session.id,
             "errors":[],"partialRecovery":{
                 "schemaVersion":1,"kind":"sealed_prefix",
+                "truncated":self.prefixes.iter().any(Prefix::is_truncated)
+                    || self.summary.lanes.iter().any(|lane| matches!(lane.state.as_str(), "missing" | "unreadable")),
                 "reviewHash":self.summary.review_hash,"acquisitionEndKnown":false,
                 "tailLossUs":null,"timelineUtcOriginKnown":false,
                 "originalState":self.session.state,
@@ -253,7 +255,7 @@ impl Storage {
         cancelled: &impl Fn() -> bool,
     ) -> Result<Review, String> {
         self.require_data_writable()?;
-        let review = self.inspect_partial_recording(session_id, cancelled)?;
+        let review = self.inspect_partial_recording(session_id, cancelled, true)?;
         self.require_data_writable()?;
         Ok(review)
     }
@@ -271,7 +273,7 @@ impl Storage {
             return Err("部分救出の検査先と保持中の移動元が一致しません".into());
         }
         snapshot.verify_source(cancelled)?;
-        let review = self.inspect_partial_recording(session_id, cancelled)?;
+        let review = self.inspect_partial_recording(session_id, cancelled, false)?;
         snapshot.verify_source(cancelled)?;
         Ok(review)
     }
@@ -280,6 +282,7 @@ impl Storage {
         &self,
         session_id: &str,
         cancelled: &impl Fn() -> bool,
+        recover_prefix: bool,
     ) -> Result<Review, String> {
         check_cancel(cancelled)?;
         self.managed_anchor.verify()?;
@@ -305,12 +308,12 @@ impl Storage {
         let mut prefixes = Vec::new();
         let mut lanes = Vec::new();
         for lane in [Lane::Microphone, Lane::System] {
-            let result = Prefix::read_optional(
-                directory.try_clone().map_err(|e| e.to_string())?,
-                session_id,
-                lane,
-                cancelled,
-            );
+            let pinned = directory.try_clone().map_err(|e| e.to_string())?;
+            let result = if recover_prefix {
+                Prefix::read_recovery_optional(pinned, session_id, lane, cancelled)
+            } else {
+                Prefix::read_optional(pinned, session_id, lane, cancelled)
+            };
             let state = match result {
                 Ok(Some(prefix)) if prefix.frames() > 0 => {
                     prefixes.push(prefix);
@@ -675,6 +678,16 @@ fn partial_admission(
     id: &str,
 ) -> Result<(RecordingSession, String, i64, String), String> {
     let session = load_session(db, id)?.ok_or("部分救出する録音がありません")?;
+    let restored: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM restore_provenance WHERE meeting_id=?1 AND domain='meetings' AND entity_key=?1)",
+            [&session.meeting_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if restored {
+        return Err("復元した会議の記録を元録音の救出証拠として使用できません".into());
+    }
     if !matches!(session.state.as_str(), "interrupted" | "failed") {
         return Err("未終了または失敗した録音だけを部分救出できます".into());
     }

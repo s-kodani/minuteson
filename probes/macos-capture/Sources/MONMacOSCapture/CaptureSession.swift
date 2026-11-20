@@ -22,6 +22,18 @@ enum CaptureSession {
     return try await system()
   }
 
+  /// Final metadata is optional evidence. Its failure cannot prevent the
+  /// stopped writer from committing accepted PCM and its final header.
+  static func finishSharedWav(
+    _ writer: LiveWavSession, prepareEnd: () throws -> Int64?
+  ) throws -> String? {
+    var end: Int64?
+    var diagnostic: String?
+    do { end = try prepareEnd() } catch { diagnostic = String(describing: error) }
+    try writer.finish(endNanoseconds: end)
+    return diagnostic
+  }
+
   @MainActor
   static func run(_ options: Options) async throws {
     if let descriptor = options.captureTestLeaseFD, let owner = options.captureTestOwner {
@@ -342,58 +354,84 @@ enum CaptureSession {
       }
       let micStats = mic.snapshot()
       let systemStats = options.usesStandaloneTapProbe ? tap.snapshot() : system.snapshot()
-      try micStats.requireWritable()
-      try systemStats.requireWritable()
-      if let testWindow, !testWindow.metadata().completed {
-        throw ProbeError.capture("five-second test stopped before its window completed")
-      }
-      guard micStats.frames > 0 || systemStats.frames > 0,
-        (micStats.frames > 0 && systemStats.frames > 0) || testWindow != nil
-          || systemClosure != nil,
-        micStats.appendFailures == 0, systemStats.appendFailures == 0
-      else {
-        throw ProbeError.capture("audio track is empty or contains failed writes")
-      }
-      for (lane, stats) in [("microphone", micStats), ("system", systemStats)]
-      where stats.frames == 0 {
-        guard
-          !FileManager.default.fileExists(
-            atPath: options.output.appendingPathComponent(lane + "." + trackExtension).path)
-        else {
-          throw ProbeError.capture("unreceived input has an unexpected audio payload")
-        }
-      }
-      if let rawMic {
-        try rawMic.verifyClosed(expected: micStats)
-      } else if micStats.frames > 0 {
-        try verifyRecordedCAF(
-          options.output.appendingPathComponent("microphone.caf"), expected: micStats)
-      }
-      if let rawSystem {
-        try rawSystem.verifyClosed(expected: systemStats)
-      } else if systemStats.frames > 0 {
-        try verifyRecordedCAF(
-          options.output.appendingPathComponent("system.caf"), expected: systemStats)
-      }
       manifest.microphone = micStats
       manifest.system = systemStats
-      if let clock {
-        if options.publishesInputStatus {
-          try manifest.finalizeStoppedClock(
-            clock, microphoneClosure: mic.captureClosure, systemClosure: systemClosure)
-        } else if let testWindow {
-          try manifest.finalizeTestClock(clock, window: testWindow)
-        } else {
-          try manifest.finalizeClock(clock)
-        }
-      }
       if let liveWav {
-        guard let ending = manifest.captureEnd,
-          let origin = [micStats.firstCaptureNanoseconds, systemStats.firstCaptureNanoseconds]
-            .compactMap({ $0 }).min()
-        else { throw ProbeError.capture("single WAV has no proven capture ending") }
-        try liveWav.finish(endNanoseconds: origin + ending.endUs * 1000)
+        let diagnostic = try finishSharedWav(liveWav) {
+          let geometry = liveWav.captureGeometry()
+          guard let clock, let microphoneClosure = mic.captureClosure, let systemClosure,
+            let origin = geometry.origin
+          else { throw ProbeError.capture("single WAV acquisition ending is unavailable") }
+          let (metadata, observed) = try clock.ending(
+            originNanoseconds: origin, microphone: microphoneClosure, system: systemClosure)
+          let microphoneEnd = max(
+            observed.microphoneClosedUs, (geometry.microphoneEnd - origin) / 1000)
+          let systemEnd = max(
+            observed.systemClosedUs, (geometry.systemEnd - origin) / 1000)
+          let end = max(microphoneEnd, systemEnd)
+          guard end <= (9_007_199_254_740_991 - 1_000_000) / 1000 else {
+            throw ProbeError.capture("single WAV ending is outside precision bounds")
+          }
+          let estimated =
+            microphoneEnd != observed.microphoneClosedUs
+            || systemEnd != observed.systemClosedUs || micStats.clockAlignment != nil
+            || systemStats.clockAlignment != nil
+          manifest.captureClock = CaptureClockMetadata(
+            originUtcMs: metadata.originUtcMs,
+            uncertaintyNs: estimated
+              ? max(metadata.uncertaintyNs, end * 1000 + 1_000_000) : metadata.uncertaintyNs)
+          manifest.captureEnd = CaptureEndMetadata(
+            microphoneClosedUs: microphoneEnd, systemClosedUs: systemEnd, endUs: end)
+          manifest.timingEstimated = estimated ? true : nil
+          manifest.observedCaptureEnd = estimated ? observed : nil
+          return origin + end * 1000
+        }
+        if let diagnostic { manifest.errors.append(diagnostic) }
         manifest.singleWav = liveWav.snapshot()
+      } else {
+        try micStats.requireWritable()
+        try systemStats.requireWritable()
+        if let testWindow, !testWindow.metadata().completed {
+          throw ProbeError.capture("five-second test stopped before its window completed")
+        }
+        guard micStats.frames > 0 || systemStats.frames > 0,
+          (micStats.frames > 0 && systemStats.frames > 0) || testWindow != nil
+            || systemClosure != nil,
+          micStats.appendFailures == 0, systemStats.appendFailures == 0
+        else {
+          throw ProbeError.capture("audio track is empty or contains failed writes")
+        }
+        for (lane, stats) in [("microphone", micStats), ("system", systemStats)]
+        where stats.frames == 0 {
+          guard
+            !FileManager.default.fileExists(
+              atPath: options.output.appendingPathComponent(lane + "." + trackExtension).path)
+          else {
+            throw ProbeError.capture("unreceived input has an unexpected audio payload")
+          }
+        }
+        if let rawMic {
+          try rawMic.verifyClosed(expected: micStats)
+        } else if micStats.frames > 0 {
+          try verifyRecordedCAF(
+            options.output.appendingPathComponent("microphone.caf"), expected: micStats)
+        }
+        if let rawSystem {
+          try rawSystem.verifyClosed(expected: systemStats)
+        } else if systemStats.frames > 0 {
+          try verifyRecordedCAF(
+            options.output.appendingPathComponent("system.caf"), expected: systemStats)
+        }
+        if let clock {
+          if options.publishesInputStatus {
+            try manifest.finalizeStoppedClock(
+              clock, microphoneClosure: mic.captureClosure, systemClosure: systemClosure)
+          } else if let testWindow {
+            try manifest.finalizeTestClock(clock, window: testWindow)
+          } else {
+            try manifest.finalizeClock(clock)
+          }
+        }
       }
       try testMicWav?.finish()
       try testSystemWav?.finish()
@@ -418,6 +456,9 @@ enum CaptureSession {
           return nil
         }
       } catch { manifest.errors.append(String(describing: error)) }
+      do { try liveWav?.preserveAcceptedPrefix() } catch {
+        manifest.errors.append(String(describing: error))
+      }
       manifest.state = "failed"
     }
     do {

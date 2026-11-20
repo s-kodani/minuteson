@@ -32,6 +32,20 @@ test("one recording save row survives stop, inventory scan, inner progress and s
   assert.equal(recordingSaveJobs(outer,retry).length,1);
   assert.match(recordingSaveJobs(outer,retry)[0].detail!,/再試行/);
 });
+test("partial-save warning remains successful and rejects invalid warning snapshots", () => {
+  const warning="破損箇所の直前までの音声を保存しました。元音声は保持しています。";
+  const saved: RecoverySnapshot={...running,revision:5,phase:"completed",items:[{...running.items[0],phase:"succeeded",warning}]};
+  assert.equal(acceptRecovery(null,saved),saved);
+  assert.equal(acceptRecovery(saved,running),saved);
+  assert.deepEqual(recoveryProgress(saved),[]);
+  const outer={revision:7,phase:"saving" as const,sessionId:"session-a",meetingId:"meeting-a",elapsedMs:1000,microphoneConnected:false,systemAudioConnected:false,errorMessage:null};
+  assert.deepEqual(recordingSaveJobs(outer,saved),[]);
+  assert.equal(recoveryMeetingState(saved,"meeting-a"),undefined);
+  const bridge={kind:"ready" as const,snapshot:outer};
+  assert.equal(meetingStatusLabel({id:"meeting-a",lifecycle:"recorded"},bridge,saved),"録音済み");
+  for(const warning of [42,true,{},[]]) assert.throws(()=>acceptRecovery(null,{...saved,items:[{...saved.items[0],warning}]}));
+  assert.doesNotThrow(()=>acceptRecovery(null,{...saved,items:[{...saved.items[0],warning:null}]}));
+});
 test("recovery and unrelated analysis coexist, running recovery is visible first without a percentage", () => {
   const items=recoveryProgress(running);
   assert.equal(items.length,2); assert.equal(items[0].total,null);assert.equal(items[0].startedAtMs,100);

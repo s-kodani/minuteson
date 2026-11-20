@@ -15,6 +15,7 @@ pub(crate) struct Item {
     pub phase: String,
     pub started_at_ms: Option<i64>,
     pub error: Option<String>,
+    pub warning: Option<String>,
     pub progress: Option<crate::operation_observation::Progress>,
     pub no_audio: bool,
 }
@@ -130,6 +131,7 @@ fn history_changes(previous: &Snapshot, current: &Snapshot) -> Vec<crate::job_hi
             if prior.is_some_and(|prior| {
                 prior.phase == item.phase
                     && prior.error == item.error
+                    && prior.warning == item.warning
                     && prior.started_at_ms == item.started_at_ms
                     && prior.meeting_title == item.meeting_title
             }) {
@@ -150,7 +152,7 @@ fn history_changes(previous: &Snapshot, current: &Snapshot) -> Vec<crate::job_hi
             entry.detail = if item.phase == "skipped" {
                 Some("保存対象の録音または音声が削除されたため、録音の保存を終了しました。".into())
             } else {
-                item.error.clone()
+                item.error.clone().or_else(|| item.warning.clone())
             };
             Some(entry)
         })
@@ -218,6 +220,7 @@ fn observe_recorder_state(
     if let Some(item) = s.items.iter_mut().find(|i| i.session_id == session) {
         item.phase = if failed { "failed" } else { "running" }.into();
         item.error = current.error_message.clone();
+        item.warning = None;
         if current.progress.is_some() {
             item.progress = current.progress.clone();
         }
@@ -229,6 +232,7 @@ fn observe_recorder_state(
             phase: if failed { "failed" } else { "running" }.into(),
             started_at_ms: Some(now),
             error: current.error_message.clone(),
+            warning: None,
             progress: current.progress.clone(),
             no_audio: false,
         });
@@ -301,6 +305,15 @@ fn run_reserved(app: &tauri::AppHandle, session: Option<&str>, origin: &str) -> 
                     })
                 },
                 &|mut item| {
+                    if item.phase == "succeeded" {
+                        match app
+                            .state::<crate::storage::Storage>()
+                            .recording_save_warning(&item.session_id)
+                        {
+                            Ok(warning) => item.warning = warning,
+                            Err(error) => crate::internal_logs::report_error("recovery", &error),
+                        }
+                    }
                     publish(app, |s| {
                         if let Some(prior) =
                             s.items.iter_mut().find(|p| p.session_id == item.session_id)
@@ -478,6 +491,7 @@ mod tests {
             phase: phase.into(),
             started_at_ms: Some(100),
             error: None,
+            warning: None,
             progress: None,
             no_audio: false,
         }
@@ -530,6 +544,8 @@ mod tests {
         observe_recorder_state(&mut snapshot, "one", "meeting-one", "会議", &recording);
         assert_eq!(snapshot.items[0].started_at_ms, started);
         snapshot.items[0].phase = "succeeded".into();
+        snapshot.items[0].warning =
+            Some("破損箇所の直前までの音声を保存しました。元音声は保持しています。".into());
         snapshot.phase = "completed".into();
         let completed = snapshot.clone();
         recording.phase = crate::session::RecordingPhase::Error;
@@ -537,6 +553,29 @@ mod tests {
         observe_recorder_state(&mut snapshot, "one", "meeting-one", "会議", &recording);
         assert_eq!(snapshot.items, completed.items);
         assert!(history_changes(&completed, &snapshot).is_empty());
+    }
+
+    #[test]
+    fn partial_save_warning_updates_the_same_success_history_once() {
+        let mut running = Snapshot::default();
+        running.items = vec![item("one", "running")];
+        let mut completed = running.clone();
+        completed.phase = "completed".into();
+        completed.items[0].phase = "succeeded".into();
+        completed.items[0].warning =
+            Some("音声の一部を保存しました。元音声は保持しています。".into());
+        let records = history_changes(&running, &completed);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, "recording_save:one");
+        assert_eq!(records[0].state, "succeeded");
+        assert_eq!(records[0].detail, completed.items[0].warning);
+        assert!(history_changes(&completed, &completed).is_empty());
+        let mut corrected = completed.clone();
+        corrected.items[0].warning = Some("破損箇所の直前までの音声を保存しました。".into());
+        let updated = history_changes(&completed, &corrected);
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].id, records[0].id);
+        assert_eq!(updated[0].detail, corrected.items[0].warning);
     }
 
     #[test]

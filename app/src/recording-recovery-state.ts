@@ -8,6 +8,7 @@ export interface RecoveryItem {
   sessionId: string; meetingId: string; meetingTitle: string;
   phase: "queued" | "running" | "succeeded" | "failed" | "skipped";
   startedAtMs: number | null; error: string | null;
+  warning?: string | null;
   noAudio?: boolean;
 }
 export interface RecoverySnapshot {
@@ -27,6 +28,7 @@ export function acceptRecovery(current: RecoverySnapshot | null, input: unknown)
     || !Array.isArray(s.items) || new Set(s.items.map(i => i?.sessionId)).size !== s.items.length
     || s.items.some(i => !i || ![i.sessionId, i.meetingId, i.meetingTitle].every(v => typeof v === "string" && !!v)
       || !["queued", "running", "succeeded", "failed", "skipped"].includes(i.phase) || !optionalText(i.error)
+      || i.warning !== undefined && !optionalText(i.warning)
       || i.noAudio !== undefined && typeof i.noAudio !== "boolean"
       || !(i.startedAtMs === null || Number.isSafeInteger(i.startedAtMs) && i.startedAtMs >= 0)
       || i.phase === "running" && i.startedAtMs === null)
