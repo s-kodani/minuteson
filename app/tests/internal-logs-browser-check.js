@@ -379,6 +379,7 @@ async (page, _capturePath, detailUI) => {
       await page.evaluate(() => {
         const f = window.internalLogsFixture, entries = f.entries.filter(entry => entry.kind === "process");
         const skipped = f.add({ kind: "engine", level: "raw", message: "a newer record outside the current filter" });
+        f.status.droppedEntries = 7;
         f.pages.push({ entries: structuredClone(entries.slice(-200)), olderCursor: entries[0]?.id ?? 0, newerCursor: skipped.id, hasMore: false, expired: false, status: { ...f.status, droppedEntries: 7 } });
       });
       await page.clock.runFor(1100);
