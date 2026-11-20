@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 pub(crate) struct ModelPreparationLease<'a> {
     owner: &'a AnalysisController,
-    cancel: Arc<AtomicBool>,
+    pub(super) cancel: Arc<AtomicBool>,
 }
 
 struct WakeWorker<'a>(&'a AppHandle);

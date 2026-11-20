@@ -423,15 +423,72 @@ impl AnalysisController {
         }
         // Model files have no notification-history IO. Reserve the same start
         // gates as maintenance, but never pause or drain notification owners.
-        let cancel = Arc::new(AtomicBool::new(false));
+        Ok(self.reserve_model_deletion(&mut state, Arc::new(AtomicBool::new(false))))
+    }
+
+    pub(super) fn begin_model_cleanup(
+        &self,
+        job: model_cleanup::Job,
+        recording_active: bool,
+        import_blocked: bool,
+        preparation: Option<&Arc<AtomicBool>>,
+    ) -> Result<Option<DataMaintenanceLease>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "モデル整理の状態を取得できません")?;
+        if recording_active
+            || import_blocked
+            || preparation.is_none() && self.model_cleanup_suspended.load(Ordering::Acquire)
+        {
+            return Ok(None);
+        }
+        let preparation = match preparation {
+            Some(owner) => {
+                if owner.load(Ordering::Acquire)
+                    || !state
+                        .model_preparation
+                        .as_ref()
+                        .is_some_and(|active| operation::same_owner(active, owner))
+                {
+                    return Ok(None);
+                }
+                state.model_preparation.take()
+            }
+            None => None,
+        };
+        let request = Request::new(Kind::ModelDeletion, Scope::ModelCatalog);
+        if !state
+            .admission(request, self.shutdown.load(Ordering::SeqCst))
+            .can_reserve()
+        {
+            if preparation.is_some() {
+                state.model_preparation = preparation;
+            }
+            return Ok(None);
+        }
+        let lease = self.reserve_model_deletion(
+            &mut state,
+            preparation.unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
+        );
+        state.model_cleanup.revision += 1;
+        state.model_cleanup.active = Some(job);
+        Ok(Some(lease))
+    }
+
+    fn reserve_model_deletion(
+        &self,
+        state: &mut State,
+        cancel: Arc<AtomicBool>,
+    ) -> DataMaintenanceLease {
         state.model_deletion = Some(cancel.clone());
-        Ok(DataMaintenanceLease {
+        DataMaintenanceLease {
             state: self.state.clone(),
             idle: self.idle.clone(),
             shutdown: self.shutdown.clone(),
             cancel,
             scope: MaintenanceScope::ModelDeletion,
-        })
+        }
     }
 
     pub(crate) fn begin_export(&self) -> Result<ExportAdmissionLease, String> {
@@ -609,6 +666,9 @@ impl Drop for DataMaintenanceLease {
             MaintenanceScope::Meeting(_) => return,
         };
         if operation::release_owned(owner, &self.cancel) {
+            if self.is_model_deletion() && state.model_cleanup.active.take().is_some() {
+                state.model_cleanup.revision += 1;
+            }
             self.idle.notify_all();
         }
     }

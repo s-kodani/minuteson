@@ -45,8 +45,29 @@ async (page, capturePath, { approveModelLicense }) => {
   await page.getByRole("button", { name: "設定", exact: true }).click();
   await expand(); await common().getByText("モデルを配置中", { exact: true }).waitFor();
   await expand(); await common().getByText(/全体の経過時間 5分20秒/).waitFor();
-  await page.evaluate(() => { window.modelDownloadFixture.mode = "success"; window.modelDownloadFixture.finish(); });
+  await page.evaluate(() => {
+    window.operationProgressFixture.holdCleanup = true;
+    window.modelDownloadFixture.mode = "success";
+    window.modelDownloadFixture.finish();
+  });
+  await expand();
+  await common().getByText("重複モデルを整理中", { exact: true }).waitFor();
+  await common().getByText("完了後に録音・音声取り込みを開始できます", { exact: false }).waitFor();
+  await common().locator(".progress-disclosure").click();
+  await common().getByText("重複モデルを整理中", { exact: true }).waitFor({ state: "hidden" });
+  check(await common().locator(".progress-ring").isVisible(), "collapsed cleanup changed the common ring");
+  await page.getByRole("button", { name: "ジョブ一覧", exact: true }).click();
+  const activeJobs = page.locator(".job-list-rows");
+  await activeJobs.getByText("重複モデルを整理中", { exact: true }).waitFor();
+  check(await activeJobs.locator("li").count() === 1, "cleanup created a second job for the same settings operation");
+  await page.evaluate(() => window.operationProgressFixture.finishCleanup());
   await common().waitFor({ state: "hidden" });
+  await page.getByRole("tab", { name: "履歴", exact: true }).click();
+  const history = page.getByRole("region", { name: "過去のジョブ履歴" });
+  await history.getByRole("listitem").getByText("要確認", { exact: true }).waitFor();
+  await history.getByRole("button", { name: /モデル準備.*詳細/ }).click();
+  await page.getByRole("dialog", { name: "ジョブの詳細" }).getByText("モデル設定は反映済み。重複モデルの整理は未完了", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "モデル設定を開く", exact: true }).click();
   await models.getByText("使用中", { exact: true }).waitFor();
   check(await page.evaluate(() => window.modelDownloadFixture.calls.filter(call => call.command === "start_model_download").length) === 1, "returning to settings restarted download");
   check(await page.evaluate(() => {

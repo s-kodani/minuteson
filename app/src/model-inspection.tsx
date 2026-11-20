@@ -10,6 +10,7 @@ import type { AnalysisPreferences, EnginePreferences } from "./analysis-state";
 import { invoke, isTauri } from "./ipc.ts";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
+import type { ModelCleanupJob } from "./model-cleanup";
 import { usePublishProgress } from "./operation-progress";
 import { acceptTransferProgress, modelProgress, type TransferProgress } from "./operation-progress-state";
 import { ModelIssue } from "./model-issue";
@@ -48,7 +49,7 @@ function modelOptionLabel(choice: ModelChoice): string {
     ? `【おすすめ】${choice.label}`
     : choice.label;
 }
-export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, runtimeUpdateEpoch = 0, visible = true, stopRequested, deletion }: { locked: boolean; recordingActive: boolean; refreshEpoch?: number; runtimeUpdateEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
+export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, runtimeUpdateEpoch = 0, visible = true, stopRequested, deletion, cleanup }: { cleanup?: ModelCleanupJob | null; locked: boolean; recordingActive: boolean; refreshEpoch?: number; runtimeUpdateEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const runtimeRequestHandled = useRef(0);
   useEffect(() => {
@@ -96,8 +97,24 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   blocked.current = mustStop;
   const historyOperation = useRef(unresolved?.historyOperationId ?? crypto.randomUUID());
   const startedAt = useRef(unresolved?.startedAtMs);
-  const progress = busy || pending ? modelProgress(target, pending?.stage === "place" && pending.verifying ? "place_verify" : pending?.stage, transfer, !busy || recovering ? "recovering" : waitingToken === pending?.token ? "queued" : "running", startedAt.current) : null;
-  usePublishProgress("model", [progress]);
+  const lastCleanup = useRef<ModelCleanupJob | null>(null);
+  const localProgress = busy || pending
+    ? { ...modelProgress(target, pending?.stage === "place" && pending.verifying ? "place_verify" : pending?.stage, transfer,
+      !busy || recovering ? "recovering" : waitingToken === pending?.token ? "queued" : "running", startedAt.current),
+      id: `model:${historyOperation.current}` }
+    : null;
+  if (cleanup?.id === historyOperation.current) lastCleanup.current = cleanup;
+  const finishing = localProgress && lastCleanup.current?.id === historyOperation.current ? lastCleanup.current : null;
+  const cleanupJob = cleanup ?? finishing;
+  const cleanupProgress = cleanupJob ? {
+    ...modelProgress(cleanupJob.target, "cleanup", null, "running",
+      localProgress?.id === `model:${cleanupJob.id}` ? startedAt.current : cleanupJob.startedAtMs),
+    id: `model:${cleanupJob.id}`,
+  } : null;
+  usePublishProgress("model", [
+    cleanupProgress,
+    localProgress?.id === cleanupProgress?.id ? null : localProgress,
+  ]);
   const retain = (value: Pending | null) => { unresolved = value; if (mounted.current) setPending(value); };
   const load = async (publish = true) => {
     const [placed, catalog] = await Promise.all([invoke<ModelPlacementEntry[]>("get_model_placements"), invoke<ModelProfileView[]>("get_model_profiles")]);
@@ -294,7 +311,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     if (!choice || choice.value !== request.value || !target || !sameModelLicenseTarget(target, request.target)) throw Error("モデルの選択内容が変わりました。利用条件を開き直してください。");
     return { choice, used };
   };
-  const canConfirmLicense = () => mounted.current && latest.current.visible && !latest.current.locked && !latest.current.recordingActive && !blocked.current && !running.current && !unresolved && isTauri();
+  const canConfirmLicense = () => !cleanup && mounted.current && latest.current.visible && !latest.current.locked && !latest.current.recordingActive && !blocked.current && !running.current && !unresolved && isTauri();
   const useModel = async (engine: string, value: string, confirmation = true, actionLabel = "使用", opener?: HTMLElement) => {
     if (!canConfirmLicense() || licenseRequest.current) return;
     const choice = modelChoices(engine, entries, options, profiles).find(item => item.value === value || item.packageIds.includes(value));
@@ -401,7 +418,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
     void attempt();
     return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [pending, mustStop]);
-  const disabled = locked || recordingActive || !!busy || !!pending || !isTauri();
+  const disabled = locked || recordingActive || !!cleanup || !!busy || !!pending || !isTauri();
   const installed = installedModelGroups(entries, profiles);
 
   const selectedProfile = profiles.find(item => item.name === "standard");

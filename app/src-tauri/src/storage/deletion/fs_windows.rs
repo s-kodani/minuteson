@@ -311,6 +311,30 @@ impl Directory {
         )?;
         self.verify()
     }
+
+    pub(super) fn unlink_checked_child(
+        &self,
+        leaf: &str,
+        directory: bool,
+        expected: &Proof,
+    ) -> Result<(), String> {
+        name(leaf)?;
+        let _pin = win::directory(&self.path)?;
+        self.verify()?;
+        win::remove_owned_checked(
+            &self.path.join(leaf),
+            &expected.identity.native(),
+            directory,
+            |file| {
+                let current = native_fs::metadata(file).map_err(|e| e.to_string())?;
+                if Proof::read(&current)? != *expected {
+                    return Err("削除直前に整理対象が変更されています".into());
+                }
+                Ok(())
+            },
+        )?;
+        self.verify()
+    }
     pub(super) fn remove_reserved_tree(
         &self,
         leaf: &str,

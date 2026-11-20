@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub(crate) mod data_maintenance;
+pub(crate) mod model_cleanup;
 mod model_preparation;
 
 #[cfg(test)]
@@ -26,6 +27,7 @@ struct State {
     model_preparation: Option<std::sync::Arc<AtomicBool>>,
     data_maintenance: Option<std::sync::Arc<AtomicBool>>,
     model_deletion: Option<std::sync::Arc<AtomicBool>>,
+    model_cleanup: model_cleanup::Snapshot,
     meeting_deletions: std::collections::HashMap<String, std::sync::Arc<AtomicBool>>,
     export_intent: bool,
     export_owner: Option<std::sync::Arc<AtomicBool>>,
@@ -115,7 +117,6 @@ pub struct AnalysisController {
     state: std::sync::Arc<Mutex<State>>,
     idle: std::sync::Arc<Condvar>,
     shutdown: std::sync::Arc<AtomicBool>,
-    model_cleanup_failed: Mutex<std::collections::HashSet<String>>,
     model_cleanup_disabled: AtomicBool,
     model_cleanup_suspended: AtomicBool,
 }
@@ -146,7 +147,13 @@ impl AnalysisController {
             .state
             .lock()
             .map_err(|_| "解析ロックを取得できません")?;
-        if controller.shutdown.load(Ordering::SeqCst) || state.blocks_worker() {
+        if controller.shutdown.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if state.blocks_worker() {
+            if state.model_cleanup.active.is_some() {
+                state.wake = true;
+            }
             return Ok(());
         }
         state.wake = true;
@@ -159,13 +166,10 @@ impl AnalysisController {
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Self::work(&app)));
             let controller = app.state::<Self>();
-            let wake = if let Ok(mut state) = controller.state.lock() {
+            if let Ok(mut state) = controller.state.lock() {
                 state.busy = false;
                 controller.idle.notify_all();
-                state.wake && !state.blocks_worker() && !controller.shutdown.load(Ordering::SeqCst)
-            } else {
-                false
-            };
+            }
             if result.is_err() {
                 crate::internal_logs::report_error(
                     "analysis",
@@ -179,67 +183,14 @@ impl AnalysisController {
             if result.is_ok() {
                 Self::cleanup_models(&app);
             }
+            let wake = controller.state.lock().is_ok_and(|state| {
+                state.wake && !state.blocks_worker() && !controller.shutdown.load(Ordering::SeqCst)
+            });
             if wake {
                 let _ = Self::kick(&app);
             }
         });
         Ok(())
-    }
-
-    fn cleanup_models(app: &AppHandle) {
-        let controller = app.state::<Self>();
-        let storage = app.state::<Storage>();
-        if storage.data_write_blocked()
-            || controller.model_cleanup_disabled.load(Ordering::Acquire)
-            || controller.model_cleanup_suspended.load(Ordering::Acquire)
-        {
-            return;
-        }
-        let recording = app
-            .state::<crate::session::SessionStore>()
-            .snapshot()
-            .is_active();
-        let Ok(importing) = app
-            .state::<crate::import_controller::ImportController>()
-            .snapshot()
-        else {
-            return;
-        };
-        let Ok(lease) = controller.begin_model_deletion(
-            recording,
-            importing.busy || importing.recording_blocked,
-            &|| false,
-        ) else {
-            return;
-        };
-        let Ok(mut failed) = controller.model_cleanup_failed.lock() else {
-            return;
-        };
-        let root = match app.path().app_data_dir() {
-            Ok(path) => path.join("models"),
-            Err(_) => return,
-        };
-        let result = crate::storage::deletion::models::cleanup::sweep(
-            &storage,
-            &root,
-            &lease,
-            &mut failed,
-            &|| lease.cancelled(),
-        );
-        if let Err(error) = &result {
-            if !lease.cancelled() {
-                controller
-                    .model_cleanup_disabled
-                    .store(true, Ordering::Release);
-                crate::internal_logs::report_error("model_cleanup", error);
-            }
-        }
-        drop(lease);
-        // A failed sweep can have retired some packages or saved partial progress.
-        // Readers must refresh both availability and the pending-keeper hint.
-        if !matches!(result, Ok(false)) {
-            let _ = app.emit("model-inventory-changed", ());
-        }
     }
 
     pub(crate) fn model_application_finished(&self) {
@@ -480,14 +431,22 @@ impl AnalysisController {
         }
     }
 
-    pub fn prepare_recording(app: &AppHandle) -> Result<(), String> {
-        app.state::<Storage>().require_data_writable()?;
+    pub fn prepare_recording(app: &AppHandle) -> Result<(), mon_contracts::AppError> {
         let controller = app.state::<Self>();
-        {
+        let reserved = (|| {
+            app.state::<Storage>().require_data_writable()?;
             let mut state = controller
                 .state
                 .lock()
                 .map_err(|_| "解析ロックを取得できません")?;
+            if state.model_cleanup.active.is_some() {
+                return Err(mon_contracts::AppError {
+                    code: "recording_model_cleanup_not_started".into(),
+                    message: "重複モデルを整理中です。録音は開始していません。整理が完了してから再試行してください。".into(),
+                    operation_id: None,
+                    retry_disposition: mon_contracts::RetryDisposition::NotStarted,
+                });
+            }
             if !state
                 .admission(
                     Request::new(Kind::Recording, Scope::Global),
@@ -500,10 +459,15 @@ impl AnalysisController {
             app.state::<Storage>().request_pause_for_recording()?;
             state.recording_intent = true;
             state.cancel_model_preparation();
+            Ok(())
+        })();
+        if let Err(error) = reserved {
+            crate::import_controller::ImportController::recording_finished(app);
+            return Err(error);
         }
         if let Err(error) = controller.wait_idle(Duration::from_secs(15)) {
             Self::recording_finished(app);
-            return Err(error);
+            return Err(error.into());
         }
         Ok(())
     }
@@ -529,6 +493,9 @@ impl AnalysisController {
         let c = app.state::<Self>();
         {
             let mut state = c.state.lock().map_err(|_| "解析ロックを取得できません")?;
+            if state.model_cleanup.active.is_some() {
+                return Err("重複モデルを整理中です。完了後に音声取り込みを開始できます。".into());
+            }
             if cancelled()
                 || !state
                     .admission(
@@ -631,7 +598,10 @@ impl AnalysisController {
     }
     pub(crate) fn close_activity(&self) -> Result<(bool, bool), String> {
         let state = self.state.lock().map_err(|_| "解析状態を取得できません")?;
-        Ok((state.busy, state.model_preparation.is_some()))
+        Ok((
+            state.busy,
+            state.model_preparation.is_some() || state.model_cleanup.active.is_some(),
+        ))
     }
     /// Call while holding the recorder transition lock, which also owns exit
     /// admission. A save retry cannot start behind a successful exit check.

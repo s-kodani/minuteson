@@ -633,6 +633,22 @@
       }
     },
     {
+      "name": "get_model_cleanup",
+      "handler": "analysis_worker::model_cleanup::get_model_cleanup",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Snapshot,mon_contracts::AppError>",
+          "ok": "Snapshot",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "get_model_profiles",
       "handler": "get_model_profiles",
       "roles": [

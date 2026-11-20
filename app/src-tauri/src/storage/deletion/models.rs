@@ -394,6 +394,18 @@ fn capture_mode(
     check: &impl Fn() -> bool,
     directory_scope: bool,
 ) -> Result<Snapshot, String> {
+    capture_snapshot(storage, root, package, review, check, directory_scope, true)
+}
+
+fn capture_snapshot(
+    storage: &Storage,
+    root: &Path,
+    package: &str,
+    review: &str,
+    check: &impl Fn() -> bool,
+    directory_scope: bool,
+    repeat_inventory: bool,
+) -> Result<Snapshot, String> {
     validate_root(storage, root, package)?;
     let metadata = || -> Result<_, String> {
         let db = crate::operation_observation::lock(&storage.connection)?;
@@ -433,7 +445,7 @@ fn capture_mode(
         }
     };
     let observations = inventory()?;
-    if inventory()? != observations
+    if (repeat_inventory && inventory()? != observations)
         || metadata()? != ((record.clone(), placed), counts)
         || models.proof()?.identity != models_root
         || storage.managed_anchor.identity()? != (storage_root.clone(), database.clone())

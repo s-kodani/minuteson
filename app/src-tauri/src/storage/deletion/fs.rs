@@ -270,16 +270,26 @@ impl Directory {
         if !leaf.starts_with(".mon-delete-") {
             return Err("削除用予約名ではありません".into());
         }
+        self.unlink_checked_child(leaf, directory, expected)?;
+        self.sync()
+    }
+
+    pub(super) fn unlink_checked_child(
+        &self,
+        leaf: &str,
+        directory: bool,
+        expected: &Proof,
+    ) -> Result<(), String> {
+        self.verify()?;
+        let name = name(leaf)?;
         let current = std::fs::symlink_metadata(self.path.join(leaf)).map_err(|e| e.to_string())?;
-        if Proof::read(&current)? != *expected {
+        if current.is_dir() != directory || Proof::read(&current)? != *expected {
             return Err("削除直前に予約対象が変更されています".into());
         }
-        let leaf = name(leaf)?;
         let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
-        if unsafe { libc::unlinkat(self.file.as_raw_fd(), leaf.as_ptr(), flags) } != 0 {
+        if unsafe { libc::unlinkat(self.file.as_raw_fd(), name.as_ptr(), flags) } != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        self.file.sync_all().map_err(|e| e.to_string())?;
         self.verify()
     }
     pub(super) fn remove_reserved_tree(

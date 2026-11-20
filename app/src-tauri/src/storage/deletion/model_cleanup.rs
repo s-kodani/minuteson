@@ -10,12 +10,35 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet},
     path::Path,
 };
 
 const PREFIX: &str = "model_cleanup_v1/";
 const MAX_JOURNAL: usize = 1_048_576;
+
+#[path = "model_cleanup/folder.rs"]
+mod folder;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Job {
+    pub id: String,
+    pub target: String,
+    pub started_at_ms: u64,
+    pub applied_package: Option<String>,
+}
+
+impl Job {
+    fn valid(&self) -> bool {
+        uuid::Uuid::parse_str(&self.id).is_ok()
+            && self
+                .applied_package
+                .as_deref()
+                .is_none_or(|id| uuid::Uuid::parse_str(id).is_ok())
+            && self.target.len() <= 4096
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,15 +55,32 @@ struct Journal {
     keeper: Snapshot,
     next: usize,
     pending: Option<Pending>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    job: Option<Job>,
 }
 impl Journal {
     fn complete(&self) -> bool {
-        self.next == self.source.observations.len()
+        self.next == self.steps()
+    }
+    fn steps(&self) -> usize {
+        if self.version == 2 {
+            1
+        } else {
+            self.source.observations.len()
+        }
     }
     fn validate(&self) -> Result<(), String> {
         self.source.validate()?;
         self.keeper.validate()?;
-        if self.version != 1
+        if !matches!(self.version, 1 | 2)
+            || self.version == 1 && self.job.is_some()
+            || self.version == 2 && !self.job.as_ref().is_some_and(Job::valid)
+            || self.version == 2 && !(self.complete() || self.pending.is_some())
+            || self
+                .job
+                .as_ref()
+                .and_then(|job| job.applied_package.as_deref())
+                .is_some_and(|package| package != self.keeper.record.package_id)
             || self.source.directory_scope
             || self.keeper.directory_scope
             || !Path::new(&self.models_root).is_absolute()
@@ -62,12 +102,25 @@ impl Journal {
                 .any(|o| {
                     !o.entry.registered || o.entry.changed || !o.entry.present || o.proof.is_none()
                 })
-            || self.next > self.source.observations.len()
+            || self.next > self.steps()
             || self.complete() && self.pending.is_some()
         {
             return Err("モデル自動整理の保存対象が不正です。対象を保持します".into());
         }
         if let Some(p) = &self.pending {
+            if self.version == 2 {
+                let expected = self.source.observations[0]
+                    .proof
+                    .as_ref()
+                    .unwrap()
+                    .directory_scope();
+                if p.before != expected
+                    || p.staged.as_ref().is_some_and(|staged| *staged != expected)
+                {
+                    return Err("モデル整理のフォルダー記録が不正です".into());
+                }
+                return Ok(());
+            }
             let o = self
                 .source
                 .observations
@@ -440,7 +493,7 @@ fn verify_remaining(
     models.verify()?;
     Ok(models)
 }
-fn run(
+fn run_legacy(
     storage: &Storage,
     j: &mut Journal,
     lease: &DataMaintenanceLease,
@@ -530,118 +583,198 @@ fn run(
 /// Catalog order is newest first. Selected packages win; otherwise prefer the
 /// newest checked package. Never promote an unchecked replacement to delete the
 /// only known usable model, nor retire a package referenced by resumable work.
-pub(crate) fn sweep(
+pub(crate) struct Target {
+    work: Work,
+}
+
+enum Work {
+    Resume(Box<Journal>),
+    Duplicate {
+        source: Box<CatalogEntry>,
+        keeper: Box<CatalogEntry>,
+    },
+}
+
+impl Target {
+    pub(crate) fn package(&self) -> &str {
+        match &self.work {
+            Work::Resume(journal) => &journal.source.record.package_id,
+            Work::Duplicate { source, .. } => &source.package_id,
+        }
+    }
+
+    pub(crate) fn job(&self) -> Option<&Job> {
+        match &self.work {
+            Work::Resume(journal) => journal.job.as_ref(),
+            Work::Duplicate { .. } => None,
+        }
+    }
+}
+
+pub(crate) fn plan(
     storage: &Storage,
-    root: &Path,
-    lease: &DataMaintenanceLease,
-    failed: &mut HashSet<String>,
-    check: &impl Fn() -> bool,
-) -> Result<bool, String> {
-    active(storage, lease, check)?;
-    let _proofs = super::super::verification::Scope::enter();
-    let ids = {
+    applied_package: Option<&str>,
+) -> Result<Vec<Target>, String> {
+    let mut targets = Vec::new();
+    if applied_package.is_none() {
         let db = crate::operation_observation::lock(&storage.connection)?;
-        journal_ids(&db)?
-    };
-    let mut changed = false;
-    for id in ids {
-        let mut journal = {
-            let db = crate::operation_observation::lock(&storage.connection)?;
-            read(&db, &id)?.ok_or("整理記録がありません")?
-        };
-        if journal.complete() || failed.contains(&id) {
-            continue;
-        }
-        if journal.models_root != root.to_str().ok_or("モデル保存先が不正です")? {
-            return Err("モデル整理の保存先が変わっています".into());
-        }
-        match run(storage, &mut journal, lease, check) {
-            Ok(()) => changed = true,
-            Err(error) => {
-                if !check() && !lease.cancelled() {
-                    failed.insert(id);
-                }
-                return Err(error);
+        for id in journal_ids(&db)? {
+            let journal = read(&db, &id)?.ok_or("整理記録がありません")?;
+            if !journal.complete() {
+                return Ok(vec![Target {
+                    work: Work::Resume(Box::new(journal)),
+                }]);
             }
         }
     }
     let mut groups: BTreeMap<String, Vec<CatalogEntry>> = BTreeMap::new();
-    for e in storage.list_model_placements()? {
-        if e.placement_recorded && !e.body_removed {
-            if let Some(key) = entry_identity(&e) {
-                groups.entry(key).or_default().push(e);
+    for entry in storage.list_model_placements()? {
+        if entry.placement_recorded && !entry.body_removed {
+            if let Some(key) = entry_identity(&entry) {
+                groups.entry(key).or_default().push(entry);
             }
         }
     }
-    for group in groups.values().filter(|g| g.len() > 1) {
-        active(storage, lease, check)?;
-        let keeper_id = {
-            let db = crate::operation_observation::lock(&storage.connection)?;
-            let selected_ids = super::super::super::model_profiles::current_packages(&db)?;
-            keeper(group, &selected_ids).map(|e| e.package_id.clone())
+    if !groups.values().any(|group| group.len() > 1) {
+        return Ok(targets);
+    }
+    let db = crate::operation_observation::lock(&storage.connection)?;
+    let selected = super::super::super::model_profiles::current_packages(&db)?;
+    let pending = pending_keepers(&db)?;
+    for group in groups.values().filter(|group| group.len() > 1) {
+        let keeper = match applied_package {
+            Some(package) => group
+                .iter()
+                .find(|entry| entry.package_id == package && selected.contains(package)),
+            None => keeper(group, &selected),
         };
-        let Some(keeper_id) = keeper_id else {
+        let Some(keeper) = keeper else {
             continue;
         };
-        let keeper_entry = group.iter().find(|e| e.package_id == keeper_id).unwrap();
-        if !keeper_entry
+        if !keeper
             .compatibility
             .as_ref()
-            .is_some_and(|c| c.state == crate::model_compatibility::CheckState::Succeeded)
+            .is_some_and(|check| check.state == crate::model_compatibility::CheckState::Succeeded)
         {
             continue;
         }
-        for e in group.iter().filter(|e| e.package_id != keeper_id) {
-            if failed.contains(&e.package_id) {
-                continue;
-            }
-            let blocked = {
-                let db = crate::operation_observation::lock(&storage.connection)?;
-                protected(&db, &e.package_id)? || pending_keepers(&db)?.contains(&e.package_id)
-            };
-            if blocked {
-                continue;
-            }
-            let result = (|| {
-                let source = super::capture_mode(
-                    storage,
-                    root,
-                    &e.package_id,
-                    &e.review_hash,
-                    check,
-                    false,
-                )?;
-                let keeper = super::capture_mode(
-                    storage,
-                    root,
-                    &keeper_id,
-                    &keeper_entry.review_hash,
-                    check,
-                    false,
-                )?;
-                let mut j = Journal {
-                    version: 1,
-                    models_root: root.to_str().ok_or("モデル保存先が不正です")?.into(),
-                    source,
-                    keeper,
-                    next: 0,
-                    pending: None,
-                };
-                save(storage, &j, None, lease, check)?;
-                run(storage, &mut j, lease, check)
-            })();
-            match result {
-                Ok(()) => changed = true,
-                Err(error) => {
-                    if !check() && !lease.cancelled() {
-                        failed.insert(e.package_id.clone());
-                    }
-                    return Err(error);
+        for source in group
+            .iter()
+            .filter(|entry| entry.package_id != keeper.package_id)
+        {
+            if !pending.contains(&source.package_id) && !protected(&db, &source.package_id)? {
+                targets.push(Target {
+                    work: Work::Duplicate {
+                        source: Box::new(source.clone()),
+                        keeper: Box::new(keeper.clone()),
+                    },
+                });
+                if applied_package.is_none() {
+                    return Ok(targets);
                 }
             }
         }
     }
-    Ok(changed)
+    Ok(targets)
+}
+
+fn verified_keeper(
+    keepers: &mut BTreeMap<String, Snapshot>,
+    storage: &Storage,
+    root: &Path,
+    package: &str,
+    review: &str,
+    check: &impl Fn() -> bool,
+) -> Result<Snapshot, String> {
+    match keepers.entry(package.to_owned()) {
+        std::collections::btree_map::Entry::Occupied(entry) => Ok(entry.get().clone()),
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            let snapshot =
+                super::capture_snapshot(storage, root, package, review, check, false, false)?;
+            Ok(entry.insert(snapshot).clone())
+        }
+    }
+}
+
+pub(crate) fn execute(
+    storage: &Storage,
+    root: &Path,
+    targets: Vec<Target>,
+    job: &Job,
+    lease: &DataMaintenanceLease,
+) -> Result<(), String> {
+    let check = || lease.cancelled();
+    let mut keepers = BTreeMap::new();
+    for target in targets {
+        active(storage, lease, &check)?;
+        let _proofs = super::super::verification::Scope::enter();
+        match target.work {
+            Work::Resume(mut journal) => {
+                if journal.models_root != root.to_str().ok_or("モデル保存先が不正です")?
+                {
+                    return Err("モデル整理の保存先が変わっています".into());
+                }
+                if journal.version == 1 {
+                    run_legacy(storage, &mut journal, lease, &check)?;
+                    continue;
+                }
+                let stored_keeper = &journal.keeper;
+                let keeper = verified_keeper(
+                    &mut keepers,
+                    storage,
+                    root,
+                    &stored_keeper.record.package_id,
+                    &stored_keeper.record.review_hash,
+                    &check,
+                )?;
+                if keeper.record != stored_keeper.record
+                    || keeper.observations != stored_keeper.observations
+                {
+                    return Err("保持するモデルの内容・実体が変わっています".into());
+                }
+                folder::run(storage, &mut journal, lease, &check)?;
+            }
+            Work::Duplicate { source, keeper } => {
+                let source = super::capture_snapshot(
+                    storage,
+                    root,
+                    &source.package_id,
+                    &source.review_hash,
+                    &check,
+                    false,
+                    false,
+                )?;
+                let keeper = verified_keeper(
+                    &mut keepers,
+                    storage,
+                    root,
+                    &keeper.package_id,
+                    &keeper.review_hash,
+                    &check,
+                )?;
+                let before = source.observations[0]
+                    .proof
+                    .as_ref()
+                    .ok_or("整理対象のフォルダーがありません")?
+                    .directory_scope();
+                let mut journal = Journal {
+                    version: 2,
+                    models_root: root.to_str().ok_or("モデル保存先が不正です")?.into(),
+                    source,
+                    keeper,
+                    next: 0,
+                    pending: Some(Pending {
+                        before,
+                        staged: None,
+                    }),
+                    job: Some(job.clone()),
+                };
+                save(storage, &journal, None, lease, &check)?;
+                folder::run(storage, &mut journal, lease, &check)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

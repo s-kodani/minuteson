@@ -28,6 +28,7 @@ pub fn permits(command: &str, role: &str) -> bool {
         "get_downloaded_model_placement_result" => matches!(role, "main"),
         "cancel_model_inspection" => matches!(role, "main"),
         "get_model_placements" => matches!(role, "main"),
+        "get_model_cleanup" => matches!(role, "main"),
         "get_model_profiles" => matches!(role, "main"),
         "preview_model_profile_application" => matches!(role, "main"),
         "apply_model_profile_application" => matches!(role, "main"),
