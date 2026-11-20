@@ -28,7 +28,7 @@ export function RecordingSaveRetry({snapshot, meetingId, locked}: {snapshot: Sna
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState("");
   if (!item || item.phase !== "failed" || item.noAudio) return null;
-  return <><IssueNotice scope={item.sessionId} type="recording-save-retry" label="音声の保存" message={error}/><button type="button" className="small-secondary" disabled={locked || busy || snapshot?.phase === "running" || snapshot?.phase === "scanning"} onClick={async()=>{
+  return <><IssueNotice scope={item.sessionId} type="recording-save-retry" label="音声の保存" message={error}/><button type="button" role="menuitem" disabled={locked || busy || snapshot?.phase === "running" || snapshot?.phase === "scanning"} onClick={async()=>{
     if(pending.current)return;
     pending.current=true;setBusy(true);setError("");
     try { await invoke("retry_recording_recovery",{sessionId:item.sessionId}); }
