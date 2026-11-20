@@ -80,6 +80,14 @@ pub(crate) struct Review {
 }
 
 impl Review {
+    /// Compatibility fixtures outside recordings need the historical files,
+    /// not a producer handle or a current recovery operation.
+    #[cfg(test)]
+    pub(crate) fn prepare_legacy_flac_for_test(&self, storage: &Storage) -> Result<(), String> {
+        drop(self.legacy_publication_for_test(storage)?);
+        Ok(())
+    }
+
     /// Reproduce an already-owned old producer workspace in compatibility
     /// tests. Current recovery deliberately never invokes this converter.
     #[cfg(test)]

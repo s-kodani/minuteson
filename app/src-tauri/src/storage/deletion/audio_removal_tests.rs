@@ -61,12 +61,11 @@ fn flac_workspace_audio_removal_reopens_after_rename_unlink_and_advance_with_fix
             .storage
             .review_partial_recording(&fixture.session.id)
             .unwrap();
-        fixture.reject_partial_commit(true);
-        assert!(fixture
-            .storage
-            .recover_partial_recording(&review, true)
-            .is_err());
-        fixture.reject_partial_commit(false);
+        // Exercise ownership/removal of a historical interrupted FLAC
+        // workspace. Current recovery writes the final WAV directly.
+        review
+            .prepare_legacy_flac_for_test(&fixture.storage)
+            .unwrap();
         let original = std::fs::read(fixture.base.join("partial-flac.json")).unwrap();
         let census = crate::storage::deletion::audio::Census::capture(
             &fixture.storage,
