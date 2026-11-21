@@ -511,7 +511,7 @@ fn audio_consent_keep_cancel_and_panic_roll_back_progress_and_restore_writer_pro
 }
 
 #[test]
-fn audio_consent_cold_keep_preserves_stale_jobs_and_requires_restart_before_ordinary_recovery() {
+fn audio_consent_cold_keep_recovers_stale_audio_jobs_after_scoped_hold_is_released() {
     let mut f = Fixture::new();
     let census = f.census();
     let op = uuid::Uuid::new_v4().to_string();
@@ -533,12 +533,14 @@ fn audio_consent_cold_keep_preserves_stale_jobs_and_requires_restart_before_ordi
             .unwrap()
     };
     assert_eq!(state(&f), "running");
-    assert!(f.storage.data_write_blocked());
+    assert!(!f.storage.data_write_blocked());
+    assert!(f.storage.require_global_data_writable().is_err());
+    assert!(
+        super::require_source(&f.storage.connection.lock().unwrap(), &meeting)
+            .is_err_and(|error| error.contains("削除の確認・処理中"))
+    );
+    f.storage.create_meeting("OTHER MEETING").unwrap();
     let controller = AnalysisController::default();
-    controller.require_storage_restart();
-    assert!(controller
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
-        .is_err());
     let owner = controller
         .begin_audio_deletion_maintenance(
             &f.storage,
@@ -555,12 +557,10 @@ fn audio_consent_cold_keep_preserves_stale_jobs_and_requires_restart_before_ordi
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    assert!(f
-        .storage
-        .require_data_writable()
-        .unwrap_err()
-        .contains("再起動"));
-    assert_eq!(state(&f), "running");
+    assert_eq!(state(&f), "interrupted");
+    assert!(!f.storage.restart_required());
+    f.storage.require_global_data_writable().unwrap();
+    super::require_source(&f.storage.connection.lock().unwrap(), &meeting).unwrap();
     drop(owner);
     reopen(&mut f, |_| {});
     assert_eq!(state(&f), "interrupted");
@@ -699,7 +699,19 @@ fn audio_consent_corrupt_subtype_proofs_progress_and_null_meeting_never_grant_ke
                 }
             }
         });
-        assert!(f.storage.data_write_blocked(), "{mode}");
+        let shared_hold = matches!(mode, "subtype" | "meeting");
+        assert_eq!(f.storage.data_write_blocked(), shared_hold, "{mode}");
+        assert!(f.storage.require_global_data_writable().is_err(), "{mode}");
+        assert!(
+            super::require_source(&f.storage.connection.lock().unwrap(), &f.meeting)
+                .is_err_and(|error| error.contains("削除の確認・処理中")),
+            "{mode}"
+        );
+        assert_eq!(
+            f.storage.create_meeting("OTHER MEETING").is_err(),
+            shared_hold,
+            "{mode}"
+        );
         assert!(authorize_review(&f.storage, &op).is_err(), "{mode}");
         assert!(
             keep_unstarted(
@@ -933,10 +945,10 @@ fn audio_consent_and_keep_sigkill_boundaries_preserve_atomic_receipts_and_origin
             i64::from(committed),
             "{mode}/{boundary}"
         );
-        if committed {
+        let audio_pending = if committed {
             let saved = read(&db, &op, &crate::test_support::never_cancelled).unwrap();
             assert_eq!(saved.kept(), boundary == "audioKeepCommitted");
-            assert_eq!(storage.data_write_blocked(), !saved.kept());
+            !saved.kept()
         } else {
             assert_eq!(
                 db.query_row("SELECT count(*) FROM maintenance_paths", [], |r| r
@@ -944,9 +956,21 @@ fn audio_consent_and_keep_sigkill_boundaries_preserve_atomic_receipts_and_origin
                     .unwrap(),
                 0
             );
-            assert!(!storage.data_write_blocked());
-        }
+            false
+        };
+        assert_eq!(
+            super::require_source(&db, &meeting).is_err(),
+            audio_pending,
+            "{mode}/{boundary}"
+        );
         drop(db);
+        assert!(!storage.data_write_blocked(), "{mode}/{boundary}");
+        assert_eq!(
+            storage.require_global_data_writable().is_err(),
+            audio_pending,
+            "{mode}/{boundary}"
+        );
+        storage.create_meeting("UNRELATED MEETING").unwrap();
         assert_eq!(std::fs::read(audio_path).unwrap(), b"PRIVATE AUDIO BODY");
     }
 }

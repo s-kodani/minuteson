@@ -655,24 +655,6 @@ pub(super) fn write_removal<'a>(
     Writer::begin(storage, db, true)
 }
 
-// Old Scope-only receipts exist only in the row-phase fixtures, not a public
-// deletion format. Tests still exercise the real persistent fence and permit.
-#[cfg(test)]
-pub(super) fn write_scope_fixture<'a>(
-    storage: &'a Storage,
-    db: &'a Connection,
-    operation: &str,
-    scope: &super::database::Scope,
-) -> Result<Writer<'a>, String> {
-    use rusqlite::params;
-    scope.validate_format(db)?;
-    let (json,hash,consent):(String,String,Option<i64>) = db.query_row("SELECT target_manifest_json,target_hash,consent_at FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting' AND state IN ('cleanup','completed')", params![operation], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?;
-    if json != scope.encode()? || hash != scope.hash()? || consent.is_none_or(|n| n < 0) {
-        return Err("DB段階fixtureの確認記録が一致しません".into());
-    }
-    Writer::begin(storage, db, true)
-}
-
 #[cfg(any(unix, windows))]
 pub(super) fn write_completion<'a>(
     storage: &'a Storage,
@@ -682,7 +664,7 @@ pub(super) fn write_completion<'a>(
 ) -> Result<Writer<'a>, String> {
     confirmed.verify_saved(db, check)?;
     // A completed acknowledgement retry can checkpoint only after validating
-    // its full receipt; it never grants the old raw Scope fixture admission.
+    // its full receipt.
     let discovered = super::startup::contains(db, confirmed.confirmed().operation())?;
     // A cold continuation can have reached its canonical final wrapper while
     // independent completed histories still need attention. It may finish its
