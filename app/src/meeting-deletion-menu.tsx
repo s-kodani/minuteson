@@ -21,7 +21,7 @@ export function MeetingDeletionMenu({ meeting, recoveryRunning, deletion, audioD
       aria-describedby={reason ? note : undefined} onClick={() => void deletion.reviewMeeting(meeting.id)} disabled={!deletion.canReviewMeetingId(meeting.id)}>削除</button>
     {blockers.some(b => b.kind === "job") && onOpenJobs && <button type="button" role="menuitem" onClick={onOpenJobs}>ジョブ一覧で確認</button>}
     {blockers.some(b => b.kind === "recording") && onOpenRecording && <button type="button" role="menuitem" onClick={onOpenRecording}>録音画面で確認</button>}
-    {reason && <button type="button" role="menuitem" onClick={() => void deletion.retryAvailability()}>削除可否を再確認</button>}
+    {reason && <button type="button" role="menuitem" data-row-menu-keep-open onClick={() => void deletion.retryAvailability()}>削除可否を再確認</button>}
     {reasons.length > 0 && <p className="meeting-row-menu-note" id={note}>{reasons.join(" ")}</p>}
   </>;
 }

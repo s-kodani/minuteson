@@ -141,9 +141,26 @@ impl Storage {
         meeting: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<RecordedAudioPlan, String> {
+        self.verify_canonical_audio_hash(meeting, cancelled, false)
+    }
+
+    pub(crate) fn verify_canonical_audio_retained(
+        &self,
+        meeting: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<RecordedAudioPlan, String> {
+        self.verify_canonical_audio_hash(meeting, cancelled, true)
+    }
+
+    fn verify_canonical_audio_hash(
+        &self,
+        meeting: &str,
+        cancelled: &impl Fn() -> bool,
+        retain: bool,
+    ) -> Result<RecordedAudioPlan, String> {
         let plan = self.canonical_audio_plan(meeting)?;
         let c = &plan.tracks[0].chunks[0];
-        self.verify_meeting_asset_cancellable(meeting, &c.asset_id, &c.hash, cancelled)?;
+        self.verify_meeting_asset_hash(meeting, &c.asset_id, &c.hash, cancelled, retain)?;
         let path = self.meeting_mix_path(meeting, &plan.tracks[0])?;
         let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let layout = crate::audio::wave::inspect(&mut f, c.size as u64)?;

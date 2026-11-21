@@ -4,9 +4,11 @@ import { topOpenModal } from "./modal-state";
 import "./row-menu.css";
 
 let activeClose: (() => void) | null = null;
-export function RowMenu({ label, disabled, children }: { label: string; disabled?: boolean; children: ReactNode }) {
+export function RowMenu({ label, disabled, onOpenChange, children }: { label: string; disabled?: boolean; onOpenChange?: (open: boolean) => void; children: ReactNode }) {
   const id = useId(), trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const openChange = useRef(onOpenChange);
+  openChange.current = onOpenChange;
   const close = (restore = false) => {
     setOpen(false);
     if (restore && trigger.current?.isConnected && !trigger.current.disabled && !topOpenModal()) trigger.current.focus({ preventScroll: true });
@@ -17,6 +19,8 @@ export function RowMenu({ label, disabled, children }: { label: string; disabled
     const dismiss = () => setOpen(false);
     activeClose?.(); activeClose = dismiss;
     menu.showPopover();
+    const notify = openChange.current;
+    notify?.(true);
     const place = () => {
       if (topOpenModal() || !button.isConnected || !button.getClientRects().length || button.disabled || button.closest("[hidden],[inert]")) { dismiss(); return; }
       const rect = button.getBoundingClientRect(), view = window.visualViewport;
@@ -35,19 +39,22 @@ export function RowMenu({ label, disabled, children }: { label: string; disabled
       if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); close(true); }
       else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
         event.preventDefault(); const buttons = items(), at = buttons.indexOf(document.activeElement as HTMLButtonElement);
-        const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+        const next = event.key === "Home" || (at < 0 && event.key === "ArrowDown") ? 0
+          : event.key === "End" || at < 0 ? buttons.length - 1
+          : (at + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
         buttons[next]?.focus({ preventScroll: true });
       }
     };
     const outside = (event: Event) => { if (!event.composedPath().includes(menu) && !event.composedPath().includes(button)) dismiss(); };
     const resize = new ResizeObserver(place); resize.observe(menu); resize.observe(button);
     const modal = new MutationObserver(place); modal.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["open", "hidden", "disabled"] });
-    place(); items()[0]?.focus({ preventScroll: true });
+    place(); (items()[0] ?? menu).focus({ preventScroll: true });
     document.addEventListener("keydown", key, true); document.addEventListener("pointerdown", outside, true); document.addEventListener("focusin", outside);
     document.addEventListener("scroll", place, true); window.addEventListener("resize", place);
     viewListen("addEventListener", place);
     return () => {
       if (activeClose === dismiss) activeClose = null;
+      notify?.(false);
       if (menu.matches(":popover-open")) menu.hidePopover();
       resize.disconnect(); modal.disconnect();
       document.removeEventListener("keydown", key, true); document.removeEventListener("pointerdown", outside, true); document.removeEventListener("focusin", outside);
@@ -55,9 +62,15 @@ export function RowMenu({ label, disabled, children }: { label: string; disabled
       viewListen("removeEventListener", place);
     };
   }, [open, disabled]);
+  useLayoutEffect(() => {
+    const menu = popup.current;
+    if (open && menu?.matches(":popover-open") && [menu, document.body].includes(document.activeElement as HTMLElement)) {
+      menu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+    }
+  });
   return <div className="meeting-row-actions">
     <IconButton ref={trigger} icon="more" label={label} className="small-secondary" disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-controls={id} onClick={() => open ? close(true) : setOpen(true)} />
-    <div ref={popup} id={id} popover="manual" role="menu" aria-label={label} className="meeting-row-menu" onMouseDownCapture={event => {
+    <div ref={popup} id={id} popover="manual" role="menu" tabIndex={-1} aria-label={label} className="meeting-row-menu" onMouseDownCapture={event => {
       const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
       if (event.button !== 0 || !button || button.disabled || !event.currentTarget.contains(button)) return;
       // WebKit otherwise focuses the containing workspace on mouse-down and
@@ -66,7 +79,7 @@ export function RowMenu({ label, disabled, children }: { label: string; disabled
       event.preventDefault(); button.focus({ preventScroll: true });
     }} onClick={event => {
       const button = event.target instanceof Element ? event.target.closest("button") : null;
-      if (button && !button.disabled) close();
+      if (button && !button.disabled && !button.hasAttribute("data-row-menu-keep-open")) close();
     }} data-row-menu-trigger={id}>{children}</div>
   </div>;
 }

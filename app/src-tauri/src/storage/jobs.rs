@@ -662,6 +662,20 @@ impl Storage {
         Ok(job)
     }
 
+    pub(crate) fn job_is_running(&self, job_id: &str) -> Result<bool, String> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE id=?1 AND state='running')",
+                [job_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+    }
+
     pub(crate) fn list_jobs(&self, meeting_id: &str) -> Result<Vec<JobSnapshot>, String> {
         let connection = self
             .connection

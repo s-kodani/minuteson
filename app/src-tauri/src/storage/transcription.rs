@@ -281,6 +281,17 @@ impl Storage {
         hash: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(), String> {
+        self.verify_meeting_asset_hash(meeting_id, asset_id, hash, cancelled, false)
+    }
+
+    pub(super) fn verify_meeting_asset_hash(
+        &self,
+        meeting_id: &str,
+        asset_id: &str,
+        hash: &str,
+        cancelled: &impl Fn() -> bool,
+        retain: bool,
+    ) -> Result<(), String> {
         let read = || -> Result<(String, i64), String> {
             self.connection.lock().map_err(|_| "DBロックを取得できません")?.query_row(
                 "SELECT relative_path,size_bytes FROM file_assets WHERE id=?1 AND meeting_id=?2 AND content_hash=?3 AND state='ready'",
@@ -289,7 +300,12 @@ impl Storage {
         };
         let expected = read()?;
         let path = self.managed_path(Path::new(&expected.0))?;
-        let proof = crate::local_engine::Fingerprint::capture(&path, cancelled)?;
+        use crate::local_engine::Fingerprint;
+        let proof = if retain {
+            Fingerprint::capture_retained(&path, cancelled)?
+        } else {
+            Fingerprint::capture(&path, cancelled)?
+        };
         if proof.path
             != self
                 .root

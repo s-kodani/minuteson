@@ -13,6 +13,6 @@ test("row menu preserves outside dismissal, keyboard activation and stable confi
   assert.match(source, /document\.addEventListener\("focusin", outside\)/);
   assert.match(source, /event\.key === "Escape"/);
   assert.match(source, /onClick=\{event =>/);
-  assert.match(source, /if \(button && !button\.disabled\) close\(\)/);
+  assert.match(source, /if \(button && !button\.disabled && !button\.hasAttribute\("data-row-menu-keep-open"\)\) close\(\)/);
   assert.match(source, /export function rowMenuReturnTarget/);
 });

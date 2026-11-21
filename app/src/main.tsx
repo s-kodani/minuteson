@@ -184,7 +184,13 @@ function MainWindow() {
   const [transcriptMeeting, setTranscriptMeeting] = useState<string | null>(null);
   const [verifiedTranscript, setVerifiedTranscript] = useState<string | null>(null);
   const priorPhase = useRef<string | null>(null);
-  const deletion = useMeetingDeletion({ operation: dataOperation, meetingIds: [...new Set([...meetings.map(meeting => meeting.id), ...(selectedMeeting ? [selectedMeeting.id] : [])])], locked: storageReadOnly || writeStateUnverified || captureTest.blocked || navigationBusy || dataPending || audioDeletionPending, withSavedEdits,
+  const [deletionMenuMeeting, setDeletionMenuMeeting] = useState<string | null>(null);
+  const trackDeletionMenu = (id: string, open: boolean) => {
+    setDeletionMenuMeeting(current => open ? id : current === id ? null : current);
+  };
+  const deletion = useMeetingDeletion({ operation: dataOperation, detailId: screen === "overview" ? selectedMeeting?.id ?? null : null, menuId: deletionMenuMeeting,
+    recordingContext: JSON.stringify([savingRecording?.phase, savingRecording?.meetingId, recovery.snapshot?.phase, modelCleanupActive]),
+    locked: storageReadOnly || writeStateUnverified || captureTest.blocked || navigationBusy || dataPending || audioDeletionPending, withSavedEdits,
     onDeleted: async receipt => {
       if (selectedMeeting?.id === receipt.meetingId) {
         setSelectedMeeting(null);
@@ -446,7 +452,7 @@ function MainWindow() {
             const target = event.key === "Home" ? "transcript" : event.key === "End" ? "minutes" : ["ArrowLeft", "ArrowRight"].includes(event.key) ? tab === "transcript" ? "minutes" : "transcript" : null;
             if (target) { event.preventDefault(); document.getElementById(`meeting-tab-${target}`)?.focus(); }
           }}>{tab === "transcript" ? "文字起こし" : "議事録"}</button>)}
-        </div><div className="meeting-detail-actions"><RowMenu label="会議の操作" disabled={navigationLocked}><MeetingDeletionMenu recoveryRunning={!recovery.error && recoveryMeetingState(recovery.snapshot, selectedMeeting!.id)?.phase === "running"} meeting={selectedMeeting!} deletion={deletion} audioDeletion={audioDeletion} onOpenJobs={showJobs} onOpenRecording={() => void openRecordingMeeting()} /></RowMenu></div></div>}
+        </div><div className="meeting-detail-actions"><RowMenu label="会議の操作" key={selectedMeeting!.id} disabled={navigationLocked} onOpenChange={open => trackDeletionMenu(selectedMeeting!.id, open)}><MeetingDeletionMenu recoveryRunning={!recovery.error && recoveryMeetingState(recovery.snapshot, selectedMeeting!.id)?.phase === "running"} meeting={selectedMeeting!} deletion={deletion} audioDeletion={audioDeletion} onOpenJobs={showJobs} onOpenRecording={() => void openRecordingMeeting()} /></RowMenu></div></div>}
         <div className="workspace-surface">
         <AppUpdateBanner />
         <main className={`content${detail ? " meeting-detail-content" : ""}`} aria-label="会議ワークスペース" tabIndex={-1}>
@@ -518,7 +524,7 @@ function MainWindow() {
               <td><button type="button" className="meeting-name" data-screen-navigation onClick={() => selectMeeting(meeting.id)} disabled={navigationLocked}>{meeting.title}</button>{restoredIds.includes(meeting.id) && <small className="restore-badge">バックアップから復元</small>}</td>
               <td className="meeting-date">{new Date(meeting.createdAt).toLocaleString("ja-JP")}</td>
               <td><span className="state-pill">{meetingList.byMeeting.has(meeting.id) ? "要確認" : meetingStatusLabel(meeting, state, recovery.snapshot)}</span>{recovery.error && recoveryMeetingState(recovery.snapshot, meeting.id) && <small role="status">保存状態を確認できません。表示は前回取得した状態です。</small>}</td>
-              <td><RowMenu label={`${meeting.title}の操作`} disabled={navigationLocked}><button type="button" role="menuitem" data-screen-navigation onClick={() => selectMeeting(meeting.id)} disabled={navigationLocked}>開く</button>{recoveryMeetingState(recovery.snapshot, meeting.id)?.error && <RecordingSaveRetry snapshot={recovery.snapshot} meetingId={meeting.id} locked={writeLocked} />}<MeetingDeletionMenu recoveryRunning={!recovery.error && recoveryMeetingState(recovery.snapshot, meeting.id)?.phase === "running"} meeting={meeting} deletion={deletion} audioDeletion={audioDeletion} onOpenJobs={showJobs} onOpenRecording={() => void openRecordingMeeting()} />{dataOperation.deletionListing?.deletingMeetingIds.includes(meeting.id) && <span role="status">削除中・要確認</span>}</RowMenu></td>
+              <td><RowMenu label={`${meeting.title}の操作`} disabled={navigationLocked} onOpenChange={open => trackDeletionMenu(meeting.id, open)}><button type="button" role="menuitem" data-screen-navigation onClick={() => selectMeeting(meeting.id)} disabled={navigationLocked}>開く</button>{recoveryMeetingState(recovery.snapshot, meeting.id)?.error && <RecordingSaveRetry snapshot={recovery.snapshot} meetingId={meeting.id} locked={writeLocked} />}<MeetingDeletionMenu recoveryRunning={!recovery.error && recoveryMeetingState(recovery.snapshot, meeting.id)?.phase === "running"} meeting={meeting} deletion={deletion} audioDeletion={audioDeletion} onOpenJobs={showJobs} onOpenRecording={() => void openRecordingMeeting()} />{dataOperation.deletionListing?.deletingMeetingIds.includes(meeting.id) && <span role="status">削除中・要確認</span>}</RowMenu></td>
             </tr>)}</tbody></table></div>}
           </section>
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-transcript" role="tabpanel" aria-labelledby="meeting-tab-transcript" hidden={detailTab !== "transcript"}>

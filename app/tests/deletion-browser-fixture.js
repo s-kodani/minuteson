@@ -1,5 +1,6 @@
 // Development-only simulated IPC. No real audio, meeting files or settings.
 import { mockIPC } from "./startup-ready-mocks.ts";
+import { emit } from "@tauri-apps/api/event";
 window.skipDataFixtureMain = true;
 const { dataSaveIPC } = await import("./data-save-browser-fixture.js");
 const f = window.dataFixture;
@@ -13,6 +14,12 @@ const d = window.deletionFixture = {
   listFail: false, reviewLost: false, reservedMode: false, invalidPendingReview: false,
   items: [], deleted: 0, kept: 0, reconfirmed: 0, complete: () => {}, last: null, closes: 0,
   prepareHold: false, closeHold: false, closeFail: false, quitFail: false, liveTokens: new Set(),
+  availabilityReads: [],
+  updateMeetingBlocker: async (meetingId, running) => {
+    const blockers = f.meetingBlockers ??= {};
+    blockers[meetingId] = running ? [{ kind: "job", reason: "この会議のジョブ・結果保存が完了していません", jobId: crypto.randomUUID() }] : [];
+    await emit("analysis-job-changed", { meetingId, state: running ? "running" : "succeeded" });
+  },
   mountPlayback: async () => { const { mountPlaybackHarness } = await import("./deletion-playback-browser-harness.tsx"); d.unmountPlayback = mountPlaybackHarness(f.meetings[0].id); },
   pending: async (phase = "not_started", changedContents = false) => {
     d.blocked = true; d.cold = true;
@@ -29,6 +36,7 @@ const makePreview = (meetingId, phase = "review") => ({ confirmationId: crypto.r
   missingCount: 0, changedCount: 0, unregisteredCount: d.unknownCount, bytes: 1024 * 1024, rowCount: 20, rowPhaseCommitted: ["awaiting_ack", "database_files"].includes(phase),
   reconfirmationAllowed: false, previousProcessedPaths: null, previousPathCount: null });
 mockIPC(async (command, args) => {
+  if (command === "get_meeting_deletion_availability") d.availabilityReads.push([...args.meetingIds]);
   // Opening a meeting now mounts the simple transcript/Markdown readers.
   // Explicit empty results keep this fixture scoped to deletion, not AI work.
   if (["get_current_analysis", "get_transcript_draft", "get_analysis_flow", "get_minutes_markdown"].includes(command)) return null;

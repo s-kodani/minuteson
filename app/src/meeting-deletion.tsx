@@ -13,15 +13,14 @@ import { stopMeetingPlayback } from "./playback-barrier";
 import { useMeetingDeletionAvailability } from "./meeting-deletion-availability";
 import { deletionReviewReason, permitsDeletionRecovery } from "./deletion-review-reason";
 
-export function useMeetingDeletion({ operation, locked, withSavedEdits, onDeleted, meetingIds }: {
-  meetingIds: string[];
+export function useMeetingDeletion({ operation, locked, withSavedEdits, onDeleted, detailId, menuId, recordingContext }: {
+  detailId: string | null; menuId: string | null; recordingContext: string;
   operation: DataOperation; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
   onDeleted: (receipt: DeletionReceipt) => Promise<void>;
 }) {
   const noticeWaiting=useDeletionNoticeWait();
   const latest = useRef({ operation, locked, withSavedEdits, onDeleted }); latest.current = { operation, locked, withSavedEdits, onDeleted };
-  const availability = useMeetingDeletionAvailability(meetingIds);
   const { exchange, rpcBusy, running, unknown, setUnknown, error, setError, pending, choice, run } = useDeletionExchange("meeting_deletion_not_started");
   const [open, setOpen] = useState(false);
   const [toast, setToast] = useState("");
@@ -31,6 +30,10 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const opener = useRef<HTMLElement | null>(null);
   const s = operation.snapshot, preview = s?.kind === "deletion" ? s.deletionPreview : null;
   const receipt = s?.kind === "deletion" ? s.deletionReceipt : null;
+  const audioPreview = s?.kind === "audio_deletion" ? s.audioDeletionPreview : null;
+  const freshPreview = s?.phase === "ready" && !s.busy && !receipt && !s.audioDeletionReceipt ? preview ?? audioPreview : null;
+  const availability = useMeetingDeletionAvailability(detailId, menuId, freshPreview && !freshPreview.pending ? freshPreview.meetingId : null,
+    JSON.stringify([recordingContext, s?.token, s?.phase, s?.busy, operation.connected, operation.availability?.deletionReasonCode, operation.availability?.available, operation.writeState?.readOnly]));
   const listing = operation.deletionListing;
   const protectedNow = rpcBusy || unknown;
   const canInspect = isTauri() && operation.deletionSupported && !!listing && operation.connected && !locked && !rpcBusy && !unknown && !s?.busy;
@@ -39,9 +42,10 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const sharedAvailable = !!operation.availability?.available || (permitsDeletionRecovery(operation.availability, listing?.restartRequired));
   const canReviewPending = canInspect && (sharedAvailable || (!listing?.restartRequired && !s?.restartRequired));
   const canReviewMeeting = canInspect && !listing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
-  const canReviewMeetingId = (id: string) => canReviewMeeting && availability.rows.get(id)?.available === true;
+  const canReviewMeetingId = (id: string) => canReviewMeeting && availability.checkedRows.get(id)?.available === true;
   const reviewUnavailableReason = canReviewMeeting ? null : deletionReviewReason(operation, { native: isTauri(), supported: operation.deletionSupported, locked, protectedNow, sharedAvailable, listingError: operation.listingErrors.meetings });
-  const meetingReviewReason = (id: string) => !canReviewMeeting ? reviewUnavailableReason : availability.error || availability.rows.get(id)?.blockers.map(b => b.reason).join(" ") || (availability.rows.has(id) ? null : "削除できる状態か確認しています。");
+  const targetReviewReason = (id: string) => availability.error || availability.checkedRows.get(id)?.blockers.map(b => b.reason).join(" ") || (availability.checkedRows.has(id) ? null : "削除できる状態か確認しています。");
+  const meetingReviewReason = (id: string) => !canReviewMeeting ? reviewUnavailableReason : targetReviewReason(id);
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const protect = async (action: () => Promise<void>) => {
     // Pending receipts already fenced writes. Initial review/publication flush
@@ -109,11 +113,11 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
     }
   }, [s, rpcBusy, locked, unknown]);
-  const targetUnavailableReason = preview && !preview.pending ? availability.error || availability.rows.get(preview.meetingId)?.blockers.map(b => b.reason).join(" ") || (!availability.rows.has(preview.meetingId) ? "削除できる状態か確認しています。" : null) : null;
+  const targetUnavailableReason = preview && !preview.pending ? targetReviewReason(preview.meetingId) : null;
   const canDelete = preview?.scopeMode === "directory" && canResolve && open && s?.phase === "ready" && !!preview.executeAllowed && !targetUnavailableReason;
   return { reviewMeeting: (id: string) => review(id, false), reviewPending: (id: string) => review(id, true), canReviewMeeting, canReviewPending, canResolve,
     audioAvailability: availability,
-    canReviewMeetingId, meetingReviewReason, targetUnavailableReason, meetingBlockers: (id: string) => availability.rows.get(id)?.blockers ?? [], retryAvailability: availability.refresh,
+    canReviewMeetingId, meetingReviewReason, targetUnavailableReason, meetingBlockers: (id: string) => availability.checkedRows.get(id)?.blockers ?? [], retryAvailability: availability.refresh,
     noticeWaiting, reviewUnavailableReason, rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast,
     canDelete, submit, retryUnknown, cancel, dismiss, quit, dialog, heading, opener };
 }
@@ -127,7 +131,7 @@ export function MeetingDeletionPanel({ operation, control }: { operation: DataOp
     {c.rpcBusy&&c.noticeWaiting&&<p role="status">通知履歴の処理完了を待っています</p>}
     {p?.scopeMode === "directory" && c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>削除要求の結果を確認</button><button type="button" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>削除を停止</button></div>}
     <CommonModal portal hideDismissButton ref={c.dialog} open={c.open && p?.scopeMode === "directory"} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.querySelector<HTMLElement>(".sidebar button")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title">
-      {p?.scopeMode === "directory" && <DirectoryDeletionConfirmation kind="meeting" name={p.title} directory={p.targetDirectory!} titleId="deletion-confirm-title" heading={c.heading} blocked={c.protectedNow || !!s?.busy} canDelete={c.canDelete} onCancel={() => void c.dismiss()} onDelete={() => void c.submit("publish")} />}
+      {p?.scopeMode === "directory" && <DirectoryDeletionConfirmation kind="meeting" name={p.title} directory={p.targetDirectory!} titleId="deletion-confirm-title" heading={c.heading} blocked={c.protectedNow || !!s?.busy} canDelete={c.canDelete} reason={c.targetUnavailableReason} onCancel={() => void c.dismiss()} onDelete={() => void c.submit("publish")} />}
     </CommonModal>
   </>;
 }

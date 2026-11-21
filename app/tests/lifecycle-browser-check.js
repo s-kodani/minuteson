@@ -74,11 +74,17 @@ async(page,capturePath)=>{
   await history.getByRole("combobox",{name:"履歴の種類",exact:true}).selectOption("model");
   await page.waitForFunction(()=>document.querySelectorAll('.job-history-rows>li').length===0);
   await history.getByText("該当する履歴はありません",{exact:true}).waitFor();
+  await page.evaluate(()=>{window.lifecycleFixture.backfillPending=true;return window.lifecycleFixture.changed();});
+  await history.getByText("過去の処理結果を履歴に追加しています。",{exact:true}).waitFor();
+  check(await history.getByText("該当する履歴はありません",{exact:true}).count()===0,"pending history supplement was shown as a definitive empty page");
+  await page.evaluate(()=>{window.lifecycleFixture.backfillPending=false;return window.lifecycleFixture.changed();});
+  await history.getByText("該当する履歴はありません",{exact:true}).waitFor();
   await history.getByRole("combobox",{name:"履歴の結果",exact:true}).selectOption("");
   await page.waitForFunction(()=>document.querySelectorAll('.job-history-rows>li').length===4);
   await page.evaluate(()=>window.lifecycleFixture.readFail=true);
   await history.getByRole("button",{name:"ジョブ履歴を再読込",exact:true}).click();
   await history.getByRole("alert").filter({hasText:"合成の履歴取得失敗"}).waitFor();
+  check(await page.evaluate(()=>window.lifecycleFixture.calls.findLast(c=>c.command==="list_job_history")?.args.query.refreshSources===true),"manual reload did not request source reconciliation");
   check(await history.locator('.job-history-rows>li').count()===4,"read failure cleared history");
   await page.evaluate(()=>window.lifecycleFixture.readFail=false);
   await history.getByRole("button",{name:"再試行",exact:true}).click();

@@ -2,6 +2,7 @@
 use super::super::tests::Fixture;
 use super::*;
 use crate::analysis_worker::AnalysisController;
+use crate::storage::deletion::audio::require_source;
 use std::cell::Cell;
 
 fn lease() -> DataMaintenanceLease {
@@ -536,7 +537,7 @@ fn audio_consent_cold_keep_recovers_stale_audio_jobs_after_scoped_hold_is_releas
     assert!(!f.storage.data_write_blocked());
     assert!(f.storage.require_global_data_writable().is_err());
     assert!(
-        super::require_source(&f.storage.connection.lock().unwrap(), &meeting)
+        require_source(&f.storage.connection.lock().unwrap(), &meeting)
             .is_err_and(|error| error.contains("削除の確認・処理中"))
     );
     f.storage.create_meeting("OTHER MEETING").unwrap();
@@ -560,7 +561,7 @@ fn audio_consent_cold_keep_recovers_stale_audio_jobs_after_scoped_hold_is_releas
     assert_eq!(state(&f), "interrupted");
     assert!(!f.storage.restart_required());
     f.storage.require_global_data_writable().unwrap();
-    super::require_source(&f.storage.connection.lock().unwrap(), &meeting).unwrap();
+    require_source(&f.storage.connection.lock().unwrap(), &meeting).unwrap();
     drop(owner);
     reopen(&mut f, |_| {});
     assert_eq!(state(&f), "interrupted");
@@ -703,7 +704,7 @@ fn audio_consent_corrupt_subtype_proofs_progress_and_null_meeting_never_grant_ke
         assert_eq!(f.storage.data_write_blocked(), shared_hold, "{mode}");
         assert!(f.storage.require_global_data_writable().is_err(), "{mode}");
         assert!(
-            super::require_source(&f.storage.connection.lock().unwrap(), &f.meeting)
+            require_source(&f.storage.connection.lock().unwrap(), &f.meeting)
                 .is_err_and(|error| error.contains("削除の確認・処理中")),
             "{mode}"
         );
@@ -959,7 +960,7 @@ fn audio_consent_and_keep_sigkill_boundaries_preserve_atomic_receipts_and_origin
             false
         };
         assert_eq!(
-            super::require_source(&db, &meeting).is_err(),
+            require_source(&db, &meeting).is_err(),
             audio_pending,
             "{mode}/{boundary}"
         );

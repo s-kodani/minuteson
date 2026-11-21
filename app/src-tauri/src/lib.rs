@@ -3414,15 +3414,7 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let storage = handle.state::<Storage>();
-                if storage
-                    .model_download_guidance()
-                    .is_ok_and(|guide| guide.pending)
-                {
-                    if let Err(error) = job_history::clear() {
-                        internal_logs::report_error("job_history", &error);
-                    }
-                }
-                if let Err(error) = job_history::backfill(&storage) {
+                if let Err(error) = job_history::clear_for_new_workspace(&storage) {
                     internal_logs::report_error("job_history", &error);
                 }
                 let recover = |category: &str, result: Result<(), String>| {
@@ -3454,6 +3446,7 @@ pub fn run() {
                     internal_logs::report_error("application", &error);
                     return;
                 }
+                job_history::start_backfill(&handle);
                 if !storage.data_write_blocked() {
                     app_updates::start(&handle);
                     if let Err(error) = storage.retry_voice_audio_cleanup() {
