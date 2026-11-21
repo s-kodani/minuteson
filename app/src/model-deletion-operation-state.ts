@@ -12,7 +12,8 @@ export function assertModelBodyDeletionListing(l: ModelBodyDeletionListing): voi
   for (const item of l.items) if (!item || !id(item.operationId) || !text(item.state) || typeof item.reviewAllowed !== "boolean"
     || (item.startupReason != null && (!["model_completed_scope_reappeared", "model_completed_receipt_invalid", "model_completed_scope_uninspectable"].includes(item.startupReason) || item.state !== "completed" || !l.writeBlocked))
     || (item.packageId !== null && !id(item.packageId)) || (item.modelName !== null && !text(item.modelName)) || (item.errorMessage !== null && !text(item.errorMessage))
-    || (item.reviewAllowed ? item.packageId === null || item.modelName === null || item.errorMessage !== null : item.packageId !== null || item.modelName !== null || item.errorMessage === null)) fail();
+    || (item.packageId === null) !== (item.modelName === null)
+    || (item.reviewAllowed ? item.packageId === null || item.errorMessage !== null : item.errorMessage === null)) fail();
   if (new Set(l.items.map(i => i.operationId)).size !== l.items.length) fail();
 }
 

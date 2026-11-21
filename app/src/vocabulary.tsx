@@ -45,7 +45,7 @@ export function VocabularyEditor({ meetingId, meetingTitle, locked, stampRef, re
     }, () => {
       const current = queue.snapshot();
       return current.dirty || current.saving;
-    });
+    }, () => ({ kind: "vocabulary", meetingId, input: queue.snapshot().payload }));
     if (isTauri()) void load().then((value) => {
       if (active) { queue.load(value.book); setCommon(value.common); setLoading(false); }
     }).catch((cause: unknown) => { if (active) { setError(String(cause)); setLoading(false); } });
@@ -62,10 +62,10 @@ export function VocabularyEditor({ meetingId, meetingTitle, locked, stampRef, re
     return () => { stampRef.current = null; };
   }, [queue, common, stampRef]);
   useEffect(() => {
-    if (loading || confirm.pending || !state.dirty || state.saving || state.error || !state.payload || !validVocabulary(state.payload)) return;
+    if (loading || confirm.pending || !state.dirty || locked || state.saving || state.error || !state.payload || !validVocabulary(state.payload)) return;
     const timer = window.setTimeout(() => { void queue.flush().catch(() => {}); }, 700);
     return () => window.clearTimeout(timer);
-  }, [queue, state, loading, confirm.pending]);
+  }, [queue, state, locked, loading, confirm.pending]);
   const reportFailure = (cause: unknown) => { setError(String(cause)); return true; };
   const reload = async () => {
     const expected = JSON.stringify(queue.snapshot().payload);

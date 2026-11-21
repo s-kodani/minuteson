@@ -10,60 +10,62 @@ pub(super) const MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct Contents {
-    version: u32,
-    meetings: Vec<MeetingContents>,
-    vocabulary: Vec<VocabularyEntry>,
-    people: Vec<Person>,
+pub(in crate::storage) struct Contents {
+    pub(in crate::storage) version: u32,
+    pub(in crate::storage) meetings: Vec<MeetingContents>,
+    pub(in crate::storage) vocabulary: Vec<VocabularyEntry>,
+    pub(in crate::storage) people: Vec<Person>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Asset {
-    id: String,
-    size: i64,
-    hash: String,
+pub(in crate::storage) struct Asset {
+    pub(in crate::storage) id: String,
+    pub(in crate::storage) size: i64,
+    pub(in crate::storage) hash: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Audio {
-    asset: Asset,
-    track: String,
-    chunk: String,
-    frames: i64,
-    deleted: bool,
-    gaps: Vec<Gap>,
+pub(in crate::storage) struct Audio {
+    pub(in crate::storage) asset: Asset,
+    pub(in crate::storage) track: String,
+    pub(in crate::storage) chunk: String,
+    pub(in crate::storage) frames: i64,
+    pub(in crate::storage) deleted: bool,
+    pub(in crate::storage) gaps: Vec<Gap>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Gap {
-    id: String,
-    start: i64,
-    end: i64,
-    reason: String,
-    recovered: bool,
+pub(in crate::storage) struct Gap {
+    pub(in crate::storage) id: String,
+    pub(in crate::storage) start: i64,
+    pub(in crate::storage) end: i64,
+    pub(in crate::storage) reason: String,
+    pub(in crate::storage) recovered: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct MeetingContents {
-    meeting: Meeting,
-    started_at: Option<i64>,
-    duration: i64,
-    source_id: String,
-    operation_id: String,
-    manifest: Asset,
-    audio: Option<Audio>,
-    transcript: Option<AnalysisView>,
-    manual_assignment_lineages: Vec<String>,
-    segments: Vec<Segment>,
-    markdown: Option<String>,
-    vocabulary: Vec<VocabularyEntry>,
-    matches: Vec<Match>,
+pub(in crate::storage) struct MeetingContents {
+    pub(in crate::storage) meeting: Meeting,
+    pub(in crate::storage) started_at: Option<i64>,
+    pub(in crate::storage) duration: i64,
+    pub(in crate::storage) source_id: String,
+    pub(in crate::storage) operation_id: String,
+    pub(in crate::storage) manifest: Asset,
+    pub(in crate::storage) audio: Option<Audio>,
+    pub(in crate::storage) transcript: Option<AnalysisView>,
+    pub(in crate::storage) manual_assignment_lineages: Vec<String>,
+    pub(in crate::storage) segments: Vec<Segment>,
+    pub(in crate::storage) markdown: Option<String>,
+    pub(in crate::storage) vocabulary: Vec<VocabularyEntry>,
+    pub(in crate::storage) matches: Vec<Match>,
     // Even a document-only transcript needs a scoped track for timed utterances.
-    track: String,
+    pub(in crate::storage) track: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in crate::storage) salvage: Option<super::super::salvage_schema::MeetingRecord>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Segment {
+pub(in crate::storage) struct Segment {
     id: String,
     speaker: Option<String>,
     start: i64,
@@ -73,7 +75,7 @@ struct Segment {
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Match {
+pub(in crate::storage) struct Match {
     id: String,
     speaker: String,
     person: Option<String>,
@@ -86,28 +88,28 @@ struct Match {
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Person {
-    id: String,
-    name: String,
-    created_at: i64,
-    samples: Vec<Sample>,
+pub(in crate::storage) struct Person {
+    pub(in crate::storage) id: String,
+    pub(in crate::storage) name: String,
+    pub(in crate::storage) created_at: i64,
+    pub(in crate::storage) samples: Vec<Sample>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Sample {
-    id: String,
-    model: String,
-    extractor: String,
-    dimension: i64,
-    vector: String,
-    source_meeting: Option<String>,
-    source_analysis: Option<String>,
-    source_track: Option<String>,
-    start: i64,
-    end: i64,
-    created_at: i64,
-    audio: Option<Asset>,
-    frames: Option<i64>,
+pub(in crate::storage) struct Sample {
+    pub(in crate::storage) id: String,
+    pub(in crate::storage) model: String,
+    pub(in crate::storage) extractor: String,
+    pub(in crate::storage) dimension: i64,
+    pub(in crate::storage) vector: String,
+    pub(in crate::storage) source_meeting: Option<String>,
+    pub(in crate::storage) source_analysis: Option<String>,
+    pub(in crate::storage) source_track: Option<String>,
+    pub(in crate::storage) start: i64,
+    pub(in crate::storage) end: i64,
+    pub(in crate::storage) created_at: i64,
+    pub(in crate::storage) audio: Option<Asset>,
+    pub(in crate::storage) frames: Option<i64>,
 }
 
 fn id() -> String {
@@ -116,15 +118,22 @@ fn id() -> String {
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
-fn vocabulary(db: &Connection, scope: &str) -> Result<Vec<VocabularyEntry>, String> {
+pub(in crate::storage) fn vocabulary(
+    db: &Connection,
+    scope: &str,
+) -> Result<Vec<VocabularyEntry>, String> {
     // Verify the current book, including its ordering and persisted hash.
     Ok(super::super::vocabulary::load(db, scope)?.0.payload)
 }
-pub(super) fn manifest_bytes() -> &'static [u8] {
+pub(in crate::storage) fn manifest_bytes() -> &'static [u8] {
     br#"{"version":1,"kind":"meeting_snapshot","audioPolicy":"meeting_wav_pcm16_16000_v1"}"#
 }
 
-fn verify_meeting_wav(file: &mut (impl Read + Seek), size: u64, frames: i64) -> Result<(), String> {
+pub(in crate::storage) fn verify_meeting_wav(
+    file: &mut (impl Read + Seek),
+    size: u64,
+    frames: i64,
+) -> Result<(), String> {
     // Canonical meeting WAVs use RIFF or RF64, depending on their length.
     let layout = crate::audio::wave::inspect(file, size)?;
     if i64::try_from(layout.frames).map_err(err)? != frames {
@@ -174,15 +183,23 @@ impl Contents {
             } else {
                 (None, Vec::new())
             };
+            let salvage = super::super::salvage_schema::meeting(db, &meeting.id)?;
+            let rescued_without_audio = salvage
+                .as_ref()
+                .is_some_and(super::super::salvage_schema::MeetingRecord::audio_absent);
             let is_deleted = deleted.contains_meeting(&meeting.id);
             let plan = if is_deleted {
                 super::super::meeting_audio::read_historical(db, &meeting.id)?
             } else {
                 super::super::meeting_audio::read(db, &meeting.id)?
             };
+            if rescued_without_audio && (plan.is_some() || is_deleted) {
+                return Err("起動時に復元した会議の音声状態が一致しません".into());
+            }
             if matches!(meeting.lifecycle.as_str(), "recorded" | "imported")
                 && plan.is_none()
                 && !is_deleted
+                && !rescued_without_audio
             {
                 return Err(
                     "会議音声の保存が完了していません。保存・回復後にバックアップしてください"
@@ -286,6 +303,7 @@ impl Contents {
                 vocabulary,
                 matches,
                 track,
+                salvage,
             });
         }
         crate::operation_observation::report("collecting_meetings", total, total, "meetings");
@@ -386,7 +404,7 @@ impl Contents {
         result
     }
 
-    pub(super) fn verify_audio(
+    pub(in crate::storage) fn verify_audio(
         &self,
         assets: &BTreeMap<String, PathBuf>,
         cancelled: &impl Fn() -> bool,
@@ -438,6 +456,26 @@ impl Contents {
         asset_path: &impl Fn(&str, &str) -> Result<String, String>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<Connection, String> {
+        private_file(path)?.sync_all().map_err(err)?;
+        let mut db = portable::initialize(Connection::open(path).map_err(err)?)?;
+        db.execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL;")
+            .map_err(err)?;
+        self.write_content(&mut db, identity, asset_path, cancelled)?;
+        super::super::voice::validate_registry(&db)?;
+        portable::validate_scopes(&db)?;
+        validate_database(&mut db, cancelled)?;
+        Ok(db)
+    }
+
+    // Typed content insertion into an empty database. Backup and rescue keep
+    // separate admission, staging, file validation and publication.
+    pub(in crate::storage) fn write_content(
+        &self,
+        db: &mut Connection,
+        identity: &impl Fn(&str, &str, &str) -> Result<String, String>,
+        asset_path: &impl Fn(&str, &str) -> Result<String, String>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), String> {
         use base64::Engine;
         if self.version != 1 {
             return Err("未対応の会議バックアップ形式です".into());
@@ -449,16 +487,18 @@ impl Contents {
             {
                 return Err("文字起こしの会議が一致しません".into());
             }
+            if let Some(record) = &m.salvage {
+                record.validate()?;
+                if record.audio_absent() && m.audio.is_some() {
+                    return Err("起動時の復元記録と音声が矛盾しています".into());
+                }
+            }
             if let Some(a) = &m.audio {
                 if a.track != m.track || a.frames <= 0 {
                     return Err("会議音声の所属・長さが不正です".into());
                 }
             }
         }
-        private_file(path)?.sync_all().map_err(err)?;
-        let mut db = portable::initialize(Connection::open(path).map_err(err)?)?;
-        db.execute_batch("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=FULL;")
-            .map_err(err)?;
         let tx = db.transaction().map_err(err)?;
         tx.execute_batch("PRAGMA defer_foreign_keys=ON")
             .map_err(err)?;
@@ -518,7 +558,11 @@ impl Contents {
             let get = |domain: &str, key: &str| identity(domain, old, key);
             let source = m.meeting.source_type.as_deref().unwrap_or("recording");
             let has_track = m.audio.is_some() || m.transcript.is_some();
-            let has_source = m.meeting.source_type.is_some() || has_track;
+            let audio_unavailable = m
+                .salvage
+                .as_ref()
+                .is_some_and(super::super::salvage_schema::MeetingRecord::audio_absent);
+            let has_source = (m.meeting.source_type.is_some() && !audio_unavailable) || has_track;
             let source_id = if has_source {
                 get(
                     if source == "recording" {
@@ -563,11 +607,11 @@ impl Contents {
             )?;
             if has_source {
                 if source == "recording" {
-                    tx.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at) VALUES(?1,?2,'saved','system','{}',?3,?4,?5,?4,?6,?6)",params![source_id,mid,operation,m.duration,m.manifest.hash,m.meeting.created_at]).map_err(err)?;
+                    tx.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,duration_us,audio_manifest_hash,last_committed_us,created_at,updated_at) VALUES(?1,?2,'saved','system','{}',?3,?4,?5,?4,?6,?6)",params![source_id,mid,operation,m.duration,(!audio_unavailable).then_some(&m.manifest.hash),m.meeting.created_at]).map_err(err)?;
                 } else if source == "audio_import" {
                     let a = m.audio.as_ref();
                     let aid = a.map(|a| get("file_assets", &a.asset.id)).transpose()?;
-                    tx.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,detected_format,duration_us,original_asset_id,converted_asset_id,created_at,updated_at) VALUES(?1,?2,'ready','backup.wav','wav',?3,?4,?4,?5,?5)",params![source_id,mid,m.duration,aid,m.meeting.created_at]).map_err(err)?;
+                    tx.execute("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,detected_format,duration_us,original_asset_id,converted_asset_id,created_at,updated_at) VALUES(?1,?2,?6,'backup.wav','wav',?3,?4,?4,?5,?5)",params![source_id,mid,m.duration,aid,m.meeting.created_at,if audio_unavailable {"failed"} else {"ready"}]).map_err(err)?;
                     if let Some(a) = a {
                         let info = crate::audio_import::AudioInfo {
                             schema_version: 1,
@@ -708,6 +752,9 @@ impl Contents {
                 return Err("人物対応・音声区間の文字起こしがありません".into());
             }
             write_book(&tx, Some((old, &mid)), &m.vocabulary, identity)?;
+            if let Some(record) = &m.salvage {
+                super::super::salvage_schema::insert_meeting(&tx, &mid, record)?;
+            }
             if let Some(markdown) = &m.markdown {
                 super::super::minutes_markdown::validate_text(markdown)?;
                 tx.execute("INSERT INTO minutes_markdown(meeting_id,markdown,content_hash,lock_version,operation_id,base_lock_version,updated_at) VALUES(?1,?2,?3,1,?4,0,?5)",params![mid,markdown,super::super::minutes_markdown::content_hash(markdown),operation,m.meeting.updated_at]).map_err(err)?;
@@ -715,10 +762,7 @@ impl Contents {
         }
         tx.commit().map_err(err)?;
         crate::operation_observation::report("building_meetings", total, total, "meetings");
-        super::super::voice::validate_registry(&db)?;
-        portable::validate_scopes(&db)?;
-        validate_database(&mut db, cancelled)?;
-        Ok(db)
+        Ok(())
     }
 }
 

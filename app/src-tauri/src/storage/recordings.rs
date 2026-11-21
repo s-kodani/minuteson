@@ -411,7 +411,8 @@ impl Storage {
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;
-            let mut query = db.prepare("SELECT r.id,r.meeting_id,m.title FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id LEFT JOIN meeting_audio_commits a ON a.meeting_id=m.id WHERE r.state IN ('interrupted','failed','saved') AND m.source_type='recording' AND ((r.audio_manifest_hash IS NULL AND m.lifecycle IN ('recording','draft')) OR (r.audio_manifest_hash IS NOT NULL AND m.lifecycle='recorded' AND (?1 IS NOT NULL OR a.phase IS NULL OR a.phase!='cleaned'))) AND (?1 IS NULL OR r.id=?1) AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=m.id AND p.domain='meetings' AND p.entity_key=m.id) ORDER BY r.created_at,r.id").map_err(|e|e.to_string())?;
+            let unreserved = super::meeting_access::unreserved_sql(&db, "r.meeting_id")?;
+            let mut query = db.prepare(&format!("SELECT r.id,r.meeting_id,CASE WHEN typeof(m.title)='text' THEN m.title ELSE '会議名を確認できません' END FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id LEFT JOIN meeting_audio_commits a ON a.meeting_id=m.id WHERE r.state IN ('interrupted','failed','saved') AND m.source_type='recording' AND ((r.audio_manifest_hash IS NULL AND m.lifecycle IN ('recording','draft')) OR (r.audio_manifest_hash IS NOT NULL AND m.lifecycle='recorded' AND (?1 IS NOT NULL OR a.phase IS NULL OR a.phase!='cleaned'))) AND (?1 IS NULL OR r.id=?1) AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=m.id AND p.domain='meetings' AND p.entity_key=m.id){unreserved} ORDER BY r.created_at,r.id")).map_err(|e|e.to_string())?;
             let rows = query
                 .query_map([session_id], |r| {
                     Ok(crate::recording_recovery::Item {
@@ -427,27 +428,45 @@ impl Storage {
                     })
                 })
                 .map_err(|e| e.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?;
+                .filter_map(|row| match row {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        self.startup_diagnostic(None, "recording_recovery_row", &error.to_string());
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
             rows
         };
         inventory(interrupted.clone());
         let mut recovered = Vec::new();
         for mut item in interrupted {
-            let deleted = {
+            let preflight = (|| {
                 let db = self
                     .connection
                     .lock()
                     .map_err(|_| "DBロックを取得できません")?;
-                super::deletion::audio::source_deleted(&db, &item.meeting_id)?
+                if super::meeting_access::reserved(&db, &item.meeting_id)?
+                    || super::deletion::fence::audio_pending(&db, &item.meeting_id)?
+                    || super::deletion::audio::source_deleted(&db, &item.meeting_id)?
+                    || super::salvage_schema::meeting(&db, &item.meeting_id)?
+                        .is_some_and(|record| record.audio_unavailable.is_some())
+                {
+                    return Ok(false);
+                }
+                db.query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE id=?1 AND meeting_id=?2 AND state IN ('interrupted','failed','saved'))",
+                    params![item.session_id,item.meeting_id], |r| r.get(0)).map_err(|e| e.to_string())
+            })();
+            let exists = match preflight {
+                Ok(exists) => exists,
+                Err(error) => {
+                    self.startup_diagnostic(Some(&item.meeting_id), "audio_recovery", &error);
+                    item.phase = "failed".into();
+                    item.error = Some(error);
+                    progress(item);
+                    continue;
+                }
             };
-            if deleted {
-                item.phase = "skipped".into();
-                progress(item);
-                continue;
-            }
-            let exists: bool = self.connection.lock().map_err(|_| "DBロックを取得できません")?
-                .query_row("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE id=?1 AND meeting_id=?2 AND state IN ('interrupted','failed','saved'))",params![item.session_id,item.meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
             if !exists {
                 item.phase = "skipped".into();
                 progress(item);
@@ -474,6 +493,7 @@ impl Storage {
                 Ok(saved)
             }) {
                 Ok(_) => {
+                    self.clear_startup_diagnostic(&item.meeting_id, "audio_recovery");
                     recovered.push(item.session_id.clone());
                     item.phase = "succeeded".into();
                 }
@@ -483,6 +503,7 @@ impl Storage {
                     item.phase = if pending { "failed" } else { "skipped" }.into();
                     if pending {
                         item.no_audio = error == NO_CAPTURED_AUDIO;
+                        self.startup_diagnostic(Some(&item.meeting_id), "audio_recovery", &error);
                         item.error = Some(error);
                     }
                 }
@@ -632,8 +653,10 @@ impl Storage {
         if lifecycle != "draft" || source_type.is_some() {
             return Err("この会議では新規録音を開始できません".into());
         }
+        let unreserved = super::meeting_access::unreserved_sql(&transaction, "meeting_id")?;
+        let audio = super::jobs::unreserved_audio_job_sql(&transaction, "processing_jobs")?;
         let busy: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running', 'pausing'))",
+            &format!("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running', 'pausing'){unreserved}{audio})"),
             [], |row| row.get(0),
         ).map_err(|error| error.to_string())?;
         if busy {

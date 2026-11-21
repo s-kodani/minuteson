@@ -30,7 +30,11 @@ async (page, capturePath) => {
     results.push(`${screen}: title retains an adjacent info icon and full explanation`);
     if (screen === "内部ログ") {
       await page.getByRole("tab", { name: "エンジンログ", exact: true }).click();
-      await visit("エンジンログ", "stderrは必ずしもエラーではありません");
+      const enginePanel = page.getByRole("tabpanel", { name: "エンジンログ", exact: true });
+      await enginePanel.waitFor();
+      check(await enginePanel.getByText("エンジンログ", { exact: true }).count() === 0, "engine panel repeated its tab label");
+      check(await info("エンジンログ").count() === 0, "engine panel retained a separate help button");
+      await visit("内部ログ", "エンジンの診断出力をそのまま表示します。会議本文やローカルパスが含まれる場合があります。stderrは必ずしもエラーではありません。");
     }
     if (screen === "プロンプト") {
       await visit("議事録生成プロンプト", "次の新規生成");

@@ -23,6 +23,12 @@ pub(crate) struct RootLease {
 }
 impl RootLease {
     pub(crate) fn acquire(root: &Path, resetting: bool) -> Result<Arc<Self>, String> {
+        Self::acquire_mode(root, resetting, true)
+    }
+    pub(super) fn acquire_for_salvage(root: &Path) -> Result<Arc<Self>, String> {
+        Self::acquire_mode(root, true, false)
+    }
+    fn acquire_mode(root: &Path, resetting: bool, create: bool) -> Result<Arc<Self>, String> {
         let identity = Identity::read(&directory(root)?)?;
         // Reject aliases using metadata only. Opening/closing a live SQLite
         // inode before acquiring this lease can release POSIX process locks.
@@ -39,7 +45,7 @@ impl RootLease {
                 Err(e) => return Err(err(e)),
             }
         }
-        if !exists(&root.join(ROOT_LOCK))? {
+        if create && !exists(&root.join(ROOT_LOCK))? {
             match write_new(&root.join(ROOT_LOCK), b"") {
                 Ok(()) => {}
                 Err(e) if exists(&root.join(ROOT_LOCK))? => {
@@ -48,7 +54,7 @@ impl RootLease {
                 Err(e) => return Err(e),
             }
         }
-        let file = open_file(&root.join(ROOT_LOCK), libc::O_RDWR)?;
+        let file = open_file(&root.join(ROOT_LOCK), if create { libc::O_RDWR } else { libc::O_RDONLY })?;
         let m = crate::native_fs::metadata(&file).map_err(err)?;
         if !regular(&m, true) {
             return Err("保存先の排他ファイルが不正です".into());
@@ -117,7 +123,7 @@ fn open_directory(p: &Path) -> Result<File, String> {
     }
     Ok(file)
 }
-fn open_file(p: &Path, flags: Flags) -> Result<File, String> {
+pub(super) fn open_file(p: &Path, flags: Flags) -> Result<File, String> {
     if flags & libc::O_DIRECTORY != 0 {
         return open_directory(p);
     }
@@ -139,7 +145,7 @@ fn open_file(p: &Path, flags: Flags) -> Result<File, String> {
         Ok(unsafe { File::from_raw_fd(fd) })
     }
 }
-fn create_directory(p: &Path) -> Result<(), String> {
+pub(super) fn create_directory(p: &Path) -> Result<(), String> {
     let parent = p.parent().ok_or("親フォルダーがありません")?;
     let directory = open_directory(parent)?;
     let name = std::ffi::CString::new(p.file_name().ok_or("フォルダー名がありません")?.as_bytes())
@@ -149,7 +155,7 @@ fn create_directory(p: &Path) -> Result<(), String> {
     }
     crate::native_fs::sync_handle(&directory).map_err(err)
 }
-fn read_private(p: &Path, limit: u64) -> Result<Vec<u8>, String> {
+pub(super) fn read_private(p: &Path, limit: u64) -> Result<Vec<u8>, String> {
     let mut f = open_file(p, libc::O_RDONLY)?;
     let m = crate::native_fs::metadata(&f).map_err(err)?;
     if !regular(&m, true) || m.len() > limit {
@@ -165,14 +171,14 @@ fn read_private(p: &Path, limit: u64) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-fn write_new(p: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(super) fn write_new(p: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut f = open_file(p, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
     f.write_all(bytes)
         .and_then(|_| crate::native_fs::sync_handle(&f))
         .map_err(err)?;
     crate::native_fs::sync_path(p.parent().ok_or("親フォルダーがありません")?)
 }
-fn rename(from: &Path, to: &Path, replace: bool) -> Result<(), String> {
+pub(super) fn rename(from: &Path, to: &Path, replace: bool) -> Result<(), String> {
     let a = from.parent().ok_or("移動元の親がありません")?;
     let b = to.parent().ok_or("移動先の親がありません")?;
     directory(a)?;
@@ -231,6 +237,7 @@ pub(crate) struct Selection {
     meeting: Location,
     bootstrap: Option<String>,
     database: Option<Identity>,
+    model_parent: Option<Location>,
 }
 impl Selection {
     pub(crate) fn root(&self) -> &Path {
@@ -238,6 +245,9 @@ impl Selection {
     }
     pub(crate) fn app_data(&self) -> &Path {
         &self.data.path
+    }
+    fn model_parent(&self) -> &Path {
+        &self.model_parent.as_ref().unwrap_or(&self.data).path
     }
 }
 pub(crate) fn inspect(bootstrap: &Bootstrap, data: &Path) -> Result<Selection, String> {
@@ -249,6 +259,9 @@ pub(crate) fn inspect(bootstrap: &Bootstrap, data: &Path) -> Result<Selection, S
         data: Location::new(&data.canonicalize().map_err(err)?)?,
         meeting: Location::new(bootstrap.root())?,
         bootstrap: state.loaded.as_ref().map(|l| l.bytes_hash.clone()),
+        model_parent: state.loaded.as_ref().and_then(|l| l.record.salvage.as_ref())
+            .map(|s| Location::new(s.models_root().parent().ok_or("モデル保存先の親がありません")?))
+            .transpose()?,
         database: if exists(&bootstrap.root().join(DB))? {
             Some(Identity::read(&meta(&bootstrap.root().join(DB))?)?)
         } else {
@@ -261,7 +274,8 @@ pub(crate) fn inspect(bootstrap: &Bootstrap, data: &Path) -> Result<Selection, S
         return Err("未完了の初期化があります。アプリを再起動して回復してください".into());
     }
     // Probe writable directories without reading any rejected DB/model content.
-    for root in [&selection.config, &selection.data, &selection.meeting] {
+    let roots = [&selection.config, &selection.data, &selection.meeting];
+    for root in roots.into_iter().chain(selection.model_parent.iter()) {
         let probe = root.path.join(format!(".reset-probe-{}", Uuid::new_v4()));
         write_new(&probe, b"")?;
         std::fs::remove_file(&probe).map_err(err)?;
@@ -362,15 +376,20 @@ struct Journal {
     workspaces: Vec<Workspace>,
     lock_identity: Identity,
     old_bootstrap: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model_parent: Option<Location>,
     new_bootstrap: Option<String>,
     fresh: Vec<Fresh>,
     staged: bool,
     committed: bool,
 }
 impl Journal {
+    fn model_parent(&self) -> &Path {
+        &self.model_parent.as_ref().unwrap_or(&self.data).path
+    }
     fn fresh_path(&self, fresh: &Fresh) -> PathBuf {
         (if fresh.app_data {
-            &self.data.path
+            self.model_parent()
         } else {
             &self.meeting.path
         })
@@ -471,7 +490,7 @@ impl Journal {
             || !uuid(&self.id)
             || self.config.path != config
             || self.data.path != data
-            || self.roots.len() > 3
+            || self.roots.len() > 3 + usize::from(self.model_parent.is_some())
             || self.entries.len() > 10000
             || self.fresh.len() > 20
         {
@@ -484,6 +503,7 @@ impl Journal {
             self.meeting.path.clone(),
         ]
         .into_iter()
+        .chain(self.model_parent.iter().map(|p| p.path.clone()))
         .collect();
         if self
             .roots
@@ -499,8 +519,9 @@ impl Journal {
             let root = self.roots.get(e.root).ok_or("初期化記録の親が不正です")?;
             if e.name.contains(['/', '\\'])
                 || !(root.path == self.meeting.path && meeting_name(&e.name)
-                    || root.path == self.data.path && data_name(&e.name)
-                    || root.path == self.config.path && config_name(&e.name))
+                    || root.path == self.model_parent() && e.name == "models"
+                    || root.path == self.data.path && e.name != "models" && data_name(&e.name)
+                    || root.path == self.config.path && self.model_parent.is_none() && config_name(&e.name))
                 || !names.insert((e.root, e.name.clone()))
             {
                 return Err("初期化記録の対象名が不正です".into());
@@ -536,12 +557,14 @@ impl Journal {
             doc.record.validate()?;
             if doc.record.current.path != self.meeting.path
                 || doc.record.current.directory != self.meeting.identity
+                || doc.record.salvage.as_ref().map(|s| s.models_root())
+                    != self.model_parent.as_ref().map(|p| p.path.join("models")).as_deref()
                 || hash(&serde_json::to_vec(&doc.record).map_err(err)?) != doc.sha256
             {
                 return Err("初期化の旧保存先情報が一致しません".into());
             }
-        } else if self.meeting.path != self.data.path
-            && self.meeting.path != self.data.path.join("data")
+        } else if self.model_parent.is_some() || (self.meeting.path != self.data.path
+            && self.meeting.path != self.data.path.join("data"))
         {
             return Err("未登録の初期化対象を回復しません".into());
         }
@@ -565,6 +588,7 @@ fn fresh_names() -> [&'static str; 8] {
 }
 fn entries(s: &Selection) -> Result<(Vec<Location>, Vec<Entry>), String> {
     let mut roots = vec![s.meeting.clone(), s.data.clone(), s.config.clone()];
+    roots.extend(s.model_parent.iter().cloned());
     roots.sort_by(|a, b| a.path.cmp(&b.path));
     roots.dedup_by(|a, b| a.path == b.path);
     let mut result = vec![];
@@ -575,8 +599,9 @@ fn entries(s: &Selection) -> Result<(Vec<Location>, Vec<Entry>), String> {
                 continue;
             };
             if !(r.path == s.meeting.path && meeting_name(&name)
-                || r.path == s.data.path && data_name(&name)
-                || r.path == s.config.path && config_name(&name))
+                || r.path == s.model_parent() && name == "models"
+                || r.path == s.data.path && name != "models" && data_name(&name)
+                || r.path == s.config.path && s.model_parent.is_none() && config_name(&name))
             {
                 continue;
             }
@@ -600,7 +625,7 @@ fn entries(s: &Selection) -> Result<(Vec<Location>, Vec<Entry>), String> {
                 name,
                 identity: Identity::read(&m)?,
                 directory: m.is_dir(),
-                archive: !p.starts_with(s.data.path.join("models"))
+                archive: !p.starts_with(s.model_parent().join("models"))
                     && !p.starts_with(s.data.path.join("model-downloads")),
             });
         }
@@ -812,6 +837,7 @@ fn create_journal(b: &Bootstrap, s: &Selection, id: &str) -> Result<Journal, Str
         workspaces: vec![],
         lock_identity: b.lock_identity.clone(),
         old_bootstrap,
+        model_parent: s.model_parent.clone(),
         new_bootstrap: None,
         fresh: vec![],
         staged: false,
@@ -862,24 +888,6 @@ pub(crate) fn execute(
     archive: Option<&Path>,
     progress: &impl Fn(&str),
 ) -> Result<(), String> {
-    execute_mode(b, s, id, archive, false, progress)
-}
-pub(crate) fn execute_restore(
-    b: Bootstrap,
-    s: &Selection,
-    id: &str,
-    progress: &impl Fn(&str),
-) -> Result<(), String> {
-    execute_mode(b, s, id, None, true, progress)
-}
-fn execute_mode(
-    b: Bootstrap,
-    s: &Selection,
-    id: &str,
-    archive: Option<&Path>,
-    restore: bool,
-    progress: &impl Fn(&str),
-) -> Result<(), String> {
     let lease = RootLease::acquire(s.root(), true)?;
     let mut j = create_journal(&b, s, id)?;
     let mut writer_leases = Some(capture_writer_leases(s.app_data())?);
@@ -887,55 +895,6 @@ fn execute_mode(
     // This control record does not alter any original payload or old DB.
     j.save()?;
     let result = (|| {
-        let recovered = if restore {
-            // Every source remains in place until reconstruction and validation
-            // of all requested content have completed in owned private workspaces.
-            for root in 0..j.roots.len() {
-                let path = j.workspace(root);
-                create_directory(&path)?;
-                j.workspaces.push(Workspace {
-                    root,
-                    identity: Identity::read(&directory(&path)?)?,
-                });
-                j.save()?;
-            }
-            let meeting = j
-                .roots
-                .iter()
-                .position(|root| root.path == s.meeting.path)
-                .ok_or("会議保存先がありません")?;
-            let data = j
-                .roots
-                .iter()
-                .position(|root| root.path == s.data.path)
-                .ok_or("モデル保存先がありません")?;
-            let input = j.workspace(meeting).join("source");
-            create_directory(&input)?;
-            let mut inventory = vec![];
-            for name in &fresh_names()[..4] {
-                let path = s.root().join(name);
-                if exists(&path)? {
-                    copy_tree(&path, &input.join(name), &[], &mut inventory, 0)?;
-                }
-            }
-            let result = crate::storage::backup::startup::prepare(
-                &input.join(DB),
-                s.root(),
-                &s.app_data().join("models"),
-                &j.workspace(meeting),
-                &j.workspace(data),
-                progress,
-            )?;
-            for source in inventory {
-                if fingerprint(&source.path)? != source {
-                    return Err("回収中に元DBが変更されています。元データを保持します".into());
-                }
-            }
-            checkpoint("recovered")?;
-            Some(result)
-        } else {
-            None
-        };
         if let Some(to) = archive {
             j.phase = Phase::Archiving;
             j.save()?;
@@ -959,7 +918,7 @@ fn execute_mode(
                     .map_err(err)?,
             )?;
             let excluded = [
-                s.data.path.join("models"),
+                s.model_parent().join("models"),
                 s.data.path.join("model-downloads"),
             ];
             let mut inventory = vec![];
@@ -1004,9 +963,6 @@ fn execute_mode(
         j.save()?;
         write_new(&s.root().join(PENDING), id.as_bytes())?;
         for root in 0..j.roots.len() {
-            if j.workspaces.iter().any(|workspace| workspace.root == root) {
-                continue;
-            }
             let path = j.workspace(root);
             create_directory(&path)?;
             j.workspaces.push(Workspace {
@@ -1059,34 +1015,9 @@ fn execute_mode(
             checkpoint("fresh_installed")?;
         }
         let storage =
-            Storage::open_for_reset(s.root().into(), s.app_data().join("models"), lease.clone())
+            Storage::open_for_reset(s.root().into(), s.model_parent().join("models"), lease.clone())
                 .map_err(err)?;
         storage.validate_startup_reset()?;
-        if let Some(recovered) = &recovered {
-            progress("回収したデータを初期化後の保存先へ再登録しています");
-            for (name, source, app_data) in [
-                ("meetings", recovered.root.join("meetings"), false),
-                ("voices", recovered.root.join("voices"), false),
-                ("models", recovered.models.clone(), true),
-            ] {
-                if !exists(&source)? {
-                    continue;
-                }
-                let fresh = Fresh {
-                    name: name.into(),
-                    identity: Identity::read(&directory(&source)?)?,
-                    app_data,
-                };
-                let destination = j.fresh_path(&fresh);
-                j.fresh.push(fresh);
-                j.save()?;
-                checkpoint("restore_reserved")?;
-                rename(&source, &destination, false)?;
-                checkpoint("restore_installed")?;
-            }
-            recovered.install(&storage)?;
-            checkpoint("restored")?;
-        }
         let current = Root::bound(&storage)?;
         let revision = b
             .state
@@ -1100,6 +1031,30 @@ fn execute_mode(
                     .checked_add(1)
                     .ok_or("起動設定の版番号上限です")
             })?;
+        let mut salvage = b.state.lock().map_err(err)?.loaded.as_ref()
+            .and_then(|loaded| loaded.record.salvage.clone());
+        if let Some(binding) = salvage.as_mut() {
+            let models = binding.models_root();
+            if !exists(models)? {
+                let fresh = Fresh {
+                    name: "models".into(),
+                    identity: {
+                        let parent = j.roots.iter().position(|root| root.path == s.model_parent())
+                            .ok_or("モデル保存先の所有がありません")?;
+                        let reserved = j.workspace(parent).join("new-models");
+                        create_directory(&reserved)?;
+                        Identity::read(&directory(&reserved)?)?
+                    },
+                    app_data: true,
+                };
+                let reserved = j.fresh_workspace(&fresh)?;
+                let target = j.fresh_path(&fresh);
+                j.fresh.push(fresh);
+                j.save()?;
+                rename(&reserved, &target, false)?;
+            }
+            binding.models_identity = Identity::read(&directory(models)?)?;
+        }
         let record = Record {
             revision,
             origin: Origin::Default,
@@ -1107,6 +1062,7 @@ fn execute_mode(
             pending_move: None,
             activation: None,
             recovery: None,
+            salvage,
         };
         let bytes = serde_json::to_vec(&Document {
             schema_version: 3,
@@ -1136,12 +1092,7 @@ fn execute_mode(
         j.save()?;
         drop(storage);
         checkpoint("committed")?;
-        progress(if restore {
-            "データ復元を確定しています"
-        } else {
-            "旧データとモデル本体を削除しています"
-        });
-        drop(recovered);
+        progress("旧データとモデル本体を削除しています");
         finish(&j)?;
         Ok(())
     })();
@@ -1239,7 +1190,7 @@ fn recover_record(j: &Journal, lease: &RootLease) -> Result<(), String> {
         .chain([
             j.meeting.path.join("meetings"),
             j.meeting.path.join("voices"),
-            j.data.path.join("models"),
+            j.model_parent().join("models"),
         ]);
     for path in candidates {
         if exists(&path)?
@@ -1353,6 +1304,8 @@ pub(crate) fn recover(config: &Path, data: &Path) -> Result<(), String> {
     lock.try_lock()
         .map_err(|e| format!("初期化の回復は他のアプリが終了してから行います: {e}"))?;
     let lock = BootstrapLock(lock);
+    // The version-1 format also covered the retired full reconstruction.
+    // Resolve its existing cutover from the same bootstrap/ownership evidence.
     let (digest, j): (String, Journal) =
         serde_json::from_slice(&read_private(&path, MAX_RECORD)?).map_err(err)?;
     if digest != hash(&serde_json::to_vec(&j).map_err(err)?) {

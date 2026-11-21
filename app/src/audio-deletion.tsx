@@ -38,9 +38,9 @@ export function useAudioDeletion({ operation, locked, withSavedEdits, onDeleted,
   const listing = operation.audioDeletionListing, protectedNow = rpcBusy || unknown;
   const admission = deletionAvailability(operation.availability);
   const sharedAvailable = admission.available || (permitsDeletionRecovery(admission, listing?.restartRequired));
-  const canReviewPending = isTauri() && operation.audioDeletionSupported && operation.connected && sharedAvailable && !locked && !protectedNow && !s?.busy;
+  const canReviewPending = isTauri() && operation.audioDeletionSupported && !!listing && operation.connected && sharedAvailable && !locked && !protectedNow && !s?.busy;
   const canReviewNew = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !s?.restartRequired && !preview?.pending && !s?.deletionPreview?.pending;
-  const reviewUnavailableReason = canReviewNew ? null : deletionReviewReason(operation, { native: isTauri(), supported: operation.audioDeletionSupported, locked, protectedNow, sharedAvailable });
+  const reviewUnavailableReason = canReviewNew ? null : deletionReviewReason(operation, { native: isTauri(), supported: operation.audioDeletionSupported, locked, protectedNow, sharedAvailable, listingError: operation.listingErrors.audio });
   const meetingReviewReason = (id: string) => availability.audioDeletionReason(id) || reviewUnavailableReason;
   const canReviewNewId = (id: string) => canReviewNew && !availability.audioDeletionReason(id);
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
@@ -159,7 +159,7 @@ export function AudioDeletionPanel({ operation, control: c, meetingTitle }: { op
   const trackState = (state: string) => ({ ready: "保存済み", interrupted: "中断", failed: "失敗" } as Record<string, string>)[state] ?? state;
   return <>
     <ToastNotice scope="audio" type="deletion-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
-    <IssueNotice scope={p?.meetingId ?? "deletion"} type="audio-deletion" label="音声削除" message={c.error || (active ? s?.errorMessage : "")} />
+    <IssueNotice scope={p?.meetingId ?? "deletion"} type="audio-deletion" label="音声削除" message={c.error || (active ? s?.errorMessage : "") || (operation.listingErrors.audio && "削除記録を確認できません。音声削除の受付を保留し、一覧を再確認しています。")} />
     {c.rpcBusy&&c.noticeWaiting&&<p role="status">通知履歴の処理完了を待っています</p>}
     {simple && c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>同じ音声削除操作の結果を確認</button><button type="button" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>同じ音声操作の安全な停止を要求</button></div>}
     <CommonModal portal hideDismissButton={simple} ref={c.dialog} open={c.open} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.querySelector<HTMLElement>(".sidebar button")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="audio-deletion-title">

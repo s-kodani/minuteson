@@ -70,6 +70,7 @@ mod speaker_features;
 mod startup_attention;
 mod startup_instance;
 mod startup_reset;
+mod startup_salvage;
 mod startup_window;
 mod storage;
 mod transcription;
@@ -189,11 +190,7 @@ async fn preview_model_profile_application(
         }
         let app = window.app_handle().clone();
         let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
-        let models_root = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("models");
+        let models_root = app.state::<Storage>().native_models_root()?.to_owned();
         tauri::async_runtime::spawn_blocking(move || {
             let target = app
                 .state::<Storage>()
@@ -242,11 +239,7 @@ async fn apply_model_profile_application(
         }
         let app = window.app_handle().clone();
         let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
-        let models_root = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("models");
+        let models_root = app.state::<Storage>().native_models_root()?.to_owned();
         tauri::async_runtime::spawn_blocking(move || {
             let target = app
                 .state::<Storage>()
@@ -302,11 +295,7 @@ async fn check_model_compatibility(
         }
         let app = window.app_handle().clone();
         let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
-        let models_root = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("models");
+        let models_root = app.state::<Storage>().native_models_root()?.to_owned();
         tauri::async_runtime::spawn_blocking(move || {
             let target = app
                 .state::<Storage>()
@@ -524,9 +513,8 @@ async fn get_model_deletion_items(
 ) -> Result<storage::deletion::models::operations::Listing, mon_contracts::AppError> {
     let result: Result<storage::deletion::models::operations::Listing, String> = async move {
         let app = data_app(&window)?;
-        let root = app.state::<Storage>().native_models_root().to_owned();
         tauri::async_runtime::spawn_blocking(move || {
-            storage::deletion::models::operations::listing(&app.state::<Storage>(), &root)
+            app.state::<Storage>().list_model_deletion_items()
         })
         .await
         .map_err(|e| e.to_string())?
@@ -1203,6 +1191,30 @@ async fn get_minutes_markdown(
     }
     .await;
     result.map_err(|message| mon_contracts::AppError::from_command("get_minutes_markdown", message))
+}
+
+#[tauri::command]
+async fn get_meeting_body_for_review(
+    window: WebviewWindow,
+    meeting_id: String,
+    part: mon_contracts::MeetingBodyPart,
+) -> Result<Option<mon_contracts::MeetingBodyReview>, mon_contracts::AppError> {
+    let result: Result<Option<mon_contracts::MeetingBodyReview>, String> = async move {
+        if window.label() != "main" {
+            return Err("会議本文はメイン画面だけで確認できます".into());
+        }
+        let app = window.app_handle().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<Storage>()
+                .meeting_body_for_review(&meeting_id, part)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+    .await;
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_meeting_body_for_review", message)
+    })
 }
 
 #[tauri::command]
@@ -2081,6 +2093,7 @@ async fn finish_main_close(
     quit: bool,
     update: Option<bool>,
     expected: Option<application_close::CloseExpectations>,
+    salvage: Option<bool>,
 ) -> Result<(), mon_contracts::AppError> {
     let result: Result<(), String> = async move {
         if cfg!(any(windows, target_os = "macos")) && !quit {
@@ -2090,6 +2103,18 @@ async fn finish_main_close(
             return Err("Only the main window can finish closing".into());
         }
         let updating = update.unwrap_or(false);
+        let salvaging = salvage.unwrap_or(false);
+        if salvaging && (!quit || updating || !cfg!(any(windows, target_os = "macos"))) {
+            return Err("この終了方法ではデータ復元に切り替えられません".into());
+        }
+        if salvaging && expected.is_none() {
+            return Err("録音とデータ処理の状態を確認してから復元を開始してください".into());
+        }
+        #[cfg(any(target_os = "macos", windows))]
+        if salvaging {
+            window.state::<bootstrap::Bootstrap>()
+                .require_ready_salvage(&window.state::<Storage>())?;
+        }
         #[cfg(not(target_os = "macos"))]
         if updating {
             return Err("このOSはアプリ内更新の対象外です".into());
@@ -2133,6 +2158,12 @@ async fn finish_main_close(
         // Keep the exit epilogue alive too: a lost close response must neither
         // release running work nor leave the open app stranded behind an exit gate.
         tauri::async_runtime::spawn(async move {
+            let recovery = window.state::<startup_salvage::Salvage>();
+            let _handoff = if salvaging {
+                Some(recovery.begin_handoff()?)
+            } else {
+                None
+            };
             let app = window.app_handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
                 RecorderController::with_transition(&app, || {
@@ -2146,8 +2177,11 @@ async fn finish_main_close(
                     if updating {
                         app_updates::macos::require_idle(&app)?;
                     }
+                    if salvaging && app.state::<SessionStore>().snapshot().is_active() {
+                        return Err("録音の停止と保存を確認してから復元を開始してください".into());
+                    }
                     app.state::<capture_test::CaptureTests>().seal_exit()?;
-                    let admission = if updating {
+                    let admission = if updating || salvaging {
                         app.state::<AnalysisController>().begin_update_exit()
                     } else if expected.is_some() {
                         app.state::<AnalysisController>().seal_exit()
@@ -2159,14 +2193,47 @@ async fn finish_main_close(
                     }
                     admission
                 })?;
-                let result = if let Some(target) = &expected {
+                let result = if salvaging {
+                    let target = expected
+                        .as_ref()
+                        .ok_or("データ処理の確認結果がありません")?;
+                    DataController::seal_salvage_exit(&app, &target.data_token).and_then(|_| {
+                        ImportController::seal_salvage_exit(&app, &target.import_token)
+                    })
+                } else if let Some(target) = &expected {
                     DataController::shutdown_checked(&app, &target.data_token).and_then(|_| {
                         ImportController::shutdown_checked(&app, &target.import_token)
                     })
                 } else {
                     DataController::shutdown(&app).and_then(|_| ImportController::shutdown(&app))
                 }
-                .and_then(|_| AnalysisController::shutdown(&app));
+                .and_then(|_| {
+                    if salvaging {
+                        AnalysisController::shutdown_for_salvage(&app)
+                    } else {
+                        AnalysisController::shutdown(&app)
+                    }
+                })
+                .and_then(|_| {
+                    #[cfg(any(target_os = "macos", windows))]
+                    if salvaging {
+                        let b = app.state::<bootstrap::Bootstrap>();
+                        let storage = app.state::<Storage>();
+                        storage.keep_sqlite_controls_on_close(true)?;
+                        let requested = b.request_ready_salvage(&storage).and_then(|_| {
+                            if let Err(error) = startup_instance::prepare_restart() {
+                                b.undo_salvage_request()?;
+                                return Err(error);
+                            }
+                            Ok(())
+                        });
+                        if let Err(error) = requested {
+                            storage.keep_sqlite_controls_on_close(false)?;
+                            return Err(error);
+                        }
+                    }
+                    Ok(())
+                });
                 if result.is_err() {
                     app.state::<AnalysisController>().abort_shutdown();
                     app.state::<capture_test::CaptureTests>().abort_exit()?;
@@ -2202,10 +2269,13 @@ async fn finish_main_close(
             .await
             .map_err(|e| e.to_string())??;
             window.state::<ExitGuard>().0.store(true, Ordering::SeqCst);
-            if updating {
+            if salvaging {
+                startup_instance::restart(window.app_handle());
+            } else if updating {
                 window.app_handle().restart();
+            } else {
+                window.app_handle().exit(0);
             }
-            window.app_handle().exit(0);
             Ok(())
         })
         .await
@@ -2938,6 +3008,46 @@ async fn list_meetings(window: WebviewWindow) -> Result<Vec<Meeting>, mon_contra
 }
 
 #[tauri::command]
+async fn get_meeting_list_diagnostics(
+    window: WebviewWindow,
+) -> Result<storage::startup_diagnostics::MeetingListDiagnostics, mon_contracts::AppError> {
+    let result: Result<_, String> = async move {
+        let app = data_app(&window)?.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<Storage>().meeting_list_diagnostics()
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    .await;
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("get_meeting_list_diagnostics", message)
+    })
+}
+
+#[tauri::command]
+fn get_storage_write_state(
+    window: WebviewWindow,
+) -> Result<storage::startup_diagnostics::StorageWriteState, mon_contracts::AppError> {
+    data_app(&window)
+        .map(|app| {
+            let storage = app.state::<Storage>();
+            let mut state = storage.storage_write_state();
+            #[cfg(any(target_os = "macos", windows))]
+            if state.salvage_available {
+                state.salvage_available = app
+                    .state::<bootstrap::Bootstrap>()
+                    .require_ready_salvage(&storage)
+                    .is_ok();
+            }
+            state
+        })
+        .map_err(|message| {
+            mon_contracts::AppError::from_command("get_storage_write_state", message)
+        })
+}
+
+#[tauri::command]
 async fn get_meeting(
     window: WebviewWindow,
     id: String,
@@ -3162,6 +3272,7 @@ pub fn run() {
     builder
         .manage(startup_attention::Startup::default())
         .manage(startup_reset::Reset::default())
+        .manage(startup_salvage::Salvage::default())
         .manage(startup_instance::Instance::default())
         .manage(residency::Residency::default())
         .manage(recording_recovery::Recovery::default())
@@ -3200,18 +3311,9 @@ pub fn run() {
             residency::initialize(app.handle());
             internal_logs::phase("application", None, None, "starting", None);
             #[cfg(target_os = "windows")]
-            if let Err(error) = local_engine::windows::initialize() {
-                app.state::<startup_attention::Startup>().block(
-                    startup_attention::Failure::new(
-                        startup_attention::Stage::Directories,
-                        format!("Windowsの処理終了管理を準備できません: {error}"),
-                        None,
-                        None,
-                    ),
-                )?;
-                startup_attention::show(app.handle());
-                return Ok(());
-            }
+            let process_management_error = local_engine::windows::initialize()
+                .err()
+                .map(|error| format!("Windowsの外部処理の終了管理を準備できません: {error}"));
             #[cfg(target_os = "macos")]
             macos_menu::install(app)?;
             let root = match app.path().app_data_dir() {
@@ -3296,74 +3398,72 @@ pub fn run() {
                     return Ok(());
                 }
             }
-            let prepared = ImportController::recover(app.handle()).and_then(|_| {
-                if !app.state::<Storage>().data_write_blocked() {
-                    let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
-                    capture_test::CaptureTests::initialize(app.handle(), &root)?;
+            let storage = app.state::<Storage>();
+            #[cfg(target_os = "windows")]
+            if let Some(message) = process_management_error {
+                storage.startup_diagnostic(None, "external_processes", &message);
+                internal_logs::report_error("application", &message);
+            }
+            if !storage.data_write_blocked() {
+                if let Err(error) = capture_test::CaptureTests::initialize(app.handle(), &root) {
+                    storage.startup_diagnostic(None, "capture_test", &error);
+                    internal_logs::report_error("capture_test", &error);
                 }
-                Ok(())
-            });
-            if let Err(error) = prepared {
-                app.state::<startup_attention::Startup>().block(
-                    startup_attention::Failure::new(
-                        startup_attention::Stage::StorageAdmission,
-                        error,
-                        Some(&root),
-                        None,
-                    ),
-                )?;
-                startup_attention::show(app.handle());
-                return Ok(());
             }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                let recovered = (|| -> Result<(), String> {
-                    let storage = handle.state::<Storage>();
-                    if storage
-                        .model_download_guidance()
-                        .is_ok_and(|guide| guide.pending)
-                    {
-                        if let Err(error) = job_history::clear() {
-                            internal_logs::report_error("job_history", &error);
-                        }
-                    }
-                    if let Err(error) = job_history::backfill(&storage) {
+                let storage = handle.state::<Storage>();
+                if storage
+                    .model_download_guidance()
+                    .is_ok_and(|guide| guide.pending)
+                {
+                    if let Err(error) = job_history::clear() {
                         internal_logs::report_error("job_history", &error);
                     }
-                    #[cfg(any(unix, windows))]
-                    if !storage.data_write_blocked() {
-                        data_controller::finish_interrupted_deletions(&handle)?;
+                }
+                if let Err(error) = job_history::backfill(&storage) {
+                    internal_logs::report_error("job_history", &error);
+                }
+                let recover = |category: &str, result: Result<(), String>| {
+                    if let Err(error) = result {
+                        storage.startup_diagnostic(None, category, &error);
+                        internal_logs::report_error(category, &error);
                     }
-                    if storage.data_write_blocked() {
-                        // Keep recovery controls available while writes remain fenced.
-                        return handle.state::<startup_attention::Startup>().ready();
-                    }
-                    recording_recovery::run(&handle)?;
-                    storage.finish_pending_import_audio()?;
-                    handle.state::<startup_attention::Startup>().ready()?;
+                };
+                #[cfg(any(unix, windows))]
+                if !storage.common_write_hold() {
+                    recover(
+                        "automatic_cleanup",
+                        data_controller::finish_interrupted_deletions(&handle),
+                    );
+                }
+                if !storage.data_write_blocked() {
+                    recover("recording_recovery", recording_recovery::run(&handle));
+                    recover(
+                        "import_audio_recovery",
+                        storage.finish_pending_import_audio(),
+                    );
+                    recover("audio_import", ImportController::recover(&handle));
+                }
+                let startup = handle.state::<startup_attention::Startup>();
+                if let Err(error) = startup
+                    .set_common_write_hold(storage.common_write_hold())
+                    .and_then(|()| startup.ready())
+                {
+                    internal_logs::report_error("application", &error);
+                    return;
+                }
+                if !storage.data_write_blocked() {
                     app_updates::start(&handle);
                     if let Err(error) = storage.retry_voice_audio_cleanup() {
                         internal_logs::report_error("voice_audio", &error);
                     }
                     let _ = handle.emit("voice-identity-changed", ());
-                    internal_logs::phase("application", None, None, "ready", None);
-                    Ok(())
-                })();
-                if let Err(error) = recovered {
-                    let _ = handle.state::<startup_attention::Startup>().block(
-                        startup_attention::Failure::new(
-                            startup_attention::Stage::AudioRecovery,
-                            error,
-                            Some(&root),
-                            handle.path().app_config_dir().ok().as_deref(),
-                        ),
-                    );
-                    startup_attention::show(&handle);
-                    return;
+                    if let Err(error) = AnalysisController::kick(&handle) {
+                        internal_logs::report_error("analysis", &error);
+                    }
                 }
-                if let Err(error) = AnalysisController::kick(&handle) {
-                    internal_logs::report_error("analysis", &error);
-                }
+                internal_logs::phase("application", None, None, "ready", None);
             });
             Ok(())
         })
@@ -3396,6 +3496,14 @@ pub fn run() {
                     .reject("データを初期化しています。完了をお待ちください");
                 return true;
             }
+            if webview.state::<startup_salvage::Salvage>().engaged()
+                && !startup_salvage::allowed_while_engaged(invoke.message.command())
+            {
+                invoke
+                    .resolver
+                    .reject("通常操作を停止しています。データ復元画面を確認してください");
+                return true;
+            }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool =
                 include!("command_handler.rs");
             handler(invoke)
@@ -3403,7 +3511,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             #[cfg(windows)]
             windows_appearance::event(window, event);
-            if window.state::<startup_reset::Reset>().busy() {
+            if window.state::<startup_reset::Reset>().busy()
+                || window.state::<startup_salvage::Salvage>().busy()
+            {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                 }
@@ -3470,7 +3580,9 @@ pub fn run() {
                 }
             }
             if let RunEvent::ExitRequested { api, .. } = event {
-                if app.state::<startup_reset::Reset>().busy() {
+                if app.state::<startup_reset::Reset>().busy()
+                    || app.state::<startup_salvage::Salvage>().busy()
+                {
                     api.prevent_exit();
                     return;
                 }

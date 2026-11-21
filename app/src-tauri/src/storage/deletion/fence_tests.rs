@@ -110,7 +110,7 @@ fn deletion_fence_keeps_theme_reads_but_never_accepts_presentation_writes() {
     drop(p);
     drop(f.storage);
     let storage = Storage::open(f.base.path().join("root")).unwrap();
-    assert!(storage.data_write_blocked());
+    assert!(!storage.data_write_blocked());
     assert_eq!(storage.ui_preferences().unwrap().lock_version, 0);
     assert!(storage
         .save_ui_preferences(
@@ -119,9 +119,10 @@ fn deletion_fence_keeps_theme_reads_but_never_accepts_presentation_writes() {
                 schema_version: 1,
                 theme: Theme::Light,
                 color_theme: Default::default(),
-            }
+            },
         )
-        .is_err());
+        .is_ok());
+    assert!(storage.rename_meeting(&f.meeting, "PROTECTED", 0).is_err());
     assert!(f.file.exists());
 }
 
@@ -335,7 +336,8 @@ fn deletion_fence_guard_failure_stays_fail_closed_until_reopen() {
     .unwrap()
     .verify_live(&storage, &crate::test_support::never_cancelled)
     .unwrap();
-    assert!(storage.data_write_blocked());
+    assert!(!storage.data_write_blocked());
+    assert!(storage.rename_meeting(&f.meeting, "PROTECTED", 0).is_err());
     assert_eq!(std::fs::read(&f.file).unwrap(), b"PRIVATE ORIGINAL AUDIO");
 }
 
@@ -359,13 +361,12 @@ fn deletion_fence_blocks_backup_move_stage_and_startup_recording_import_recovery
 }
 
 #[test]
-fn deletion_fence_cold_open_skips_mutable_recovery_preserves_active_rows_and_requires_restart_after_keep(
-) {
-    for (sql,table,state) in [
-        ("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('pending-active',?1,'transcription','running','pending-active',?2,'{}','{\"schemaVersion\":4}',?2,1,1)","processing_jobs","running"),
-        ("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,created_at,updated_at) VALUES('pending-active',?1,'preparing','system','{}','pending-active',1,1)","recording_sessions","preparing"),
-        ("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,created_at,updated_at) VALUES('pending-active',?1,'copying',?2,1,1)","audio_imports","copying"),
-        ("INSERT INTO export_records(id,meeting_id,request_hash,exported_content_hash,output_content_hash,output_size_bytes,format,destination_path,state,created_at,updated_at) VALUES('pending-active',?1,?2,?2,?2,0,'markdown','/tmp/unused.md','writing',1,1)","export_records","writing"),
+fn deletion_fence_cold_open_recovers_unrelated_rows_and_protects_target_until_resolved() {
+    for (sql,table) in [
+        ("INSERT INTO processing_jobs(id,meeting_id,kind,state,operation_id,input_hash,profile_snapshot_json,parameters_json,spec_hash,created_at,updated_at) VALUES('pending-active',?1,'transcription','running','pending-active',?2,'{}','{\"schemaVersion\":4}',?2,1,1)","processing_jobs"),
+        ("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,created_at,updated_at) VALUES('pending-active',?1,'preparing','system','{}','pending-active',1,1)","recording_sessions"),
+        ("INSERT INTO audio_imports(id,meeting_id,state,original_file_name,created_at,updated_at) VALUES('pending-active',?1,'copying',?2,1,1)","audio_imports"),
+        ("INSERT INTO export_records(id,meeting_id,request_hash,exported_content_hash,output_content_hash,output_size_bytes,format,destination_path,state,created_at,updated_at) VALUES('pending-active',?1,?2,?2,?2,0,'markdown','/tmp/unused.md','writing',1,1)","export_records"),
     ] {
         let f=Fixture::new();
         let source = match table {
@@ -387,20 +388,17 @@ fn deletion_fence_cold_open_skips_mutable_recovery_preserves_active_rows_and_req
         }
         let root=f.storage.root().to_owned(); drop(f.storage);
         let storage=Storage::open(root.clone()).unwrap();
-        assert!(storage.data_write_blocked()); assert!(!storage.restart_required()); assert!(storage.scratch.is_none());
-        let before:String=storage.connection.lock().unwrap().query_row(&format!("SELECT state FROM {table} WHERE id='pending-active'"),[],|r|r.get(0)).unwrap(); assert_eq!(before,state);
-        assert!(intent::read(&storage,&f.operation,&||false).unwrap().verify_live(&storage,&||false).is_err());
-        intent::keep_unstarted(&storage,&p,&||false).unwrap();
-        assert!(storage.restart_required()); assert!(storage.data_write_blocked()); assert!(storage.require_data_writable().unwrap_err().contains("再起動"));
-        assert!(storage.create_meeting("still blocked").is_err());
+        assert!(!storage.data_write_blocked()); assert!(!storage.restart_required());
+        let after: String = storage.connection.lock().unwrap().query_row(&format!("SELECT state FROM {table} WHERE id='pending-active'"),[],|r|r.get(0)).unwrap();
+        assert_eq!(after, if table == "audio_imports" { "failed" } else { "interrupted" });
+        storage.create_meeting("UNRELATED DRAFT").unwrap();
+        assert!(storage.rename_meeting(&f.meeting, "PROTECTED", 0).is_err());
         assert!(storage.prepare_backup_snapshot(&||false).is_err());
         intent::keep_unstarted(&storage,&p,&||false).unwrap();
+        storage.release_meeting_deletion(&f.meeting).unwrap();
         assert!(storage.deleting_meeting_ids().unwrap().is_empty());
-        drop(storage);
-        let storage=Storage::open(root).unwrap();
-        assert!(!storage.data_write_blocked()); assert!(!storage.restart_required()); assert!(storage.scratch.is_some());
-        let after:String=storage.connection.lock().unwrap().query_row(&format!("SELECT state FROM {table} WHERE id='pending-active'"),[],|r|r.get(0)).unwrap(); assert_eq!(after,if table == "audio_imports" { "failed" } else { "interrupted" });
-        storage.create_meeting("allowed after ordinary recovery").unwrap();
+        assert!(!storage.restart_required());
+        assert!(storage.rename_meeting(&f.meeting, "RETAINED", 0).is_ok());
         assert_eq!(std::fs::read(&f.file).unwrap(),b"PRIVATE ORIGINAL AUDIO");
     }
 }
@@ -544,7 +542,7 @@ fn deletion_fence_writer_cannot_adopt_another_operation_or_changed_root() {
         .is_err());
         assert!(copied_fence.pending());
         assert!(copied
-            .execute_batch("DELETE FROM meetings WHERE 0")
+            .execute("DELETE FROM meetings WHERE id=?1", [&f.meeting])
             .is_err());
         assert!(db.execute_batch("DELETE FROM meetings WHERE 0").is_err());
     }
@@ -690,14 +688,16 @@ fn deletion_fence_sigkill_before_and_after_keep_commit_preserves_all_data_and_co
             .unwrap()
             .starts_with(base.path().canonicalize().unwrap()));
         let storage = Storage::open(root).unwrap();
-        assert_eq!(storage.data_write_blocked(), phase == "beforeCommit");
+        assert!(!storage.data_write_blocked());
         if phase == "beforeCommit" {
+            assert!(storage.rename_meeting(&meeting, "PROTECTED", 0).is_err());
             let p =
                 intent::read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
             p.verify_live(&storage, &crate::test_support::never_cancelled)
                 .unwrap();
             intent::keep_unstarted(&storage, &p, &crate::test_support::never_cancelled).unwrap();
-            assert!(storage.restart_required());
+            storage.release_meeting_deletion(&meeting).unwrap();
+            assert!(!storage.restart_required());
         } else {
             storage
                 .create_meeting("allowed after cold kept receipt")

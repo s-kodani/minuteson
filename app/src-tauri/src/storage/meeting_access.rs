@@ -63,7 +63,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        db.query_row("SELECT coalesce(meeting_id,json_extract(target_manifest_json,'$.scope.meetingId')) FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'", [operation], |r|r.get(0)).map_err(|e|e.to_string())
+        db.query_row(&format!("SELECT coalesce(meeting_id,{}) FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'", super::deletion::fence::MANIFEST_MEETING), [operation], |r|r.get(0)).map_err(|e|e.to_string())
     }
     pub(crate) fn begin_meeting_work(
         &self,
@@ -243,8 +243,18 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         self.deletion_fence.scoped_update(&db, || {
-            let pending: bool = db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='delete_meeting' AND (meeting_id=?1 OR json_extract(target_manifest_json,'$.scope.meetingId')=?1) AND {})", super::deletion::fence::UNFINISHED), [meeting], |r|r.get(0)).map_err(|e|e.to_string())?;
-            if !pending { db.execute("DELETE FROM temp.mon_meeting_deletion_guard WHERE meeting_id=?1", [meeting]).map_err(|e|e.to_string())?; }
+            let predicate = super::deletion::fence::predicate(&db)?;
+            let pending: bool = db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='delete_meeting' AND (meeting_id=?1 OR {}=?1) AND {predicate})", super::deletion::fence::MANIFEST_MEETING), [meeting], |r|r.get(0)).map_err(|e|e.to_string())?;
+            if pending {
+                return Ok(());
+            }
+            let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM temp.mon_meeting_deletion_guard WHERE meeting_id=?1", [meeting]).map_err(|e|e.to_string())?;
+            if self.deletion_fence.preserve_startup_meeting(meeting) {
+                super::normalize_startup_states(&tx, " AND meeting_id=?2", Some(meeting))
+                    .map_err(|error| error.to_string())?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
             Ok(())
         })
     }
@@ -273,6 +283,14 @@ pub(super) fn any_reserved(db: &Connection) -> Result<bool, String> {
         |r| r.get(0),
     )
     .map_err(|e| e.to_string())
+}
+
+pub(super) fn unreserved_sql(db: &Connection, column: &str) -> Result<String, String> {
+    Ok(if installed(db)? {
+        format!(" AND ({column} IS NULL OR {column} NOT IN (SELECT meeting_id FROM temp.mon_meeting_deletion_guard))")
+    } else {
+        String::new()
+    })
 }
 pub(super) fn bypass(db: &Connection, enabled: bool) -> Result<(), String> {
     if installed(db)? {

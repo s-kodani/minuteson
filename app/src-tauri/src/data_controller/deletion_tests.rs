@@ -1,8 +1,7 @@
 use super::*;
 
 #[test]
-fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_ordinary_work_blocked(
-) {
+fn cold_deletion_native_resume_keeps_only_the_confirmed_meeting_protected() {
     for keep in [false, true] {
         let f = Fixture::new();
         let ready = f.ready();
@@ -26,7 +25,9 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
         let operation = partial.deletion_preview.unwrap().operation_id;
         drop(f.storage);
         let storage = Storage::open(f._root.path().into()).unwrap();
-        assert!(storage.data_write_blocked());
+        assert!(!storage.data_write_blocked());
+        assert!(storage.rename_meeting(&f.id, "PROTECTED", 0).is_err());
+        storage.create_meeting("UNRELATED DRAFT").unwrap();
         let analysis = AnalysisController::default();
         assert!(analysis
             .begin_deletion_maintenance(
@@ -110,22 +111,15 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
             snapshot = controller
                 .finish(started.token.as_deref().unwrap(), done)
                 .unwrap();
-            if storage.restart_required() {
-                analysis.require_storage_restart();
-            }
             assert!(analysis.begin_export().is_err());
             drop(lease);
-            if storage.restart_required() {
-                assert!(analysis
-                    .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
-                    .is_err());
-            }
-            assert!(storage.require_data_writable().is_err());
+            storage.release_meeting_deletion(&f.id).unwrap();
+            assert!(storage.require_data_writable().is_ok());
             assert!(controller.begin_request(request).unwrap().is_none());
         }
         assert_eq!(snapshot.phase, "completed");
         let receipt = snapshot.deletion_receipt.unwrap();
-        assert!(receipt.restart_required);
+        assert!(!receipt.restart_required);
         assert_eq!(receipt.retained, keep);
         assert_eq!(receipt.deleted, !keep);
         assert_eq!(storage.get_meeting(&f.id).unwrap().is_some(), keep);
@@ -153,7 +147,7 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
             let reviewed = next
                 .finish(started.token.as_deref().unwrap(), reviewed)
                 .unwrap();
-            assert!(reviewed.restart_required && reviewed.retry_allowed);
+            assert!(!reviewed.restart_required && reviewed.retry_allowed);
             assert_eq!(
                 reviewed.deletion_preview.as_ref().unwrap().phase,
                 "awaiting_ack"
@@ -190,7 +184,7 @@ fn cold_deletion_native_resume_uses_actual_restart_fenced_admission_and_keeps_or
             drop(lease);
             assert!(analysis
                 .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
-                .is_err());
+                .is_ok());
         }
         drop(storage);
         let clean = Storage::open(f._root.path().into()).unwrap();

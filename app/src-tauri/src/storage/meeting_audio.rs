@@ -95,7 +95,10 @@ fn read_metadata(
         || frames != chunk_frames
         || size < 0
         || !crate::audio::wave::valid_size(frames as u64, size as u64)
-        || end != frames * 1_000_000 / 16000
+        || frames
+            .checked_mul(1_000_000)
+            .map(|duration| duration / 16000)
+            != Some(end)
     {
         return Err("共通会議音声の保存記録が不正です".into());
     }

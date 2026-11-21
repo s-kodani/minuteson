@@ -5,7 +5,7 @@ export async function installPlainMinutesWindowFixture(page) {
     const copy = value => structuredClone(value);
     const analysisEngine = { executablePath: "", modelPath: "", vadModelPath: null, threads: 4, useGpu: false };
     const engine = { executablePath: "/fixture/llama-completion", modelPath: "/fixture/model.gguf", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 };
-    const analysis = { id: "analysis", meetingId: "m1", contentHash: "source-hash", speakers: [], utterances: [{ id: "u", startUs: 1000000, endUs: 3000000, recognizedText: "点検日を確認する", effectiveText: "点検日を確認する", attributionState: "unknown", speakerIds: [] }] };
+    const analysis = { id: "analysis", meetingId: "m1", contentHash: "a".repeat(64), speakers: [], utterances: [{ id: "u", startUs: 1000000, endUs: 3000000, recognizedText: "点検日を確認する", effectiveText: "点検日を確認する", attributionState: "unknown", speakerIds: [] }] };
     const data = { calls: [], lock: 5, jobs: [], playbacks: {}, td: { id: "td", meetingId: "m1", baseAnalysisId: "analysis", lockVersion: 2, updatedAt: 0, payload: { schema_version:4, speaker_names: [], utterances: [{ utterance_id: "u", effective_text: "点検日を確認することに決まりました。", speaker_ids: [] }] } }, pref: { id: "llama_profiles", lockVersion: 0, payload: { standard: copy(engine), highAccuracy: copy(engine) } } };
     const callbacks = new Map(); const listeners = new Map(); let sequence = 0;
     const emit = (name,payload) => { for (const [id,{ event,handler }] of listeners) if (event === name) callbacks.get(handler)?.({ event:name,id,payload }); };
@@ -29,7 +29,7 @@ export async function installPlainMinutesWindowFixture(page) {
         if(cmd==="get_window_environment") return {schemaVersion:1,productName:"MinutesOn",role:"main",platform:"macos",capabilities:{voiceIdentity:true}};
         if(cmd==="get_startup_report") return {schemaVersion:1,phase:"ready",failure:null};
         if(cmd==="get_model_download_guidance") return {pending:false};
-        if(cmd==="get_recorder_operation_notices") {
+        if(["get_recorder_operation_notices", "get_storage_write_state", "get_meeting_list_diagnostics"].includes(cmd)) {
           const {dataIdleRead}=await import("/tests/data-idle-browser-fixture.js");
           return dataIdleRead(cmd);
         }
@@ -70,7 +70,7 @@ export async function installPlainMinutesWindowFixture(page) {
         if (cmd === "get_meeting_vocabulary") return {global:{id:"global",lockVersion:0,payload:[]},meeting:{id:`meeting:${args.meetingId}`,lockVersion:0,payload:[]}};
         if (cmd === "get_minutes_preferences") return copy(data.pref);
         if (cmd === "save_minutes_preferences") { if(data.failPreferences)throw Error("模擬議事録設定保存失敗");if (data.pref.lockVersion!==args.expectedLockVersion) throw Error("stale preferences"); data.pref.payload=copy(args.payload); data.pref.lockVersion++; return copy(data.pref); }
-        if (cmd === "get_minutes_source") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : "analysis",contentHash:args.meetingId === "m2" ? null : "source-hash",draft:args.meetingId === "m2" ? null : {id:data.td.id,lockVersion:data.td.lockVersion}};
+        if (cmd === "get_minutes_source") return {meetingLockVersion:data.lock,currentId:args.meetingId === "m2" ? null : "analysis",contentHash:args.meetingId === "m2" ? null : analysis.contentHash,draft:args.meetingId === "m2" ? null : {id:data.td.id,lockVersion:data.td.lockVersion}};
         if (cmd === "get_analysis_jobs") return args.meetingId === "m2" ? [] : copy(data.jobs);
         if(cmd==="prepare_meeting_playback"){
           const {meetingId,mode}=args.request;

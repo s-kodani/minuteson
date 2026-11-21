@@ -99,14 +99,35 @@ pub(in crate::storage) fn is_audio_media(media: &str) -> bool {
 // Audio history remains readable, but cannot become an input again. This
 // validates typed completion evidence instead of trusting mutable ready flags.
 pub(in crate::storage) fn require_source(db: &Connection, meeting: &str) -> Result<(), String> {
-    if intent::removal::completion::deleted(db, meeting)? {
+    let recovered = super::super::salvage_schema::meeting(db, meeting)?;
+    if let Some(reason) = recovered.as_ref().and_then(|record| record.audio_unavailable.as_ref()) {
+        return Err(reason.clone());
+    }
+    if super::fence::audio_pending(db, meeting)? {
+        return Err("この会議の音声は削除の確認・処理中です".into());
+    }
+    if recovered.is_some_and(|record| record.audio_deleted)
+        || intent::removal::completion::deleted(db, meeting)?
+    {
         return Err("音声は削除済みのため再生・再解析できません。文字起こし・議事録・根拠は保持されています".into());
     }
     Ok(())
 }
 
 pub(in crate::storage) fn source_deleted(db: &Connection, meeting: &str) -> Result<bool, String> {
+    if super::super::salvage_schema::meeting(db, meeting)?.is_some_and(|record| record.audio_deleted) {
+        return Ok(true);
+    }
     intent::removal::completion::deleted(db, meeting)
+}
+
+pub(in crate::storage) fn salvage_deleted(
+    db: &Connection,
+    meeting: &str,
+    root: &std::path::Path,
+    check: &impl Fn() -> bool,
+) -> Result<bool, String> {
+    intent::removal::completion::salvage_deleted(db, meeting, root, check)
 }
 
 pub(in crate::storage) fn backup_deleted(

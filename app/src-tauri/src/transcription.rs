@@ -596,6 +596,7 @@ pub(crate) fn enqueue_with_stamp(
     profile: &str,
     expected: Option<crate::storage::VocabularyStamp>,
 ) -> Result<JobSnapshot, String> {
+    storage.require_model_storage()?;
     let verification = crate::local_engine::verification::Scope::join_or_enter(true)?;
     let audio_verification = crate::audio::reuse::Scope::join_or_enter()?;
     if !matches!(profile, "standard" | "high_accuracy") {

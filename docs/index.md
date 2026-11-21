@@ -10,7 +10,7 @@ okf_version: "0.2"
 
 - [使い方](guides/usage.md) — モデルの準備、録音・取り込み、修正、議事録出力。
 - [製品概要](spec/overview.md) — 機能範囲、対応環境、配布と評価の確認状況。
-- [障害対応](guides/troubleshooting.md) — 起動診断、録音・解析・モデル準備の失敗。
+- [障害対応](guides/troubleshooting.md) — 起動時の案内、録音・解析・モデル準備の失敗。
 
 ## 保守と開発
 

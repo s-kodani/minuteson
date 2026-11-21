@@ -427,6 +427,10 @@ impl Placement<'_> {
 
 impl Bootstrap {
     pub(crate) fn open_storage(&self) -> Result<Storage, String> {
+        self.admit_storage().map_err(Into::into)
+    }
+
+    pub(crate) fn admit_storage(&self) -> Result<Storage, StartupStorageError> {
         let record = {
             let state = self
                 .state
@@ -435,8 +439,10 @@ impl Bootstrap {
             self.guard(&state)?;
             state.loaded.as_ref().map(|l| l.record.clone())
         };
-        let cache_root = self.read_cache_root()?;
-        crate::storage::read_cache::recover(&cache_root)?;
+        let read_cache_error = self
+            .read_cache_root()
+            .and_then(|cache_root| crate::storage::read_cache::recover(&cache_root))
+            .err();
         {
             let state = self
                 .state
@@ -444,19 +450,36 @@ impl Bootstrap {
                 .map_err(|_| "起動設定ロックを取得できません")?;
             self.guard(&state)?;
         }
+        let pending_review = record.as_ref().is_some_and(Record::pending_startup_review);
+        let review_error = |error: StartupStorageError| {
+            if pending_review {
+                error.without_salvage()
+            } else {
+                error
+            }
+        };
         if let Some(recovery) = record
             .as_ref()
             .filter(|record| record.origin == Origin::Recovered)
             .and_then(|record| record.recovery.as_ref())
         {
-            let storage = self.open_recovered_storage(recovery)?;
+            let storage = self.open_recovered_storage(recovery).map_err(review_error)?;
+            if let Some(error) = &read_cache_error {
+                storage.startup_diagnostic(None, "read_cache", error);
+            }
             self.initialize(&storage)?;
             return Ok(storage);
         }
+        let restored_models = record.as_ref().and_then(|record| record.salvage.clone());
         let storage = match record.and_then(|record| record.activation.map(|a| (record.current, a)))
         {
-            None => Storage::open_with_models(self.root().to_owned(), self.models_root.clone())
-                .map_err(|e| e.to_string())?,
+            None => match restored_models {
+                Some(binding) => Storage::open_with_model_binding(
+                    self.root().to_owned(),
+                    binding,
+                ),
+                None => Storage::open_with_models(self.root().to_owned(), self.models_root.clone()),
+            },
             Some((root, activation)) => {
                 let p = self.open_placement(activation.pending.clone(), None)?;
                 let admission = NativeHistoryAdmission {
@@ -465,9 +488,14 @@ impl Bootstrap {
                     activation,
                 };
                 admission.verify()?;
-                Storage::open_with_history(&admission)?
+                Storage::open_with_history(&admission, restored_models)
             }
-        };
+        }
+        .map_err(StartupStorageError::from_database)
+        .map_err(review_error)?;
+        if let Some(error) = &read_cache_error {
+            storage.startup_diagnostic(None, "read_cache", error);
+        }
         self.initialize(&storage)?;
         Ok(storage)
     }

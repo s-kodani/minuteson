@@ -301,6 +301,233 @@
       }
     },
     {
+      "name": "get_salvage_state",
+      "handler": "startup_salvage::get_salvage_state",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<Status,mon_contracts::AppError>",
+          "ok": "Status",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "recheck_salvage_environment",
+      "handler": "startup_salvage::recheck_salvage_environment",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Vec<String>,mon_contracts::AppError>",
+          "ok": "Vec<String>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "open_salvage",
+      "handler": "startup_salvage::open_salvage",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Status,mon_contracts::AppError>",
+          "ok": "Status",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "export_salvage_edits",
+      "handler": "startup_salvage::export_salvage_edits",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "contents",
+            "wireName": "contents",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<bool,mon_contracts::AppError>",
+          "ok": "bool",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "choose_salvage_folder",
+      "handler": "startup_salvage::choose_salvage_folder",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "source",
+            "wireName": "source",
+            "type": "bool",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Status,mon_contracts::AppError>",
+          "ok": "Status",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "inspect_salvage",
+      "handler": "startup_salvage::inspect_salvage",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<Status,mon_contracts::AppError>",
+          "ok": "Status",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "commit_salvage",
+      "handler": "startup_salvage::commit_salvage",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "operation_id",
+            "wireName": "operationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Status,mon_contracts::AppError>",
+          "ok": "Status",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "cancel_salvage_work",
+      "handler": "startup_salvage::cancel_salvage_work",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "leave_salvage",
+      "handler": "startup_salvage::leave_salvage",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_salvage_result",
+      "handler": "startup_salvage::get_salvage_result",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<serde_json::Value,mon_contracts::AppError>",
+          "ok": "serde_json::Value",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_salvage_source_cleanup",
+      "handler": "startup_salvage::get_salvage_source_cleanup",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "operation_id",
+            "wireName": "operationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<mon_contracts::SalvageSourceCleanup>,mon_contracts::AppError>",
+          "ok": "Option<mon_contracts::SalvageSourceCleanup>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "delete_salvage_source",
+      "handler": "startup_salvage::delete_salvage_source",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "operation_id",
+            "wireName": "operationId",
+            "type": "String",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<mon_contracts::SalvageSourceCleanup,mon_contracts::AppError>",
+          "ok": "mon_contracts::SalvageSourceCleanup",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "get_residency_state",
       "handler": "residency::get_residency_state",
       "roles": [
@@ -2225,6 +2452,38 @@
       }
     },
     {
+      "name": "get_meeting_list_diagnostics",
+      "handler": "get_meeting_list_diagnostics",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::startup_diagnostics::MeetingListDiagnostics,mon_contracts::AppError>",
+          "ok": "storage::startup_diagnostics::MeetingListDiagnostics",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_storage_write_state",
+      "handler": "get_storage_write_state",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<storage::startup_diagnostics::StorageWriteState,mon_contracts::AppError>",
+          "ok": "storage::startup_diagnostics::StorageWriteState",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "list_meetings",
       "handler": "list_meetings",
       "roles": [
@@ -2825,6 +3084,12 @@
             "wireName": "expected",
             "type": "Option<application_close::CloseExpectations>",
             "optional": true
+          },
+          {
+            "name": "salvage",
+            "wireName": "salvage",
+            "type": "Option<bool>",
+            "optional": true
           }
         ],
         "response": {
@@ -3076,6 +3341,35 @@
         "response": {
           "type": "Result<Option<storage::minutes_markdown::MarkdownDocument>,mon_contracts::AppError>",
           "ok": "Option<storage::minutes_markdown::MarkdownDocument>",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "get_meeting_body_for_review",
+      "handler": "get_meeting_body_for_review",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": true,
+        "arguments": [
+          {
+            "name": "meeting_id",
+            "wireName": "meetingId",
+            "type": "String",
+            "optional": false
+          },
+          {
+            "name": "part",
+            "wireName": "part",
+            "type": "mon_contracts::MeetingBodyPart",
+            "optional": false
+          }
+        ],
+        "response": {
+          "type": "Result<Option<mon_contracts::MeetingBodyReview>,mon_contracts::AppError>",
+          "ok": "Option<mon_contracts::MeetingBodyReview>",
           "error": "mon_contracts::AppError"
         }
       }

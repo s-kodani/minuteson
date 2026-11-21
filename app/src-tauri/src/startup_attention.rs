@@ -11,12 +11,13 @@ pub(crate) enum Stage {
     Directories,
     StorageSelection,
     StorageAdmission,
-    AudioRecovery,
+    PartialSalvage,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Failure {
     stage: Stage,
+    salvage_available: bool,
     message: String,
     message_truncated: bool,
     meeting_root: Option<String>,
@@ -41,11 +42,28 @@ impl Failure {
         };
         Self {
             stage,
+            salvage_available: stage == Stage::PartialSalvage,
             message_truncated: end < message.len(),
             message: message[..end].to_owned(),
             meeting_root: root.and_then(path),
             config_root: config.and_then(path),
         }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    fn from_storage(
+        stage: Stage,
+        error: crate::bootstrap::StartupStorageError,
+        root: Option<&Path>,
+        config: &Path,
+    ) -> Self {
+        if matches!(error, crate::bootstrap::StartupStorageError::PendingSalvage) {
+            return Self::new(Stage::PartialSalvage, error.into(), root, Some(config));
+        }
+        let salvage_available = error.salvage_available();
+        let mut failure = Self::new(stage, error.into(), root, Some(config));
+        failure.salvage_available = salvage_available;
+        failure
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -70,6 +88,8 @@ pub(crate) struct Report {
     platform: &'static str,
     phase: Phase,
     failure: Option<Failure>,
+    #[serde(skip)]
+    common_write_hold: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<Recovery>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,6 +109,7 @@ impl Default for Startup {
             },
             phase: Phase::Starting,
             failure: None,
+            common_write_hold: false,
             recovery: None,
             reset: None,
         }))
@@ -108,6 +129,17 @@ impl Startup {
             return Err("起動結果は確定済みです".into());
         }
         state.recovery = recovery;
+        Ok(())
+    }
+    pub(crate) fn set_common_write_hold(&self, hold: bool) -> Result<(), String> {
+        let mut report = self
+            .0
+            .lock()
+            .map_err(|_| "起動診断のロックを取得できません")?;
+        if report.phase != Phase::Starting {
+            return Err("起動結果は確定済みです".into());
+        }
+        report.common_write_hold = hold;
         Ok(())
     }
     pub(crate) fn snapshot(&self) -> Result<Report, String> {
@@ -142,6 +174,17 @@ impl Startup {
     pub(crate) fn blocked(&self) -> bool {
         self.snapshot().map_or(true, |s| s.phase == Phase::Blocked)
     }
+    pub(crate) fn failure_paths(
+        &self,
+    ) -> Result<(Option<std::path::PathBuf>, Option<std::path::PathBuf>), String> {
+        let report = self.snapshot()?;
+        let failure = report.failure.ok_or("起動診断を取得できません")?;
+        Ok((
+            failure.meeting_root.map(Into::into),
+            failure.config_root.map(Into::into),
+        ))
+    }
+
     pub(crate) fn admit_command(&self, label: &str, command: &str) -> Result<(), String> {
         if command == "get_window_environment" {
             return label
@@ -174,6 +217,52 @@ impl Startup {
         }
         if matches!(
             command,
+            "get_salvage_state"
+                | "recheck_salvage_environment"
+                | "open_salvage"
+                | "choose_salvage_folder"
+                | "inspect_salvage"
+                | "commit_salvage"
+                | "cancel_salvage_work"
+                | "leave_salvage"
+        ) {
+            return if label == "main"
+                && report.phase == Phase::Blocked
+                && report.failure.as_ref().is_some_and(|failure| failure.salvage_available)
+            {
+                Ok(())
+            } else {
+                Err("現在の状態ではデータ復元を開始できません".into())
+            };
+        }
+        if matches!(command, "get_salvage_result" | "get_salvage_source_cleanup") {
+            return if label == "main" && report.phase == Phase::Ready {
+                Ok(())
+            } else {
+                Err("起動後のメイン画面だけで復元結果を確認できます".into())
+            };
+        }
+        if command == "export_salvage_edits" {
+            return if label == "main" && report.phase == Phase::Ready {
+                Ok(())
+            } else {
+                Err("起動後のメイン画面だけで未保存の入力を退避できます".into())
+            };
+        }
+        if command == "delete_salvage_source" && (label != "main" || report.phase != Phase::Ready) {
+            return Err("復元先で起動したメイン画面だけで元データを削除できます".into());
+        }
+        if report.failure.as_ref().is_some_and(|f| f.stage == Stage::PartialSalvage)
+            && matches!(
+                command,
+                "get_startup_reset_preview" | "choose_startup_reset_backup_directory"
+                    | "start_startup_reset" | "get_startup_reset_state"
+            )
+        {
+            return Err("データ復元を終了してから初期化を確認してください".into());
+        }
+        if matches!(
+            command,
             "retry_startup"
                 | "get_startup_reset_preview"
                 | "choose_startup_reset_backup_directory"
@@ -194,18 +283,22 @@ impl Startup {
             };
         }
         if report.phase == Phase::Ready {
-            if report.recovery.as_ref().is_some_and(|r| r.review_required)
+            if (report.common_write_hold
+                || report.recovery.as_ref().is_some_and(|r| r.review_required))
                 && !matches!(
                     command,
                     "get_internal_logs"
                         | "get_recording_recovery"
                         | "get_storage_bootstrap"
                         | "list_meetings"
+                        | "get_meeting_list_diagnostics"
+                        | "get_storage_write_state"
                         | "get_meeting"
                         | "list_restored_meeting_ids"
                         | "get_current_analysis"
                         | "get_transcript_draft"
                         | "get_minutes_markdown"
+                        | "get_meeting_body_for_review"
                         | "get_minutes_source"
                         | "get_meeting_audio_summary"
                         | "get_data_operation"
@@ -247,14 +340,11 @@ impl Startup {
                         | "open_main_window"
                 )
             {
-                return Err(
-                    "保存先の復旧後は中断操作の再確認が必要です。現在は会議の閲覧のみ利用できます"
-                        .into(),
-                );
+                return Err("保存先の確認が必要です。現在は会議の閲覧のみ利用できます".into());
             }
             Ok(())
         } else {
-            Err("保存先の起動確認が完了していません。通常操作は開始しません。起動診断を確認してください".into())
+            Err("まだアプリを開ける状態か確認できていません。起動時の案内を確認してください".into())
         }
     }
 }
@@ -266,23 +356,31 @@ pub(crate) fn admit_storage(
 ) -> Result<(crate::storage::Storage, crate::bootstrap::Bootstrap), Failure> {
     crate::bootstrap::reset::recover(config, root)
         .map_err(|e| Failure::new(Stage::StorageSelection, e, None, Some(config)))?;
-    let selection = crate::bootstrap::Bootstrap::open(config, root)
-        .map_err(|e| Failure::new(Stage::StorageSelection, e, None, Some(config)))?;
-    let storage = selection.open_storage().map_err(|e| {
-        Failure::new(
+    let selection = crate::bootstrap::Bootstrap::open_for_startup(config, root)
+        .map_err(|e| Failure::from_storage(Stage::StorageSelection, e, None, config))?;
+    let storage = selection.admit_storage().map_err(|e| {
+        Failure::from_storage(
             Stage::StorageAdmission,
-            e,
+            selection.with_salvage_issue(e),
             Some(selection.root()),
-            Some(config),
+            config,
         )
     })?;
+    selection.retain_invalid_salvage_journal();
     Ok((storage, selection))
 }
 
 pub(crate) fn show(app: &tauri::AppHandle) {
-    let availability = crate::startup_reset::availability(app);
-    if let Ok(mut report) = app.state::<Startup>().0.lock() {
-        report.reset = Some(availability);
+    let dedicated_salvage = app.state::<Startup>().snapshot().is_ok_and(|report| {
+        report
+            .failure
+            .is_some_and(|f| f.stage == Stage::PartialSalvage)
+    });
+    if !dedicated_salvage {
+        let availability = crate::startup_reset::availability(app);
+        if let Ok(mut report) = app.state::<Startup>().0.lock() {
+            report.reset = Some(availability);
+        }
     }
     for label in ["recorder", "recording-confirmation"] {
         if let Some(window) = app.get_webview_window(label) {
@@ -318,6 +416,7 @@ pub(crate) fn quit_blocked_startup(
     let result: Result<(), String> = (|| {
         startup.admit_command(window.label(), "quit_blocked_startup")?;
         crate::startup_reset::check_idle(window.app_handle())?;
+        crate::startup_salvage::require_idle(window.app_handle())?;
         window.app_handle().exit(0);
         Ok(())
     })();
@@ -327,6 +426,34 @@ pub(crate) fn quit_blocked_startup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dedicated_salvage_excludes_ordinary_storage_and_startup_reset_commands() {
+        let startup = Startup::default();
+        assert!(startup.admit_command("main", "open_salvage").is_err());
+        startup.block(Failure::new(Stage::PartialSalvage, "救出".into(), None, None)).unwrap();
+        for command in ["open_salvage", "commit_salvage", "get_salvage_state", "leave_salvage"] {
+            assert!(startup.admit_command("main", command).is_ok());
+            assert!(startup.admit_command("recorder", command).is_err());
+        }
+        for command in ["start_startup_reset", "get_startup_reset_preview", "get_salvage_result", "get_salvage_source_cleanup", "delete_salvage_source", "list_meetings", "create_meeting"] {
+            assert!(startup.admit_command("main", command).is_err());
+        }
+    }
+
+    #[test]
+    fn ready_main_can_review_source_cleanup_while_shared_write_hold_prevents_deletion() {
+        let startup = Startup::default();
+        startup.ready().unwrap();
+        assert!(startup.admit_command("main", "get_salvage_source_cleanup").is_ok());
+        assert!(startup.admit_command("main", "delete_salvage_source").is_ok());
+        assert!(startup.admit_command("recorder", "delete_salvage_source").is_err());
+        let read_only = Startup::default();
+        read_only.set_common_write_hold(true).unwrap();
+        read_only.ready().unwrap();
+        assert!(read_only.admit_command("main", "get_salvage_source_cleanup").is_ok());
+        assert!(read_only.admit_command("main", "delete_salvage_source").is_err());
+    }
+
     #[test]
     fn recovery_commands_are_main_only_and_never_unlock_normal_storage_commands() {
         let startup = Startup::default();
@@ -344,6 +471,9 @@ mod tests {
             assert!(startup.admit_command(label, "retry_startup").is_err());
         }
         for command in ["start_recording", "list_meetings", "finish_main_close"] {
+            assert!(startup.admit_command("main", command).is_err());
+        }
+        for command in ["open_salvage", "recheck_salvage_environment", "commit_salvage"] {
             assert!(startup.admit_command("main", command).is_err());
         }
     }
@@ -436,6 +566,7 @@ mod tests {
         assert!(f.meeting_root.is_none());
         let v = serde_json::to_value(f).unwrap();
         assert_eq!(v["stage"], "storage_selection");
+        assert_eq!(v["salvageAvailable"], false);
         assert_eq!(v["configRoot"], crate::test_support::absolute("/config"));
         assert!(v.get("messageTruncated").is_some());
         assert!(v.get("message_truncated").is_none());
@@ -489,6 +620,7 @@ mod tests {
             Ok(_) => panic!("invalid selection admitted"),
         };
         assert_eq!(failure.stage, Stage::StorageSelection);
+        assert!(failure.salvage_available);
         assert!(failure.meeting_root.is_none());
         assert!(!root.exists());
         assert_eq!(
@@ -496,9 +628,124 @@ mod tests {
             b"invalid synthetic bootstrap"
         );
     }
+    #[cfg(any(target_os = "macos", windows))]
+    fn admission_failure(config: &Path, root: &Path) -> Failure {
+        match admit_storage(config, root) {
+            Err(failure) => failure,
+            Ok(_) => panic!("unexpected storage admission"),
+        }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn native_startup_salvage_requires_evidence_and_admits_only_the_main_window() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        let root = temp.path().join("app-data");
+        let (storage, bootstrap) = admit_storage(&config, &root).unwrap();
+        let database = storage.root().join("meetings.sqlite3");
+        assert!(!admission_failure(&config, &root).salvage_available);
+        drop(bootstrap);
+        assert!(!admission_failure(&config, &root).salvage_available);
+        drop(storage);
+
+        std::fs::write(&database, [b'x'; 100]).unwrap();
+        let failure = admission_failure(&config, &root);
+        assert_eq!(failure.stage, Stage::StorageSelection);
+        assert!(failure.salvage_available);
+        let report = Startup::default();
+        report.block(failure).unwrap();
+        assert!(report.admit_command("main", "open_salvage").is_ok());
+        assert!(report.admit_command("recorder", "open_salvage").is_err());
+        assert_eq!(std::fs::read(&database).unwrap(), [b'x'; 100]);
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn damaged_header_at_a_replaced_meeting_root_never_requests_salvage() {
+        use std::io::Write;
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        let root = temp.path().join("app-data");
+        let (storage, bootstrap) = admit_storage(&config, &root).unwrap();
+        let selected = storage.root().to_owned();
+        drop(storage);
+        drop(bootstrap);
+
+        let original = temp.path().join("retained-meetings");
+        std::fs::rename(&selected, &original).unwrap();
+        std::fs::create_dir(&selected).unwrap();
+        let rejected = selected.join("meetings.sqlite3");
+        let mut file = std::fs::File::create(&rejected).unwrap();
+        file.write_all(b"invalid header").unwrap();
+        drop(file);
+
+        let failure = admission_failure(&config, &root);
+        assert_eq!(failure.stage, Stage::StorageSelection);
+        assert!(!failure.salvage_available);
+        assert!(failure.message.contains("会議データのファイルが現在のものと一致しません"), "{failure:?}");
+        assert_eq!(std::fs::read(&rejected).unwrap(), b"invalid header");
+        assert!(original.join("meetings.sqlite3").is_file());
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn startup_offers_salvage_for_unverified_meeting_schema_but_not_sqlite_environment_errors() {
+        use rusqlite::{ffi, Error::SqliteFailure};
+        for code in [ffi::SQLITE_BUSY, ffi::SQLITE_PERM, ffi::SQLITE_FULL, ffi::SQLITE_CANTOPEN, ffi::SQLITE_IOERR] {
+            let misleading = SqliteFailure(ffi::Error::new(code), Some("database disk image is malformed".into()));
+            assert!(!crate::storage::Storage::is_salvage_blocker(&misleading));
+        }
+        let corrupt = SqliteFailure(ffi::Error::new(ffi::SQLITE_CORRUPT), None);
+        assert!(crate::storage::Storage::is_salvage_blocker(&corrupt));
+
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        let root = temp.path().join("app-data");
+        let (storage, bootstrap) = admit_storage(&config, &root).unwrap();
+        crate::storage::with_test_database(&storage, |db| {
+            db.execute("UPDATE schema_migrations SET checksum='unrecognized'", []).unwrap();
+        });
+        drop(storage);
+        drop(bootstrap);
+
+        let failure = admission_failure(&config, &root);
+        assert_eq!(failure.stage, Stage::StorageAdmission);
+        assert!(failure.salvage_available);
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn unfinished_move_keeps_startup_salvage_unavailable_even_for_an_unverified_schema() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        let root = temp.path().join("app-data");
+        let target = temp.path().join("destination");
+        crate::native_fs::private_directories(&target, false).unwrap();
+        let (storage, bootstrap) = admit_storage(&config, &root).unwrap();
+        bootstrap
+            .begin_move(
+                &uuid::Uuid::new_v4().to_string(),
+                &uuid::Uuid::new_v4().to_string(),
+                &target.canonicalize().unwrap(),
+                &"a".repeat(64),
+                bootstrap.view().unwrap().revision,
+            )
+            .unwrap();
+        crate::storage::with_test_database(&storage, |db| {
+            db.execute("UPDATE schema_migrations SET checksum='unrecognized'", []).unwrap();
+        });
+        drop(storage);
+        drop(bootstrap);
+
+        let failure = admission_failure(&config, &root);
+        assert_eq!(failure.stage, Stage::StorageAdmission);
+        assert!(!failure.salvage_available);
+        assert_eq!(std::fs::read_dir(target).unwrap().count(), 0);
+    }
     #[cfg(target_os = "macos")]
     #[test]
-    fn read_cache_refusal_guides_the_exact_private_target_without_repair_or_fallback() {
+    fn unreadable_read_cache_keeps_the_verified_database_available_and_retains_cache_objects() {
         use std::os::unix::fs::DirBuilderExt;
         for kind in [
             "initialization_gap",
@@ -571,40 +818,32 @@ mod tests {
                 }
                 _ => unreachable!(),
             }
-            let failure = match admit_storage(&config, &fallback) {
-                Err(failure) => failure,
-                Ok(_) => panic!("read-cache fault admitted: {kind}"),
-            };
-            assert_eq!(failure.stage, Stage::StorageAdmission);
-            assert_eq!(failure.meeting_root.as_deref(), selected.to_str());
-            assert_eq!(failure.config_root.as_deref(), config.to_str());
-            assert!(
-                failure
-                    .message
-                    .contains(&format!("対象（起動設定内）: {}", cache.display())),
-                "{kind}: {}",
-                failure.message
+            let (storage, bootstrap) = admit_storage(&config, &fallback).unwrap();
+            assert_eq!(storage.root(), selected);
+            assert!(!storage.data_write_blocked());
+            assert_eq!(
+                storage.get_meeting(&meeting.id).unwrap(),
+                Some(meeting.clone())
             );
-            assert!(failure
-                .message
-                .contains("一時という名前だけで削除・移動・上書きしない"));
-            assert!(failure.message.contains("所有と必要性を確認するまで保持"));
-            assert!(failure.message.contains("元の診断:"));
-            assert!(!failure.message_truncated);
-            let startup = Startup::default();
-            startup.block(failure).unwrap();
-            let report = startup.snapshot().unwrap();
-            for _ in 0..3 {
-                assert_eq!(startup.snapshot().unwrap(), report);
-                assert!(startup
-                    .admit_command("main", "start_data_operation")
-                    .is_err());
-                assert!(startup.admit_command("main", "create_meeting").is_err());
-                assert!(startup.admit_command("main", "get_startup_report").is_ok());
-                assert!(startup
-                    .admit_command("main", "quit_blocked_startup")
-                    .is_ok());
-            }
+            let diagnostics =
+                serde_json::to_value(storage.meeting_list_diagnostics().unwrap()).unwrap();
+            let message = diagnostics["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["reason"] == "read_cache")
+                .unwrap()["message"]
+                .as_str()
+                .unwrap();
+            assert!(
+                message.contains(&format!("対象（起動設定内）: {}", cache.display())),
+                "{kind}: {message}"
+            );
+            assert!(message.contains("一時という名前だけで削除・移動・上書きしない"));
+            assert!(message.contains("所有と必要性を確認するまで保持"));
+            assert!(message.contains("元の診断:"));
+            drop(storage);
+            drop(bootstrap);
             assert_eq!(controls(), original, "source controls changed: {kind}");
             assert_eq!(
                 std::fs::read(config.join("bootstrap.json")).unwrap(),
@@ -628,28 +867,12 @@ mod tests {
                 assert!(!cache.join(".mon-scratch.sqlite3").exists());
             }
             assert!(std::fs::symlink_metadata(&cache).is_ok());
-            // Verify the saved meeting through a read-only connection, not by
-            // bypassing the failed native admission with a writable Storage.
-            let db = rusqlite::Connection::open_with_flags(
-                selected.join("meetings.sqlite3"),
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-            )
-            .unwrap();
-            assert_eq!(
-                db.query_row(
-                    "SELECT title FROM meetings WHERE id=?1",
-                    [&meeting.id],
-                    |r| r.get::<_, String>(0)
-                )
-                .unwrap(),
-                "SYNTHETIC RETAINED MEETING"
-            );
         }
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn real_storage_refusal_retains_existing_meeting_audio_and_bad_ledger() {
+    fn broken_scratch_ledger_only_blocks_backup_unless_a_restore_is_pending() {
         let temp = tempfile::tempdir().unwrap();
         let config = temp.path().join("config");
         let root = temp.path().join("data");
@@ -667,19 +890,35 @@ mod tests {
             .unwrap();
         drop(connection);
         let before = std::fs::read(&journal).unwrap();
-        let failure = match admit_storage(&config, &root) {
-            Err(f) => f,
-            Ok(_) => panic!("invalid ledger admitted"),
-        };
-        assert_eq!(failure.stage, Stage::StorageAdmission);
-        assert_eq!(failure.meeting_root.as_deref(), selected.to_str());
-        assert!(failure.message.contains("台帳"));
+        let (storage, bootstrap) = admit_storage(&config, &root).unwrap();
+        assert_eq!(storage.root(), selected);
+        assert!(!storage.common_write_hold());
+        assert!(storage
+            .prepare_backup_snapshot(&crate::test_support::never_cancelled)
+            .err()
+            .unwrap()
+            .contains("バックアップに使う一時ファイル"));
+        assert!(storage.create_meeting("新規会議").is_ok());
+        assert_eq!(
+            storage.get_meeting(&meeting.id).unwrap(),
+            Some(meeting.clone())
+        );
+        assert_eq!(
+            storage.rename_meeting(&meeting.id, "既存会議を編集", meeting.lock_version).unwrap().title,
+            "既存会議を編集"
+        );
         let s = Startup::default();
-        s.block(failure).unwrap();
+        s.set_common_write_hold(storage.common_write_hold())
+            .unwrap();
+        s.ready().unwrap();
         for _ in 0..3 {
-            assert_eq!(s.snapshot().unwrap().phase, Phase::Blocked);
-            assert!(s.admit_command("main", "start_data_operation").is_err());
+            assert_eq!(s.snapshot().unwrap().phase, Phase::Ready);
+            assert!(s.admit_command("main", "start_data_operation").is_ok());
+            assert!(s.admit_command("main", "list_meetings").is_ok());
+            assert!(s.admit_command("main", "get_storage_write_state").is_ok());
         }
+        drop(storage);
+        drop(bootstrap);
         assert_eq!(std::fs::read(&journal).unwrap(), before);
         assert_eq!(std::fs::read(marker).unwrap(), b"retained synthetic audio");
         let db = rusqlite::Connection::open(selected.join("meetings.sqlite3")).unwrap();
@@ -690,7 +929,19 @@ mod tests {
                 |r| r.get::<_, String>(0)
             )
             .unwrap(),
-            "既存会議"
+            "既存会議を編集"
         );
+        db.execute_batch(
+            "INSERT INTO restore_batches(batch_id,archive_id,archive_fingerprint,mapping_hash,mapping_count,state,created_at)
+             VALUES('pending-batch','archive',printf('%064d',0),printf('%064d',0),0,'prepared',1);
+             INSERT INTO maintenance_operations(id,kind,state,restore_batch_id,target_manifest_json,target_hash,progress_json,created_at,updated_at)
+             VALUES('pending-restore','restore_addition','prepared','pending-batch','{}',printf('%064d',0),'{}',1,1);",
+        ).unwrap();
+        drop(db);
+        let (storage, _bootstrap) = admit_storage(&config, &root).unwrap();
+        assert!(storage.common_write_hold());
+        assert!(storage.require_data_writable().unwrap_err().contains("前回のバックアップからの復元"));
+        assert!(storage.create_meeting("書込み不可").is_err());
+        assert_eq!(std::fs::read(&journal).unwrap(), before);
     }
 }

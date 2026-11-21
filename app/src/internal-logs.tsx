@@ -164,7 +164,14 @@ export const InternalLogs = memo(function InternalLogs() {
     catch { setCopyStatus({message:"コピーできませんでした。もう一度お試しください。",level:"error",eventId:crypto.randomUUID()}); }
   };
   return <section className="internal-logs" aria-label="内部ログ">
-    <div className="page-heading heading-with-info"><h1>内部ログ</h1><InfoPopover label="内部ログ"><p>処理の経過とエンジンの出力を確認できます。</p><p>最大30日・合計200 MiBまで保存し、上限を超えると古いログから削除します。会議の削除後もログは保持期限まで残ります。</p></InfoPopover></div>
+    <div className="page-heading heading-with-info">
+      <h1>内部ログ</h1>
+      <InfoPopover label="内部ログ">
+        <p>処理の経過とエンジンの出力を確認できます。</p>
+        <p>最大30日・合計200 MiBまで保存し、上限を超えると古いログから削除します。会議の削除後もログは保持期限まで残ります。</p>
+        <p>エンジンの診断出力をそのまま表示します。会議本文やローカルパスが含まれる場合があります。stderrは必ずしもエラーではありません。</p>
+      </InfoPopover>
+    </div>
     <div className="internal-logs-controls">
     <div className="internal-logs-tabs" role="tablist" aria-label="ログの種類">
       {(["process", "engine"] as const).map(tab => <button key={tab} type="button" role="tab" id={`${tabsId}-${tab}`} aria-controls={`${tabsId}-panel`} aria-selected={kind === tab} tabIndex={kind === tab ? 0 : -1} onClick={() => setKind(tab)} onKeyDown={event => {
@@ -176,7 +183,6 @@ export const InternalLogs = memo(function InternalLogs() {
     <IconButton label="ログを絞り込み" icon="filter" aria-expanded={filtersOpen} aria-controls={filtersId} onClick={() => setFiltersOpen(open => !open)} />
     </div>
     <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${kind}`}>
-    {kind === "engine" && <div className="heading-with-info"><span>エンジンログ</span><InfoPopover label="エンジンログ">エンジンの診断出力をそのまま表示します。会議本文やローカルパスが含まれる場合があります。stderrは必ずしもエラーではありません。</InfoPopover></div>}
     <div id={filtersId} className="internal-logs-filters" role="region" aria-label="ログの絞り込み" hidden={!filtersOpen}>
       <label>開始日時<input type="datetime-local" value={from} onChange={event => setFrom(event.target.value)} /></label>
       <label>終了日時<input type="datetime-local" value={to} onChange={event => setTo(event.target.value)} /></label>

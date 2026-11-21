@@ -101,11 +101,7 @@ impl AnalysisController {
         targets: Vec<cleanup::Target>,
     ) -> Result<(), String> {
         let lease = running.lease.as_ref().unwrap();
-        let root = app
-            .path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("models");
+        let root = app.state::<Storage>().native_models_root()?.to_owned();
         let storage = app.state::<Storage>();
         let _measure = crate::operation_observation::Scope::enter("model_cleanup", |_| {});
         cleanup::execute(&storage, &root, targets, job, lease)

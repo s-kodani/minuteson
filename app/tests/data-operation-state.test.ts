@@ -1,10 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { acceptDataSnapshot, assertDataSnapshot, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
+import { acceptDataSnapshot, assertDataSnapshot, checkedStorageWriteState, dataRequest, type DataSnapshot } from "../src/data-operation-state.ts";
 const id = (n: number) => `${n}1111111-1111-4111-8111-111111111111`;
 const ready = (): DataSnapshot => ({ revision: 2, token: id(1), kind: "restore", phase: "ready", busy: false,
   backupPreview: null, backupReceipt: null, restoreReceipt: null, relocationPreview: null, relocationReceipt: null, restartRequired: false, attentionRequired: false, errorMessage: null, retryAllowed: true,
   restorePreview: { confirmationId: id(2), batchId: id(3), archiveId: id(4), meetingTitles: ["会議"], deletedAudioMeetingCount: 0, deletedAudioAssetCount: 0, requiredBytes: 32, availableBytes: 64, vocabularyAdded: 1, vocabularyDeduplicated: 2, vocabularyConflicts: ["点検日"] } });
+
+test("storage state needs verified native eligibility to offer partial salvage", () => {
+  const readOnly = { readOnly: true, reasons: ["保存先の書き込みを停止しました"] };
+  assert.deepEqual(checkedStorageWriteState(readOnly), { ...readOnly, salvageAvailable: false });
+  for (const salvageAvailable of [true, false]) {
+    const state = { ...readOnly, salvageAvailable };
+    assert.deepEqual(checkedStorageWriteState(state), state);
+  }
+  for (const salvageAvailable of [null, undefined, "true", 1]) {
+    assert.throws(() => checkedStorageWriteState({ ...readOnly, salvageAvailable }));
+  }
+  assert.throws(() => checkedStorageWriteState({ ...readOnly, readOnly: false, salvageAvailable: true }));
+});
 
 test("data requests retain server-issued token and confirmation, never paths or batch substitutions", () => {
   const s = ready();

@@ -30,14 +30,14 @@ async(page,capturePath,detailUI)=>{
   await withoutPrefix(page.getByRole("dialog",{name:"エラー通知の詳細",exact:true}));
   results.push("notification body, details and history hide prefixes while retaining raw state");
   await page.goto("http://127.0.0.1:1420/?display=startup");
-  const startup=page.getByRole("main",{name:"起動診断",exact:true});
+  const startup=page.getByRole("main",{name:"起動時の案内",exact:true});
   const cause=startup.getByRole("region",{name:"起動を続けられない理由",exact:true});
   await cause.getByRole("heading",{name:"原因",exact:true}).waitFor();
-  await cause.getByLabel("保持した起動診断",{exact:true}).waitFor();
+  await cause.getByLabel("アプリを開けなかった原因",{exact:true}).waitFor();
   await startup.getByRole("alert").waitFor();
   check(await startup.getByRole("status").filter({hasText:"利用できない理由："}).count()===0,"initial recovery availability duplicated the startup cause");
   await withoutPrefix(startup);
-  await startup.getByRole("button",{name:"データ復元",exact:true}).click();
+  await startup.getByRole("button",{name:"データを初期化",exact:true}).click();
   await startup.getByRole("status").filter({hasText:"利用できない理由："}).waitFor();
   await withoutPrefix(startup);
   check(await unchanged(),"startup rendering changed retained diagnostics");

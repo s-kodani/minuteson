@@ -11,6 +11,11 @@ data.intervalMode="success";data.intervalCalls=[];data.intervalRelease=()=>{};
 if(new URLSearchParams(location.search).get("empty")==="1")data.plain={};
 data.plainMode="success";data.startMode="success";data.plainCalls=[];data.plainRelease=()=>{};
 data.exportMode="success";data.exportRecords={};data.exportActive=false;data.exportRelease=()=>{};
+data.health = new URLSearchParams(location.search).has("resilience") ? {
+  listError: true, draftReadFailure: true, draftDiscarded: false, draftCreated: false, audioIssue: true,
+  shared: false, salvageAvailable: false, storageReadCount: 0, modelListingFailure: true,
+  holdReason: "保存先へのアクセス権限を確認できません。アクセス権限を戻してください。",
+} : null;
 const callbacks=new Map(),listeners=new Map();
 const bridge=window.__TAURI_INTERNALS__,originalInvoke=bridge.invoke.bind(bridge),originalTransform=bridge.transformCallback.bind(bridge);
 bridge.transformCallback=fn=>{const id=originalTransform(fn);callbacks.set(id,fn);return id;};
@@ -23,6 +28,43 @@ data.completePlain=()=>{
   data.emitPlain("analysis-job-changed");
 };
 bridge.invoke=async(cmd,args={})=>{
+  if(data.health){
+    if(cmd==="list_meetings" && data.health.listError)throw Error("合成の会議一覧取得失敗");
+    if(cmd==="get_meeting_list_diagnostics" && data.health.diagnosticsReadFailure)throw Error("合成の会議の注意事項読込み失敗");
+    if(cmd==="get_meeting_list_diagnostics")return { items:[
+      ...(data.health.audioIssue ? [{meetingId:"m1",reason:"audio_recovery",message:"音声に確認が必要です"}] : []),
+      ...(data.health.meetingIssue ? [{meetingId:"m1",reason:"meeting_row_invalid",message:"一部の会議情報を確認できません"}] : []),
+    ] };
+    if(cmd==="get_storage_write_state"){
+      data.health.storageReadCount++;
+      return { readOnly: data.health.shared, reasons: data.health.shared ? [data.health.holdReason] : [], salvageAvailable: data.health.salvageAvailable };
+    }
+    if(cmd==="get_data_operation")return { ...(await originalInvoke(cmd,args)),modelDeletionPreview:null,modelDeletionReceipt:null };
+    if(cmd==="get_model_deletion_items"){
+      if(data.health.modelListingFailure)throw Error("合成のモデル削除一覧取得失敗");
+      return { items: [], writeBlocked: false, restartRequired: false, reason: null };
+    }
+    if(cmd==="get_current_analysis" && args.meetingId==="m1" && data.health.transcriptReadMode){
+      if(data.health.transcriptReadMode==="absent")return null;
+      throw Error("合成の文字起こし本文の読込み失敗");
+    }
+    if(cmd==="get_transcript_draft" && args.meetingId==="m1"){
+      if(data.health.draftReadFailure)throw Error("合成の下書き読込み応答の喪失");
+      if(data.health.draftDiscarded&&!data.health.draftCreated)return null;
+    }
+    if(cmd==="begin_transcript_draft" && data.health.draftDiscarded && args.meetingId==="m1" && args.analysisId==="analysis"){
+      if(!data.health.draftCreated){
+        data.td={id:"fresh-transcript-draft",meetingId:"m1",baseAnalysisId:"analysis",lockVersion:0,updatedAt:0,payload:{schema_version:4,speaker_names:[],utterances:[]}};
+        data.health.draftCreated=true;
+      }
+      return (await import("./transcript-draft-fixture.js")).stampFixtureDraft(data.td);
+    }
+    if(cmd==="get_minutes_source" && data.health.draftDiscarded && !data.health.draftCreated && args.meetingId==="m1")return { ...(await originalInvoke(cmd,args)), draft:null };
+    if(cmd==="get_meeting_body_for_review"){
+      if(args.part!=="minutes")return data.health.transcriptReview ?? null;
+      return data.health.minutesReviewUnavailable ? null : {text:copy(data.plain[args.meetingId]?.markdown??""),complete:true};
+    }
+  }
   if(cmd==="get_ready_analysis_flows")return [];
   if(cmd==="get_meeting_audio_summary"){
     data.intervalCalls.push({cmd,args:copy(args)});
@@ -45,6 +87,7 @@ bridge.invoke=async(cmd,args={})=>{
   }
   if(cmd==="read_playback_chunk"||cmd==="close_playback"||cmd==="cancel_playback_preparation")data.intervalCalls.push({cmd,args:copy(args)});
   if(cmd==="get_minutes_preferences"&&data.minutesPrefReadFailure)throw Error("合成の全体設定読込み失敗");
+  if(data.minutesInputsReadFailure && ["get_minutes_source", "get_analysis_jobs"].includes(cmd))throw Error("合成の議事録生成情報の読込み失敗");
   if(cmd==="plugin:event|listen"){const id=await originalInvoke(cmd,args);listeners.set(id,args);return id;}
   if(cmd==="plugin:event|unlisten"){listeners.delete(args.eventId);return originalInvoke(cmd,args);}
   if(cmd==="get_minutes_markdown"){

@@ -11,7 +11,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 
 pub(crate) mod archive;
-mod contents;
+pub(in crate::storage) mod contents;
 mod deleted_audio;
 pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
@@ -21,8 +21,6 @@ pub(crate) mod recovery;
 pub(crate) mod relocation;
 pub(in crate::storage) mod restored_audio;
 pub(in crate::storage) mod scratch;
-#[cfg(any(target_os = "macos", windows))]
-pub(crate) mod startup;
 
 #[cfg(test)]
 pub(in crate::storage) fn published_restore_for_rebinding_test(
@@ -87,7 +85,7 @@ const CAPACITY_RESERVE: u64 = 16 * 1024 * 1024;
 pub(in crate::storage) fn recover_restore_operations(
     root: &Path,
     db: &Connection,
-    registry: Option<&scratch::Registry>,
+    registry: Result<Option<&scratch::Registry>, &str>,
 ) -> Result<(), String> {
     publication::journal::recover_with_policy(root, db, registry)
 }

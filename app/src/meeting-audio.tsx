@@ -17,9 +17,9 @@ export function useMeetingAudio(meetingId?: string) {
   return audio && (!meetingId || audio.meetingId === meetingId) ? audio : null;
 }
 
-export function MeetingAudioProvider({ meetingId, sourceType, active, locked, audioDeleted, children }: {
+export function MeetingAudioProvider({ meetingId, sourceType, active, locked, audioDeleted, unavailable = false, children }: {
   meetingId: string | null; sourceType?: "recording" | "audio_import" | null;
-  active: boolean; locked: boolean; audioDeleted: boolean | null; children: ReactNode;
+  active: boolean; locked: boolean; audioDeleted: boolean | null; unavailable?: boolean; children: ReactNode;
 }) {
   const [modes, setModes] = useState<MeetingPlaybackMode[]>([]);
   const [summaryError, setSummaryError] = useState("");
@@ -29,7 +29,7 @@ export function MeetingAudioProvider({ meetingId, sourceType, active, locked, au
   // The existing native deletion census identifies intentional absence before
   // a summary can warm a mix. A transient census error need not reset a valid
   // summary for this same source; confirmed deletion always invalidates it.
-  const canInspectSource = audioDeleted !== true && (audioDeleted === false || matchingSummary);
+  const canInspectSource = !unavailable && audioDeleted !== true && (audioDeleted === false || matchingSummary);
   const available = active && canInspectSource && !!meetingId && matchingSummary && modes.includes(mode);
   const durationUs = available ? summary!.durationUs : null;
   const audio = useTranscriptAudio(meetingId ?? "", locked || !available, { scope:"meeting", label:"会議全体の音声", idleMeetingMode:mode, idleMeetingDurationUs:durationUs, active });

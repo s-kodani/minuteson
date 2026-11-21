@@ -35,6 +35,7 @@ impl StartRequest {
         storage: &Storage,
         expected: Option<crate::storage::minutes_markdown::MarkdownStamp>,
     ) -> Result<JobSnapshot, String> {
+        storage.require_model_storage()?;
         let (engine, selection) = storage.prepare_minutes_admission(&self)?;
         markdown_job::enqueue_prepared(
             storage,

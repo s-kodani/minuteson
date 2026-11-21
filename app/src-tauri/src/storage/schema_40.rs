@@ -62,16 +62,44 @@ pub(super) fn previous_sql_for(layout: Layout) -> Result<String, Box<dyn Error>>
     }
     Ok(previous)
 }
+#[derive(Debug)]
+pub(super) struct UnsupportedSchema(String);
+
+impl std::fmt::Display for UnsupportedSchema {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str(&self.0)
+    }
+}
+
+impl Error for UnsupportedSchema {}
+
 fn record(db: &Connection) -> Result<(i64, String), Box<dyn Error>> {
     let unsupported = "非対応の会議DB形式です。元のデータを保持しています";
     let mut query = db
         .prepare("SELECT version,checksum FROM schema_migrations ORDER BY version DESC LIMIT 2")
-        .map_err(|error| format!("{unsupported}: {error}"))?;
+        .map_err(|error| -> Box<dyn Error> {
+            // The statement is fixed. SQL errors such as a missing table or
+            // column show an unsupported layout. Busy/permission/I/O errors
+            // must retain their original SQLite code.
+            if error.sqlite_error_code() == Some(rusqlite::ErrorCode::Unknown) {
+                UnsupportedSchema(format!("{unsupported}: {error}")).into()
+            } else {
+                error.into()
+            }
+        })?;
     let mut rows = query.query([])?;
-    let row = rows.next()?.ok_or(unsupported)?;
-    let record = (row.get(0)?, row.get(1)?);
+    let row = rows.next()?.ok_or_else(|| UnsupportedSchema(unsupported.into()))?;
+    let record = match (row.get(0), row.get(1)) {
+        (Ok(version), Ok(checksum)) => (version, checksum),
+        (Err(error), _) | (_, Err(error)) => {
+            if matches!(error, rusqlite::Error::InvalidColumnType(..)) {
+                return Err(UnsupportedSchema(format!("{unsupported}: {error}")).into());
+            }
+            return Err(error.into());
+        }
+    };
     if rows.next()?.is_some() {
-        return Err(unsupported.into());
+        return Err(UnsupportedSchema(unsupported.into()).into());
     }
     Ok(record)
 }
@@ -85,7 +113,7 @@ pub(super) fn current_layout(db: &Connection) -> Result<Layout, Box<dyn Error>> 
             return Ok(Layout::Crlf);
         }
     }
-    Err(format!("非対応の会議DB形式です。元のデータを保持しています（記録された形式版: {version}、対応形式版: {SCHEMA_VERSION}）").into())
+    Err(UnsupportedSchema(format!("非対応の会議DB形式です。元のデータを保持しています（記録された形式版: {version}、対応形式版: {SCHEMA_VERSION}）")).into())
 }
 
 type Object = (String, String, String, Option<String>);
@@ -105,12 +133,12 @@ fn verify_previous(db: &Connection) -> Result<Layout, Box<dyn Error>> {
     let layout = match checksum.as_str() {
         PREVIOUS_CHECKSUM if version == PREVIOUS_VERSION as i64 => Layout::Lf,
         PREVIOUS_CRLF_CHECKSUM if version == PREVIOUS_VERSION as i64 => Layout::Crlf,
-        _ => return Err("対応するschema39の記録・チェックサムではありません".into()),
+        _ => return Err(UnsupportedSchema("対応するschema39の記録・チェックサムではありません".into()).into()),
     };
     let expected = Connection::open_in_memory()?;
     expected.execute_batch(&previous_sql_for(layout)?)?;
     if objects(db)? != objects(&expected)? {
-        return Err("schema39の実際のSQL定義が正規の定義と一致しません".into());
+        return Err(UnsupportedSchema("schema39の実際のSQL定義が正規の定義と一致しません".into()).into());
     }
     Ok(layout)
 }
@@ -148,7 +176,12 @@ pub(super) fn deletion_v1_schema_hash(
 pub(super) fn verify_startup(db: &Connection) -> Result<(), Box<dyn Error>> {
     match current_layout(db) {
         Ok(_) => Ok(()),
-        Err(original) => verify_previous(db).map(|_| ()).map_err(|_| original),
+        Err(original) if original.is::<UnsupportedSchema>() => match verify_previous(db) {
+            Ok(_) => Ok(()),
+            Err(error) if error.is::<UnsupportedSchema>() => Err(original),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
     }
 }
 pub(super) fn migrate(db: &mut Connection) -> Result<(), Box<dyn Error>> {

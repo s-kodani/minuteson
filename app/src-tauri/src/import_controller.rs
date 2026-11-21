@@ -505,6 +505,17 @@ impl ImportController {
             .closing = true;
         self.wait_idle(Duration::from_secs(15))
     }
+    pub(crate) fn seal_salvage_exit(app: &AppHandle, expected: &Option<String>) -> Result<(), String> {
+        let controller = app.state::<Self>();
+        let mut state = controller.state.lock().map_err(|_| "取り込み状態を取得できません")?;
+        crate::application_close::require_target(expected, &state.snapshot.token)?;
+        if state.snapshot.busy || state.snapshot.recording_blocked {
+            return Err("取り込みと録音開始処理が完了してからデータ復元を開始してください".into());
+        }
+        state.closing = true;
+        Ok(())
+    }
+
     pub(crate) fn shutdown(app: &AppHandle) -> Result<(), String> {
         Self::shutdown_inner(app, None)
     }

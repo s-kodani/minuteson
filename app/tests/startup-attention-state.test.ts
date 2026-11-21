@@ -24,6 +24,15 @@ test("canonicalized field order preserves the same confirmed process report", ()
   const shuffled = { failure: { configRoot: "/safe/config", messageTruncated: false, message: "台帳を保持", stage: "storage_admission", meetingRoot: "/safe/root" }, phase: "blocked", schemaVersion: 1 };
   assert.deepEqual(acceptStartupReport(blocked, shuffled), blocked);
 });
+test("partial salvage needs explicit native eligibility", () => {
+  const eligible = { ...blocked, failure: { ...blocked.failure!, salvageAvailable: true } };
+  const denied = { ...blocked, failure: { ...blocked.failure!, salvageAvailable: false } };
+  for (const value of [eligible, denied, blocked]) assert.deepEqual(checkedStartupReport(value), value);
+  for (const salvageAvailable of [null, undefined, 1, "true"]) {
+    assert.throws(() => checkedStartupReport({ ...blocked, failure: { ...blocked.failure!, salvageAvailable } }));
+  }
+  assert.throws(() => acceptStartupReport(eligible, denied));
+});
 test("bounded UTF8 detail may explicitly be truncated but does not claim repair", () => {
   const value = { ...blocked, failure: { ...blocked.failure!, message: "音".repeat(5461), messageTruncated: true } };
   assert.equal(checkedStartupReport(value).failure!.messageTruncated, true);
@@ -50,5 +59,5 @@ test("native dispatch guard runs before any generated command and admission refu
   assert.ok(dispatch.indexOf(".admit_command(") < dispatch.indexOf('include!("command_handler.rs")'));
   const refusal = native.split("Err(failure) =>")[1].split("#[cfg(not(target_os")[0];
   assert.ok(refusal.includes("startup_attention::show(app.handle());")); assert.ok(refusal.includes("return Ok(());"));
-  assert.ok(native.indexOf("startup_attention::admit_storage") < native.indexOf("ImportController::recover(app.handle())"));
+  assert.ok(native.indexOf("startup_attention::admit_storage") < native.indexOf("ImportController::recover(&handle)"));
 });

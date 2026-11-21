@@ -500,6 +500,7 @@ impl Storage {
                 return jobs::load_job(&db, &id)?.ok_or("声の処理がありません".into());
             }
         }
+        self.require_model_storage()?;
         let (engine, extractor, managed, runtime) = if let Some(intent) = intent {
             let fixed = intent.execution()?;
             fixed.engine.verify(&|| false)?;
@@ -882,7 +883,7 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())
     }
 }
-fn valid_name(name: &str) -> Result<String, String> {
+pub(super) fn valid_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 200 || name.chars().any(char::is_control) {
         Err("人物名を1〜200文字で入力してください".into())

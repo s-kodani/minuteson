@@ -122,19 +122,31 @@ export type PendingEditReason = "leave" | "tab" | "transcription";
 export class TranscriptOperationBusy extends Error {}
 type FlushEdits = (reason: PendingEditReason) => Promise<void>;
 type HasPendingEdits = (reason: PendingEditReason) => boolean;
-const pendingEdits = new Map<FlushEdits, HasPendingEdits>();
+type PendingEditExport = { kind: "minutes" | "transcript" | "minutes_prompts" | "vocabulary"; meetingId?: string; input: unknown };
+const pendingEdits = new Map<FlushEdits, { hasPending: HasPendingEdits; exportPending?: () => PendingEditExport }>();
 
-export function registerPendingEdits(flush: FlushEdits, hasPending: HasPendingEdits = () => true): () => void {
-  pendingEdits.set(flush, hasPending);
+export function registerPendingEdits(flush: FlushEdits, hasPending: HasPendingEdits = () => true, exportPending?: () => PendingEditExport): () => void {
+  pendingEdits.set(flush, { hasPending, exportPending });
   return () => { pendingEdits.delete(flush); };
 }
 
 // The probe controls presentation. Every registered flush still runs.
 export function hasPendingEdits(reason: PendingEditReason): boolean {
-  for (const hasPending of pendingEdits.values()) if (hasPending(reason)) return true;
+  for (const { hasPending } of pendingEdits.values()) if (hasPending(reason)) return true;
   return false;
 }
 
 export async function flushPendingEdits(reason: PendingEditReason = "leave"): Promise<void> {
   for (const flush of pendingEdits.keys()) await flush(reason);
+}
+
+/** Capture live inputs for a confirmed native save without changing the save queues. */
+export function pendingEditsSnapshot(): string | null {
+  const edits: PendingEditExport[] = [];
+  for (const { hasPending, exportPending } of pendingEdits.values()) {
+    if (!hasPending("leave")) continue;
+    if (!exportPending) throw Error("一部の未保存入力を退避できません。入力を確認してください。");
+    edits.push(exportPending());
+  }
+  return edits.length ? JSON.stringify({ schemaVersion: 1, edits }, null, 2) : null;
 }

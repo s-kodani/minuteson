@@ -33,14 +33,14 @@ export function useMeetingDeletion({ operation, locked, withSavedEdits, onDelete
   const receipt = s?.kind === "deletion" ? s.deletionReceipt : null;
   const listing = operation.deletionListing;
   const protectedNow = rpcBusy || unknown;
-  const canInspect = isTauri() && operation.deletionSupported && operation.connected && !locked && !rpcBusy && !unknown && !s?.busy;
+  const canInspect = isTauri() && operation.deletionSupported && !!listing && operation.connected && !locked && !rpcBusy && !unknown && !s?.busy;
   // Restart normally forbids all work. A canonical pending deletion alone can
   // use its restricted native resume lane; it never enables ordinary writes.
   const sharedAvailable = !!operation.availability?.available || (permitsDeletionRecovery(operation.availability, listing?.restartRequired));
   const canReviewPending = canInspect && (sharedAvailable || (!listing?.restartRequired && !s?.restartRequired));
   const canReviewMeeting = canInspect && !listing?.writeBlocked && !operation.modelDeletionListing?.writeBlocked && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
   const canReviewMeetingId = (id: string) => canReviewMeeting && availability.rows.get(id)?.available === true;
-  const reviewUnavailableReason = canReviewMeeting ? null : deletionReviewReason(operation, { native: isTauri(), supported: operation.deletionSupported, locked, protectedNow, sharedAvailable });
+  const reviewUnavailableReason = canReviewMeeting ? null : deletionReviewReason(operation, { native: isTauri(), supported: operation.deletionSupported, locked, protectedNow, sharedAvailable, listingError: operation.listingErrors.meetings });
   const meetingReviewReason = (id: string) => !canReviewMeeting ? reviewUnavailableReason : availability.error || availability.rows.get(id)?.blockers.map(b => b.reason).join(" ") || (availability.rows.has(id) ? null : "削除できる状態か確認しています。");
   const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
   const protect = async (action: () => Promise<void>) => {
@@ -123,7 +123,7 @@ export function MeetingDeletionPanel({ operation, control }: { operation: DataOp
   const active = s?.kind === "deletion";
   return <>
     <ToastNotice scope="deletion" type="meeting-result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
-    <IssueNotice scope={p?.meetingId ?? "deletion"} type="meeting-deletion" label="会議削除" message={c.error || (active ? s?.errorMessage : "")} />
+    <IssueNotice scope={p?.meetingId ?? "deletion"} type="meeting-deletion" label="会議削除" message={c.error || (active ? s?.errorMessage : "") || (operation.listingErrors.meetings && "削除記録を確認できません。会議削除の受付を保留し、一覧を再確認しています。")} />
     {c.rpcBusy&&c.noticeWaiting&&<p role="status">通知履歴の処理完了を待っています</p>}
     {p?.scopeMode === "directory" && c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>削除要求の結果を確認</button><button type="button" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>削除を停止</button></div>}
     <CommonModal portal hideDismissButton ref={c.dialog} open={c.open && p?.scopeMode === "directory"} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss} restoreReady={!c.rpcBusy && !s?.busy && operation.connected} restoreTarget={() => c.opener.current?.isConnected && !c.opener.current.matches(":disabled") ? c.opener.current : document.querySelector<HTMLElement>(".sidebar button")} className="import-dialog data-dialog deletion-dialog" aria-labelledby="deletion-confirm-title">

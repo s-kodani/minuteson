@@ -81,14 +81,14 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません".to_string())?;
+        self.require_draft_writable(&connection, meeting_id)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         ensure_committed_analysis(&transaction, meeting_id, base_analysis_id)?;
-        if let Some(existing) = load_draft(&transaction, meeting_id)? {
-            if existing.base_analysis_id != base_analysis_id {
-                return Err("既存の下書きは別の解析版に基づいています。再基準化が必要です".into());
-            }
+        if let Some(existing) =
+            self.load_or_discard_draft(&transaction, meeting_id, Some(base_analysis_id))?
+        {
             return Ok(existing);
         }
         let payload = TranscriptDraftPayload::default();
@@ -117,11 +117,75 @@ impl Storage {
         &self,
         meeting_id: &str,
     ) -> Result<Option<TranscriptDraft>, String> {
-        let connection = self
+        let mut connection = self
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません".to_string())?;
-        load_draft(&connection, meeting_id)
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|error| error.to_string())?;
+        let draft = self.load_or_discard_draft(&transaction, meeting_id, None)?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(draft)
+    }
+
+    fn load_or_discard_draft(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        meeting: &str,
+        known_current: Option<&str>,
+    ) -> Result<Option<TranscriptDraft>, String> {
+        let Some(saved) = read_saved_draft(transaction, meeting, None)? else {
+            return Ok(None);
+        };
+        let base = &saved.base_analysis_id;
+        match known_current {
+            Some(current) if current != base.as_str() => {
+                return Err("既存の下書きは別の解析版に基づいています。再基準化が必要です".into());
+            }
+            Some(_) => {}
+            None => ensure_committed_analysis(transaction, meeting, base)?,
+        }
+        match saved
+            .draft
+            .and_then(|draft| validated_draft(transaction, draft))
+        {
+            Ok(draft) => Ok(Some(draft)),
+            Err(DraftValidation::Invalid(_)) => {
+                verify_discard_base(transaction, meeting, base)?;
+                if !self.data_write_blocked()
+                    && !self.maintenance.load(std::sync::atomic::Ordering::Acquire)
+                    && !super::meeting_access::reserved(transaction, meeting)?
+                {
+                    #[cfg(any(unix, windows))]
+                    self.managed_anchor.verify()?;
+                    super::deletion::database::trusted_schema(transaction)?;
+                    let removed = transaction
+                        .execute(
+                            "DELETE FROM working_drafts WHERE rowid=?1 AND meeting_id=?2
+                         AND target_kind='transcript' AND base_analysis_id=?3",
+                            params![saved.rowid, meeting, base],
+                        )
+                        .map_err(|error| error.to_string())?;
+                    if removed != 1 {
+                        return Err("削除前に下書きの状態が変わりました".into());
+                    }
+                }
+                Ok(None)
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn require_draft_writable(&self, db: &Connection, meeting: &str) -> Result<(), String> {
+        self.require_data_writable()?;
+        if self.maintenance.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("保存領域の切替・保守が進行中です".into());
+        }
+        if super::meeting_access::reserved(db, meeting)? {
+            return Err("この会議は削除の確認・処理中です".into());
+        }
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -159,28 +223,180 @@ pub(super) fn load_draft_for_base(
     meeting_id: &str,
     base: Option<&str>,
 ) -> Result<Option<TranscriptDraft>, String> {
-    let row: Option<(String, String, String, String, i64, i64)> = connection.query_row(
-        "SELECT id, base_analysis_id, payload_json, content_hash, lock_version, updated_at FROM working_drafts WHERE meeting_id = ?1 AND target_kind = 'transcript' AND (?2 IS NULL OR base_analysis_id = ?2)",
-        params![meeting_id, base],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
-    ).optional().map_err(|error| error.to_string())?;
-    let Some((id, base_analysis_id, serialized, content_hash, lock_version, updated_at)) = row
-    else {
-        return Ok(None);
+    read_saved_draft(connection, meeting_id, base)?
+        .map(|saved| saved.draft.map_err(|error| error.to_string()))
+        .transpose()
+}
+
+pub(super) enum DraftValidation {
+    Invalid(&'static str),
+    Unsupported,
+    Database(rusqlite::Error),
+}
+
+impl std::fmt::Display for DraftValidation {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(message) => output.write_str(message),
+            Self::Unsupported => output.write_str("未対応の下書き形式です"),
+            Self::Database(error) => write!(output, "{error}"),
+        }
+    }
+}
+
+impl From<&'static str> for DraftValidation {
+    fn from(message: &'static str) -> Self {
+        Self::Invalid(message)
+    }
+}
+
+impl From<rusqlite::Error> for DraftValidation {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Database(error)
+    }
+}
+
+struct SavedDraftRow {
+    rowid: i64,
+    base_analysis_id: String,
+    draft: Result<TranscriptDraft, DraftValidation>,
+}
+
+fn read_saved_draft(
+    connection: &Connection,
+    meeting: &str,
+    base: Option<&str>,
+) -> Result<Option<SavedDraftRow>, String> {
+    connection
+        .query_row(
+            "SELECT rowid,base_analysis_id,id,schema_version,
+                CASE WHEN length(CAST(payload_json AS BLOB))<=?3 THEN payload_json END,
+                content_hash,lock_version,updated_at
+         FROM working_drafts WHERE meeting_id=?1 AND target_kind='transcript'
+         AND (?2 IS NULL OR base_analysis_id=?2)",
+            params![meeting, base, MAX_DRAFT_BYTES as i64],
+            |row| {
+                let rowid = row.get(0)?;
+                let base_analysis_id: String = row.get(1)?;
+                let draft = decode_saved_draft(row, meeting, &base_analysis_id);
+                Ok(SavedDraftRow {
+                    rowid,
+                    base_analysis_id,
+                    draft,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+}
+
+fn decode_saved_draft(
+    row: &rusqlite::Row<'_>,
+    meeting: &str,
+    base: &str,
+) -> Result<TranscriptDraft, DraftValidation> {
+    let malformed_cell = |error| match error {
+        rusqlite::Error::InvalidColumnType(..) | rusqlite::Error::FromSqlConversionFailure(..) => {
+            DraftValidation::Invalid("保存済み下書きの形式が不正です")
+        }
+        other => DraftValidation::Database(other),
     };
-    if draft_hash(&serialized) != content_hash {
+    let schema_version = row.get::<_, i64>(3).map_err(malformed_cell)?;
+    let id: String = row.get(2).map_err(malformed_cell)?;
+    let serialized: String = row
+        .get::<_, Option<String>>(4)
+        .map_err(malformed_cell)?
+        .ok_or("保存済み下書きが大きすぎます")?;
+    let content_hash: String = row.get(5).map_err(malformed_cell)?;
+    let lock_version: i64 = row.get(6).map_err(malformed_cell)?;
+    let updated_at: i64 = row.get(7).map_err(malformed_cell)?;
+    if schema_version <= 0
+        || id.is_empty()
+        || id.len() > 256
+        || id.contains('\0')
+        || lock_version < 0
+        || updated_at < 0
+        || draft_hash(&serialized) != content_hash
+    {
         return Err("保存済み下書きの内容が変化しています".into());
     }
-    let payload = serde_json::from_str(&serialized).map_err(|error| error.to_string())?;
-    Ok(Some(TranscriptDraft {
+    if schema_version != i64::from(crate::current_formats::TRANSCRIPT_DRAFT) {
+        let header: serde_json::Value = serde_json::from_str(&serialized)
+            .map_err(|_| "保存済み下書きの形式が不正です")?;
+        if header.get("schema_version").and_then(serde_json::Value::as_i64) != Some(schema_version) {
+            return Err("保存済み下書きの形式版が一致しません".into());
+        }
+        // Matching version evidence can identify an intact draft from a newer reader.
+        return Err(DraftValidation::Unsupported);
+    }
+    let payload: TranscriptDraftPayload =
+        serde_json::from_str(&serialized).map_err(|_| "保存済み下書きの形式が不正です")?;
+    if i64::from(payload.schema_version) != schema_version {
+        return Err("保存済み下書きの形式版が一致しません".into());
+    }
+    Ok(TranscriptDraft {
         id,
-        meeting_id: meeting_id.to_owned(),
-        base_analysis_id,
+        meeting_id: meeting.to_owned(),
+        base_analysis_id: base.to_owned(),
         payload,
         content_hash,
         lock_version,
         updated_at,
-    }))
+    })
+}
+
+fn validated_draft(
+    db: &Connection,
+    mut draft: TranscriptDraft,
+) -> Result<TranscriptDraft, DraftValidation> {
+    draft.payload = validate_payload_inner(db, &draft.base_analysis_id, draft.payload)?;
+    Ok(draft)
+}
+
+// Callers have already verified and loaded the current committed body under
+// the same transaction. This read-only path never authorizes removal.
+pub(super) fn draft_for_verified_body(
+    db: &Connection,
+    meeting: &str,
+    base: &str,
+) -> Result<Option<TranscriptDraft>, String> {
+    let Some(saved) = read_saved_draft(db, meeting, None)? else {
+        return Ok(None);
+    };
+    if saved.base_analysis_id != base {
+        return Err("下書きの基底と現在版が一致しません".into());
+    }
+    match saved.draft.and_then(|draft| validated_draft(db, draft)) {
+        Ok(draft) => Ok(Some(draft)),
+        Err(DraftValidation::Invalid(_)) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn verify_discard_base(
+    db: &rusqlite::Transaction<'_>,
+    meeting: &str,
+    base: &str,
+) -> Result<(), String> {
+    let hash: String = db
+        .query_row(
+            "SELECT a.content_hash FROM analysis_revisions a
+         JOIN meetings m ON m.current_analysis_id=a.id AND m.id=a.meeting_id
+         WHERE a.id=?1 AND m.id=?2 AND a.publication_state='committed'",
+            params![base, meeting],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if super::revisions::analysis_content_hash(db, base)? != hash {
+        return Err("文字起こしの現在版を検証できないため下書きを保持しています".into());
+    }
+    let body = super::analysis::read_stored_analysis_content(db, meeting, base, &hash)?;
+    if body.utterances.len() > 100_000 || body.speakers.len() > 100 {
+        return Err(
+            "文字起こしの現在版が対応する件数を超えているため下書きを保持しています".into(),
+        );
+    }
+    Ok(())
 }
 
 fn ensure_committed_analysis(
@@ -202,20 +418,24 @@ fn ensure_committed_analysis(
 pub(super) fn validate_payload(
     connection: &Connection,
     base_analysis_id: &str,
-    mut payload: TranscriptDraftPayload,
+    payload: TranscriptDraftPayload,
 ) -> Result<TranscriptDraftPayload, String> {
+    validate_payload_inner(connection, base_analysis_id, payload).map_err(|error| error.to_string())
+}
+
+fn validate_payload_inner(
+    connection: &Connection,
+    base_analysis_id: &str,
+    mut payload: TranscriptDraftPayload,
+) -> Result<TranscriptDraftPayload, DraftValidation> {
     if payload.schema_version != crate::current_formats::TRANSCRIPT_DRAFT {
-        return Err("未対応の下書き形式です".into());
+        return Err(DraftValidation::Unsupported);
     }
     let mut speakers: HashSet<String> = {
-        let mut statement = connection
-            .prepare("SELECT id FROM speakers WHERE analysis_revision_id = ?1")
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map(params![base_analysis_id], |row| row.get(0))
-            .map_err(|error| error.to_string())?;
-        rows.collect::<Result<_, _>>()
-            .map_err(|error| error.to_string())?
+        let mut statement =
+            connection.prepare("SELECT id FROM speakers WHERE analysis_revision_id = ?1")?;
+        let rows = statement.query_map(params![base_analysis_id], |row| row.get(0))?;
+        rows.collect::<Result<_, _>>()?
     };
     if speakers.len() + payload.manual_speakers.len() > 100 {
         return Err("話者は推定元を含め100件までです".into());
@@ -235,7 +455,7 @@ pub(super) fn validate_payload(
         let collision: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM speakers WHERE analysis_revision_id = ?1 AND lineage_id = ?2)",
             params![base_analysis_id, speaker.id], |r| r.get(0),
-        ).map_err(|e| e.to_string())?;
+        )?;
         if collision {
             return Err("追加話者の由来が既存話者と重複しています".into());
         }
@@ -258,14 +478,10 @@ pub(super) fn validate_payload(
         return Err("話者統合は循環や多段参照を含めず、最終話者を指定してください".into());
     }
     let mut utterances: HashSet<String> = {
-        let mut statement = connection
-            .prepare("SELECT id FROM utterances WHERE analysis_revision_id = ?1")
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map(params![base_analysis_id], |row| row.get(0))
-            .map_err(|error| error.to_string())?;
-        rows.collect::<Result<_, _>>()
-            .map_err(|error| error.to_string())?
+        let mut statement =
+            connection.prepare("SELECT id FROM utterances WHERE analysis_revision_id = ?1")?;
+        let rows = statement.query_map(params![base_analysis_id], |row| row.get(0))?;
+        rows.collect::<Result<_, _>>()?
     };
     super::draft_splits::validate_splits(
         connection,
@@ -556,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn draft_rejects_unknown_references_and_changed_content() {
+    fn draft_rejects_unknown_references_and_discards_a_damaged_saved_row() {
         let temp = tempfile::tempdir().unwrap();
         let storage = Storage::open(temp.path().to_owned()).unwrap();
         let meeting = storage.create_meeting("編集").unwrap();
@@ -581,8 +797,218 @@ mod tests {
             storage.load_transcript_draft(&meeting.id).unwrap(),
             Some(draft.clone())
         );
-        storage.connection.lock().unwrap().execute("UPDATE working_drafts SET payload_json = '{\"schema_version\":1,\"speaker_names\":[],\"utterances\":[] }' WHERE id = ?1", params![draft.id]).unwrap();
+        let verified = storage.load_current_analysis(&meeting.id).unwrap().unwrap();
+        {
+            let db = storage.connection.lock().unwrap();
+            db.execute("UPDATE working_drafts SET payload_json = '{\"schema_version\":1,\"speaker_names\":[],\"utterances\":[] }' WHERE id = ?1", params![draft.id]).unwrap();
+            assert!(load_draft(&db, &meeting.id).is_err());
+            assert_eq!(stored_draft_count(&db, &draft.id), 1);
+        }
+        assert_eq!(storage.load_transcript_draft(&meeting.id).unwrap(), None);
+        assert_eq!(storage.load_transcript_draft(&meeting.id).unwrap(), None);
+        assert_eq!(
+            stored_draft_count(&storage.connection.lock().unwrap(), &draft.id),
+            0
+        );
+        assert_eq!(
+            storage.load_current_analysis(&meeting.id).unwrap(),
+            Some(verified)
+        );
+        let fresh = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
+        assert_ne!(fresh.id, draft.id);
+        assert_eq!(
+            storage.load_transcript_draft(&meeting.id).unwrap(),
+            Some(fresh)
+        );
+    }
+
+    fn stored_draft_count(db: &Connection, id: &str) -> i64 {
+        db.query_row(
+            "SELECT count(*) FROM working_drafts WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn assign_invalid_reference(storage: &Storage, draft: &TranscriptDraft) {
+        let mut payload = draft.payload.clone();
+        payload.utterances.push(UtteranceEdit {
+            utterance_id: "invalid-reference".into(),
+            effective_text: "存在しない発言の編集".into(),
+            speaker_ids: vec![],
+        });
+        let json = serde_json::to_string(&payload).unwrap();
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE working_drafts SET payload_json=?1,content_hash=?2 WHERE id=?3",
+                params![json, draft_hash(&json), draft.id],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn begin_edit_replaces_invalid_same_base_draft_and_uses_current_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("編集").unwrap();
+        committed_analysis_with_utterance(&storage, &meeting.id);
+        let draft = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
+        assign_invalid_reference(&storage, &draft);
+        {
+            let db = storage.connection.lock().unwrap();
+            let tx = db.unchecked_transaction().unwrap();
+            let (body, working, _, _, _) =
+                super::super::minutes_input::current_working(&tx, &meeting.id).unwrap();
+            assert_eq!(body.utterances[0].effective_text, "原文");
+            assert!(working.is_none());
+            assert_eq!(stored_draft_count(&tx, &draft.id), 1);
+        }
+        let fresh = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
+        assert_ne!(fresh.id, draft.id);
+        assert_eq!(fresh.payload, TranscriptDraftPayload::default());
+        let mut payload = fresh.payload;
+        payload.utterances.push(UtteranceEdit {
+            utterance_id: "utterance-1".into(),
+            effective_text: "新しい編集".into(),
+            speaker_ids: vec![],
+        });
+        assert!(storage.save_transcript_draft(&fresh.id, 0, payload).is_ok());
+        assert_eq!(
+            stored_draft_count(&storage.connection.lock().unwrap(), &draft.id),
+            0
+        );
+    }
+
+    #[test]
+    fn mismatched_draft_version_is_discarded_but_intact_newer_format_is_retained() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("編集").unwrap();
+        committed_analysis_with_utterance(&storage, &meeting.id);
+        let draft = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
+        {
+            let db = storage.connection.lock().unwrap();
+            db.execute(
+                "UPDATE working_drafts SET schema_version=9 WHERE id=?1",
+                [&draft.id],
+            )
+            .unwrap();
+        }
+        assert_eq!(storage.load_transcript_draft(&meeting.id).unwrap(), None);
+        {
+            let db = storage.connection.lock().unwrap();
+            assert_eq!(stored_draft_count(&db, &draft.id), 0);
+        }
+        let draft = storage.create_transcript_draft(&meeting.id, "analysis").unwrap();
+        {
+            let db = storage.connection.lock().unwrap();
+            let serialized = r#"{"schema_version":9,"edits":[]}"#;
+            db.execute(
+                "UPDATE working_drafts SET schema_version=9,payload_json=?2,content_hash=?3 WHERE id=?1",
+                params![draft.id, serialized, draft_hash(serialized)],
+            )
+            .unwrap();
+        }
+        assert!(storage.load_transcript_draft(&meeting.id).unwrap_err().contains("未対応"));
+        assert_eq!(stored_draft_count(&storage.connection.lock().unwrap(), &draft.id), 1);
+    }
+
+    #[test]
+    fn invalid_draft_is_retained_when_the_current_body_cannot_be_verified() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("編集").unwrap();
+        committed_analysis_with_utterance(&storage, &meeting.id);
+        let draft = storage.create_transcript_draft(&meeting.id, "analysis").unwrap();
+        assign_invalid_reference(&storage, &draft);
+        {
+            let db = storage.connection.lock().unwrap();
+            use rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER;
+            db.set_db_config(SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+                .unwrap();
+            db.execute(
+                "UPDATE analysis_revisions SET content_hash=?1 WHERE id='analysis'",
+                ["1".repeat(64)],
+            )
+            .unwrap();
+            db.set_db_config(SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+                .unwrap();
+        }
         assert!(storage.load_transcript_draft(&meeting.id).is_err());
+        assert!(storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .is_err());
+        assert_eq!(
+            stored_draft_count(&storage.connection.lock().unwrap(), &draft.id),
+            1
+        );
+    }
+
+    #[test]
+    fn scoped_guard_retains_invalid_draft_while_reads_use_the_verified_body() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("編集中").unwrap();
+        committed_analysis_with_utterance(&storage, &meeting.id);
+        let draft = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
+        assign_invalid_reference(&storage, &draft);
+        storage.reserve_meeting_deletion(&meeting.id).unwrap();
+        assert_eq!(storage.load_transcript_draft(&meeting.id).unwrap(), None);
+        assert!(storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .is_err());
+        assert_eq!(
+            stored_draft_count(&storage.connection.lock().unwrap(), &draft.id),
+            1
+        );
+        storage.release_meeting_deletion(&meeting.id).unwrap();
+        assert_eq!(storage.load_transcript_draft(&meeting.id).unwrap(), None);
+        assert_eq!(
+            stored_draft_count(&storage.connection.lock().unwrap(), &draft.id),
+            0
+        );
+    }
+
+    #[test]
+    fn draft_is_retained_when_reading_references_fails() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::open(temp.path().to_owned()).unwrap();
+        let meeting = storage.create_meeting("編集中").unwrap();
+        committed_analysis_with_utterance(&storage, &meeting.id);
+        let draft = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
+        assign_invalid_reference(&storage, &draft);
+        storage
+            .connection
+            .lock()
+            .unwrap()
+            .authorizer(Some(|context: AuthContext<'_>| match context.action {
+                AuthAction::Read {
+                    table_name: "speakers",
+                    ..
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .unwrap();
+        assert!(storage.load_transcript_draft(&meeting.id).is_err());
+        let db = storage.connection.lock().unwrap();
+        assert_eq!(stored_draft_count(&db, &draft.id), 1);
     }
 
     #[test]
@@ -639,6 +1065,9 @@ pub(super) fn save_in_transaction(
         return Err("保存済み下書きの内容が変化しています".into());
     }
     ensure_committed_analysis(&transaction, &meeting_id, &base_analysis_id)?;
+    let existing_payload =
+        serde_json::from_str(&old_json).map_err(|_| "保存済み下書きの形式が不正です")?;
+    validate_payload(transaction, &base_analysis_id, existing_payload)?;
     let payload = validate_payload(&transaction, &base_analysis_id, payload)?;
     let serialized = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
     if serialized.len() > MAX_DRAFT_BYTES {

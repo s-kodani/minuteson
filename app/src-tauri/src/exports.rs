@@ -158,6 +158,14 @@ impl Destination {
     pub(crate) fn selected(root: &Path, path: &Path) -> Result<Self, String> {
         Self::selected_with(root, path, "md", 64 * 1024 * 1024, &|| false)
     }
+    #[cfg(any(target_os = "macos", windows))]
+    pub(crate) fn selected_edit_snapshot(root: &Path, path: &Path) -> Result<Self, String> {
+        let destination = Self::selected_with(root, path, "json", 0, &|| false)?;
+        if destination.replaces_existing() {
+            return Err("未保存の入力は新しいファイルに退避してください".into());
+        }
+        Ok(destination)
+    }
     pub(crate) fn selected_backup(
         root: &Path,
         path: &Path,
@@ -178,10 +186,10 @@ impl Destination {
                 .extension()
                 .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(extension))
         {
-            let label = if extension == "md" {
-                "Markdown"
-            } else {
-                "MinutesOnバックアップ"
+            let label = match extension {
+                "md" => "Markdown",
+                "monbackup" => "MinutesOnバックアップ",
+                _ => "JSON",
             };
             return Err(format!("絶対パスの{label}保存先を選択してください"));
         }
@@ -378,6 +386,27 @@ mod tests {
         selected.publish(b"confirmed replacement").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"confirmed replacement");
         assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
+    }
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn edit_snapshot_publication_requires_a_new_file_outside_the_meeting_store() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let path = outside.path().join("edits.json");
+        let contents = br#"{"schemaVersion":1,"edits":[{"kind":"minutes","input":"draft"}]}"#;
+        let selected = Destination::selected_edit_snapshot(root.path(), &path).unwrap();
+        selected.publish(contents).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), contents);
+        assert!(Destination::selected_edit_snapshot(root.path(), &path).is_err());
+        assert!(
+            Destination::selected_edit_snapshot(root.path(), &root.path().join("data.json"))
+                .is_err()
+        );
+        let raced = outside.path().join("raced.json");
+        let selected = Destination::selected_edit_snapshot(root.path(), &raced).unwrap();
+        std::fs::write(&raced, b"outside file").unwrap();
+        assert!(selected.publish(contents).is_err());
+        assert_eq!(std::fs::read(raced).unwrap(), b"outside file");
     }
     #[cfg(unix)]
     #[test]

@@ -1,7 +1,7 @@
 // CLI-first verification with mocked IPC; not a Playwright test spec.
 // Route local index.html to data-save-browser-fixture.js, then run this file
 // with playwright-cli run-code --filename <absolute path>.
-async (page) => {
+async (page, capturePath) => {
   const results = [];
   const check = (value, message) => { if (!value) throw Error(message); };
   const set = values => page.evaluate(v => Object.assign(window.dataFixture, v), values);
@@ -33,6 +33,15 @@ async (page) => {
   check(info.includes("AIモデル本体") && info.includes("独自暗号化やクラウド同期ではありません") && info.includes("新しい別会議"), "data scope explanation missing");
   results.push("scope info: no model-body, encryption or replace-existing claim");
 
+  await boot(); await set({ mode: "scratchFailure" }); await choose("backup");
+  await page.getByText(/バックアップに使う一時ファイルの状態を確認できません/).first().waitFor();
+  await page.screenshot({ path: capturePath("backup-scratch-unavailable.png"), fullPage: true });
+  await page.locator(".sidebar").getByRole("button", { name: "会議一覧", exact: true }).click();
+  await page.getByRole("button", { name: "既存会議", exact: true }).waitFor();
+  check(await page.getByText(/保存先は閲覧専用です/).count() === 0, "scratch failure made the workspace read-only");
+  await page.screenshot({ path: capturePath("workspace-after-backup-scratch-error.png"), fullPage: true });
+  results.push("a scratch-ledger failure is shown with backup only and the meeting workspace stays available");
+
   await boot(); await set({ mode: "delay" }); await choose("backup");
   await page.waitForFunction(() => window.dataFixture.snapshot.phase === "publishing");
   check((await calls("start_data_operation")).length === 1 && await page.getByRole("dialog").count() === 0, "new output did not publish once without overwrite modal");
@@ -59,7 +68,7 @@ async (page) => {
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 1000 });
     await deletedWarning.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `output/playwright/deleted-audio-backup-${width}.png` });
+    await page.screenshot({ path: capturePath(`deleted-audio-backup-${width}.png`) });
   }
   results.push("deleted source: explicit history-only counts and no audio replay/reanalysis claim");
 
@@ -71,7 +80,7 @@ async (page) => {
   check((await calls("start_data_operation")).length === 0, "history-only preview published before confirmation");
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 1000 });
-    await page.screenshot({ path: `output/playwright/deleted-audio-restore-confirm-${width}.png` });
+    await page.screenshot({ path: capturePath(`deleted-audio-restore-confirm-${width}.png`) });
   }
   await set({ mode: "lost", suppressEvents: true }); await confirm(); await done();
   const restoredWarning = region().getByRole("alert").filter({ hasText: "保存済み文書と音声の欠落情報を復元しました" });
@@ -81,7 +90,7 @@ async (page) => {
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 1000 });
     await restoredWarning.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `output/playwright/deleted-audio-restore-result-${width}.png` });
+    await page.screenshot({ path: capturePath(`deleted-audio-restore-result-${width}.png`) });
   }
   results.push("history-only restore: confirmation and terminal warning, lost-reply polling without duplicate admission");
 

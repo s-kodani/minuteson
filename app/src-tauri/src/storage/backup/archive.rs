@@ -676,8 +676,8 @@ fn validate_inventory(
 
 #[cfg(test)]
 #[path = "archive_tests.rs"]
-pub(super) mod tests;
+pub(in crate::storage) mod tests;
 
 #[cfg(all(test, unix))]
 #[path = "deleted_audio_tests.rs"]
-pub(super) mod deleted_audio_tests;
+pub(in crate::storage) mod deleted_audio_tests;

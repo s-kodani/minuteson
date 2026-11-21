@@ -5,65 +5,99 @@ import { acceptStartupReport, type StartupReport } from "./startup-attention-sta
 import { CommonModal } from "./common-modal";
 import { usePlatform } from "./platform";
 import { StartupReset } from "./startup-reset";
+import { SalvageEntry } from "./salvage";
 import { ResidencyNotifications } from "./residency-notifications";
 import { StartupLoading } from "./startup-loading";
 import { useAppName } from "./window-environment";
 import { displayNativePathsInText } from "./native-path";
+import { ActionIcon } from "./action-icon";
 
 /** No theme, storage, recording or job provider is mounted in this route. */
 function useStartupReport() {
   const appName = useAppName();
-  const [report, setReport] = useState<StartupReport | null>(null), [error, setError] = useState(""), [busy, setBusy] = useState(false), [quitting, setQuitting] = useState(false);
+  const platform = usePlatform();
+  const [report, setReport] = useState<StartupReport | null>(null), [busy, setBusy] = useState(false), [quitting, setQuitting] = useState(false);
+  const [problem, setProblem] = useState<{ source: "report" | "action"; message: string } | null>(null);
+  const error = problem?.message ?? "";
+  const [retryDelay, setRetryDelay] = useState<number | null>(null);
   const [retryUncertain, setRetryUncertain] = useState(false);
   const current = useRef<StartupReport | null>(null), active = useRef(true), reading = useRef(false), closing = useRef(false);
-  const read = async () => {
-    if (!isTauri() || reading.current) return;
-    reading.current = true; setBusy(true);
-    try { const value = await invoke("get_startup_report"); if (active.current) { const next = acceptStartupReport(current.current, value); current.current = next; setReport(next); setError(""); } }
-    catch (cause) { if (active.current) setError(String(cause)); }
+  const readFailures = useRef(0);
+  const read = async (manual = false) => {
+    if (!isTauri() || reading.current || closing.current) return;
+    if (manual) readFailures.current = 0;
+    reading.current = true; setBusy(true); setRetryDelay(null); setProblem(null);
+    try {
+      let value: unknown;
+      try { value = await invoke("get_startup_report"); }
+      catch (cause) {
+        if (!active.current) return;
+        const retries = readFailures.current++;
+        if (retries >= 3) throw cause;
+        setRetryDelay(250 * 2 ** retries);
+        return;
+      }
+      if (!active.current) return;
+      const next = acceptStartupReport(current.current, value);
+      if (next.platform && platform !== "other" && next.platform !== platform) throw Error("起動結果のOS情報が一致しません。");
+      readFailures.current = 0; current.current = next; setReport(next);
+    } catch (cause) {
+      if (active.current) {
+        console.error("get_startup_report", cause);
+        setProblem({ source: "report", message: "アプリを開ける状態か確認できませんでした。" });
+      }
+    }
     finally { reading.current = false; if (active.current) setBusy(false); }
   };
   useEffect(() => { active.current = true; void read(); return () => { active.current = false; }; }, []);
   useEffect(() => {
-    // Only reread the in-memory startup result while native setup is pending.
-    // A confirmed failure or an invalid/unreadable reply still needs review.
-    if (report?.phase !== "starting" || busy || error) return;
-    const timer = window.setTimeout(() => void read(), 200);
+    if (busy || error || (retryDelay === null && report?.phase !== "starting")) return;
+    const timer = window.setTimeout(() => void read(), retryDelay ?? 200);
     return () => window.clearTimeout(timer);
-  }, [report, busy, error]);
+  }, [report, busy, error, retryDelay]);
   const retry = async () => {
     if (closing.current || retryUncertain || current.current?.phase !== "blocked") return;
-    closing.current = true; setQuitting(true); setError("");
+    closing.current = true; setQuitting(true); setProblem(null);
     try { await invoke("retry_startup"); }
-    catch (cause) { if (active.current) { setRetryUncertain(true); setError(`再起動の受付を確認できません。${appName}を終了してから起動し直してください: ${String(cause)}`); } }
+    catch (cause) {
+      if (active.current) {
+        console.error("retry_startup", cause);
+        setRetryUncertain(true);
+        setProblem({ source: "action", message: `再起動できたか確認できませんでした。${appName}を終了してから起動し直してください。` });
+      }
+    }
     finally { closing.current = false; if (active.current) setQuitting(false); }
   };
   const quit = async () => {
     if (closing.current || current.current?.phase !== "blocked") return;
-    closing.current = true; setQuitting(true); setError("");
+    closing.current = true; setQuitting(true); setProblem(null);
     try { await invoke("quit_blocked_startup"); }
-    catch (cause) { if (active.current) setError(`終了の受付を確認できません。保存先への操作は行っていません。OSの閉じる操作でも終了できます: ${String(cause)}`); }
+    catch (cause) {
+      if (active.current) {
+        console.error("quit_blocked_startup", cause);
+        setProblem({ source: "action", message: "アプリを終了できたか確認できませんでした。ウィンドウの閉じるボタンでも終了できます。" });
+      }
+    }
     finally { closing.current = false; if (active.current) setQuitting(false); }
   };
-  return { report, error, busy, quitting, retryUncertain, read, retry, quit };
+  return { report, error, problem, busy, quitting, retryUncertain, read, retry, quit };
 }
 export function StartupAttentionWindow() { return <StartupAttention state={useStartupReport()} />; }
 const StartupRecoveryPending = createContext(false);
 export const useStartupRecoveryPending = () => useContext(StartupRecoveryPending);
 export function StartupGate({ children }: { children: ReactNode }) {
   const state = useStartupReport();
-  const platform = usePlatform();
   const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   // Browser-only preview is not a native admission proof and cannot invoke
   // desktop operations. A desktop reader failure never mounts normal UI.
   return !isTauri() || state.report?.phase === "ready" ? <>
-    {state.report?.platform && platform !== "other" && state.report.platform !== platform ? <p role="alert">起動結果のOS情報が一致しません。</p> : <StartupRecoveryPending value={!!state.report?.recovery && !recoveryDismissed}>{children}</StartupRecoveryPending>}
+    <StartupRecoveryPending value={!!state.report?.recovery && !recoveryDismissed}>{children}</StartupRecoveryPending>
     {state.report?.recovery && <CommonModal portal open={!recoveryDismissed} onDismiss={() => setRecoveryDismissed(true)} dismissLabel="閉じる" dismissText="復旧結果を閉じる" restoreTarget={() => document.querySelector<HTMLElement>(".sidebar button:not(:disabled)")} aria-labelledby="startup-recovery-title" aria-describedby="startup-recovery-description">
       <h2 id="startup-recovery-title">{state.report.recovery.reviewRequired ? "中断操作の再確認が必要です" : "保存先の情報を修復しました"}</h2>
       {state.report.recovery.reviewRequired ? <>
         <p id="startup-recovery-description">中断操作の再確認が必要なため、会議の閲覧のみ利用できます。元の記録とファイルは保持しています。</p>
         <ul>{state.report.recovery.reasons.map(reason => <li key={reason}>{displayNativePathsInText(reason)}</li>)}</ul>
-      </> : <p id="startup-recovery-description">保存先とDBを検証し、現在の保存先情報へ更新しました。通常どおり利用できます。</p>}
+      </> : <p id="startup-recovery-description">会議データを確認し、アプリが使う保存先を更新しました。通常どおり利用できます。</p>}
       <button type="button" onClick={() => setRecoveryDismissed(true)}>閉じる</button>
     </CommonModal>}
   </> : !state.error && (!state.report || state.report.phase === "starting")
@@ -71,26 +105,34 @@ export function StartupGate({ children }: { children: ReactNode }) {
     : <StartupAttention state={state} />;
 }
 function StartupAttention({ state }: { state: ReturnType<typeof useStartupReport> }) {
-  const { report, error, busy, quitting, retryUncertain, retry, quit } = state, f = report?.failure;
+  const { report, error, problem, busy, quitting, retryUncertain, read, retry, quit } = state, f = report?.failure;
   const [resetBusy, setResetBusy] = useState(false);
+  const partialSalvageMode = f?.stage === "partial_salvage";
+  const salvageAvailable = f?.salvageAvailable === true && !error;
+  const dedicatedSalvage = partialSalvageMode && salvageAvailable;
   const normal = new URL(window.location.href); normal.searchParams.delete("window"); normal.hash = "";
-  return <main className="startup-attention" aria-label="起動診断"><ToastHost />
+  const actions = (reset?: ReactNode) => <div className="startup-attention-actions">
+    <button type="button" disabled={busy || quitting || resetBusy || retryUncertain} onClick={() => void retry()}>起動をやり直す</button>
+    {salvageAvailable && <SalvageEntry mode="blocked" disabled={busy || quitting || resetBusy} />}
+    {reset}
+    <button type="button" className="secondary" aria-label="このアプリを終了" disabled={busy || quitting || resetBusy} onClick={() => void quit()}><span className="startup-exit-prefix">このアプリを</span>終了</button>
+  </div>;
+  return <main className="startup-attention" aria-label="起動時の案内"><ToastHost />
     <ResidencyNotifications scope="startup"/>
-    <p className="startup-attention-lead">{f ? "保存先の検証に失敗したため、起動を中止しました。" : report?.phase === "ready" ? "保存先の起動確認が完了しました。" : "起動結果を確認できません。"}</p>
-    <ErrorNotice scope="startup" type="desktop-connection" active={!isTauri()}>デスクトップ接続がありません。起動結果を確認できません。</ErrorNotice>
-    {(!report || report.phase === "starting") && <p role="status">起動結果を確認できるまで通常操作は利用できません。</p>}
-    {f && <section className="startup-attention-cause" aria-label="起動を続けられない理由">
+    {f && !dedicatedSalvage && <p className="startup-attention-lead">保存先に問題があり、アプリを開けませんでした。</p>}
+    <ErrorNotice scope="startup" type="desktop-connection" active={!isTauri()}>デスクトップアプリに接続できませんでした。</ErrorNotice>
+    {problem?.source === "report" && <p role="alert" className="startup-attention-error">{error}</p>}
+    {isTauri() && error && <button type="button" className="secondary startup-status-reload" disabled={busy || quitting || resetBusy} onClick={() => void read(true)}><ActionIcon name="refresh" /><span>起動できるか再確認</span></button>}
+    {f && !dedicatedSalvage && <section className="startup-attention-cause" aria-label="起動を続けられない理由">
       <h2>原因{f.messageTruncated ? "（一部のみ表示）" : ""}</h2>
-      <pre aria-label="保持した起動診断">{displayNativePathsInText(f.message || "詳細を取得できませんでした。")}</pre>
+      <pre aria-label="アプリを開けなかった原因">{displayNativePathsInText(f.message || "詳しい原因は分かりませんでした。")}</pre>
+      {f.salvageAvailable !== true && <p role="status">原因を解消してから、起動をやり直してください。</p>}
     </section>}
-    {report?.phase === "blocked" && <StartupReset availability={report.reset} disabled={busy || quitting} onBusy={setResetBusy}>
-      {(restore, reset) => <div className="startup-attention-actions">
-        <button type="button" disabled={busy || quitting || resetBusy || retryUncertain} onClick={() => void retry()}>起動をやり直す</button>
-        {restore}{reset}
-        <button type="button" className="secondary" aria-label="このアプリを終了" disabled={busy || quitting || resetBusy} onClick={() => void quit()}><span className="startup-exit-prefix">このアプリを</span>終了</button>
-      </div>}
-    </StartupReset>}
-    {report?.phase === "ready" && <p role="status">保存先の起動確認は完了しています。<a href={normal.href}>通常画面を開く</a></p>}
-    <ErrorNotice scope="startup-attention" type="StartupAttention-operation" active={!!(error)}>{error}</ErrorNotice>
+    {dedicatedSalvage && <SalvageEntry mode="blocked" dedicated />}
+    {report?.phase === "blocked" && !dedicatedSalvage && (partialSalvageMode ? actions() : <StartupReset availability={report.reset} disabled={busy || quitting} onBusy={setResetBusy}>
+      {actions}
+    </StartupReset>)}
+    {report?.phase === "ready" && <p role="status"><a href={normal.href}>通常画面を開く</a></p>}
+    <ErrorNotice scope="startup-attention" type="StartupAttention-operation" active={problem?.source === "action"}>{problem?.source === "action" ? error : ""}</ErrorNotice>
   </main>;
 }

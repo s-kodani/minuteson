@@ -1,3 +1,4 @@
+import { SalvageHistory } from "./salvage";
 import { ErrorNotice } from "./toast";
 import { displayNativePath } from "./native-path";
 import { backupNotification } from "./backup-notification";
@@ -202,6 +203,8 @@ export function DataSavePanel({ operation, visible, locked, withSavedEdits, onPr
         <button type="button" className="secondary" disabled={!canAct} onClick={event => void choose("restore", false, event.currentTarget)}>バックアップから追加復元</button>
         {storage && <button type="button" className="secondary" disabled={!canAct || !!storage.pendingOperationId} onClick={event => void choose("relocation", false, event.currentTarget)}>会議保存先を変更</button>}
       </div>
+      {storage?.salvageAvailable && <SalvageHistory cleanupUnavailableReason={storage.pendingOperationId ? "保存先を変更するか、変更を取り消してから元データを削除できます。"
+        : canAct ? null : "現在は元データを削除できません。保存先の状態と進行中の処理を確認してください。"} />}
       {storage && <><p>会議保存先: <span className="data-path">{displayNativePath(storage.meetingRoot)}</span></p><p>AIモデル保存先（移動しません）: <span className="data-path">{displayNativePath(storage.modelsRoot)}</span></p>{storage.pendingOperationId && <><p role="alert">未完了の保存先変更があります。旧保存先と途中コピーを保持しています。新たな保存先変更は開始しません。途中コピー: <span className="data-path">{displayNativePath(storage.pendingTarget)}</span></p><button type="button" disabled={!canAct} onClick={() => void choose("relocation", true)}>未完了移動を確認</button></>}{storage.keptMoves.length > 0 && <details><summary>保持した途中コピー（{storage.keptMoves.length} 件）</summary><p>利用中の会議ではありません。ファイルを削除・採用しません。別の保存先変更を開始しても残ります。</p><ul>{storage.keptMoves.map(m => <li key={m.operationId}><span className="data-path">{displayNativePath(m.destination)}</span> — {m.decisionPending ? "保持判断を保存済み。未完了移動を確認して中止を完了してください。" : "保持して中止済み"}</li>)}</ul></details>}</>}
       <ErrorNotice scope="data-save" type="storage-read" active={!!(storageError)}>保存先の確認・変更は利用できません: {storageError}</ErrorNotice>
       {(s?.restartRequired || storage?.restartRequired) && <p role="alert">保存先切替の書込停止中です。新しい録音・編集・AI処理は開始できません。アプリを終了して再起動してください。現在開いている保存先: <span className="data-path">{displayNativePath(storage?.activeMeetingRoot ?? moving?.source)}</span>。旧保存先は削除しません。</p>}

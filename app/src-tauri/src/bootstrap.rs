@@ -41,6 +41,56 @@ pub(crate) mod movement;
 pub(crate) mod placement;
 pub(crate) mod recovery;
 pub(crate) mod reset;
+pub(crate) mod salvage;
+
+#[derive(Debug)]
+pub(crate) enum StartupStorageError {
+    Configuration(String),
+    MeetingDatabase(String),
+    PendingSalvage,
+    Other(String),
+}
+
+impl StartupStorageError {
+    pub(crate) fn salvage_available(&self) -> bool {
+        matches!(self, Self::Configuration(_) | Self::MeetingDatabase(_))
+    }
+
+    fn from_database(error: Box<dyn std::error::Error>) -> Self {
+        if Storage::is_salvage_blocker(error.as_ref()) {
+            Self::MeetingDatabase(error.to_string())
+        } else {
+            Self::Other(error.to_string())
+        }
+    }
+
+    fn without_salvage(self) -> Self {
+        Self::Other(self.into())
+    }
+}
+
+impl From<String> for StartupStorageError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<&str> for StartupStorageError {
+    fn from(error: &str) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl From<StartupStorageError> for String {
+    fn from(error: StartupStorageError) -> Self {
+        match error {
+            StartupStorageError::Configuration(message)
+            | StartupStorageError::MeetingDatabase(message)
+            | StartupStorageError::Other(message) => message,
+            StartupStorageError::PendingSalvage => "データ復元モードです。".into(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -147,6 +197,20 @@ struct Root {
 }
 impl Root {
     fn metadata(path: &Path) -> Result<Self, String> {
+        Self::startup_metadata(path).map_err(Into::into)
+    }
+
+    fn startup_metadata(path: &Path) -> Result<Self, StartupStorageError> {
+        let (root, len) = Self::identity_metadata(path)?;
+        if len < 100 {
+            return Err(StartupStorageError::MeetingDatabase(
+                "登録済みDBのヘッダーを読めません。新しいDBにしません".into(),
+            ));
+        }
+        Ok(root)
+    }
+
+    fn identity_metadata(path: &Path) -> Result<(Self, u64), String> {
         let d = directory(path)?;
         local(path)?;
         let m = crate::native_fs::symlink_metadata(path.join("meetings.sqlite3"))
@@ -154,20 +218,21 @@ impl Root {
         if !regular(&m, false) {
             return Err("会議DBは単独の通常ファイルである必要があります".into());
         }
-        if m.len() < 100 {
-            return Err("登録済みDBのヘッダーを読めません。新しいDBにしません".into());
-        }
-        Ok(Self {
+        Ok((Self {
             path: path.into(),
             directory: Identity::read(&d)?,
             database: Identity::read(&m)?,
-        })
+        }, m.len()))
     }
     // Only before SQLite opens this database (or for an inactive copy).
     // Closing ANY descriptor for a live database drops this process's POSIX
     // locks, even if SQLite owns another descriptor for the same inode.
     fn inspect(path: &Path) -> Result<Self, String> {
-        let root = Self::metadata(path)?;
+        Self::inspect_for_startup(path).map_err(Into::into)
+    }
+
+    fn inspect_for_startup(path: &Path) -> Result<Self, StartupStorageError> {
+        let root = Self::startup_metadata(path)?;
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
@@ -189,7 +254,10 @@ impl Root {
             || !matches!(header[18], 1 | 2)
             || !matches!(header[19], 1 | 2)
         {
-            return Err("登録済みDBのヘッダーが不正です。自動初期化しません".into());
+            root.verify()?;
+            return Err(StartupStorageError::MeetingDatabase(
+                "登録済みDBのヘッダーが不正です。自動初期化しません".into(),
+            ));
         }
         root.verify()?;
         Ok(root)
@@ -206,7 +274,7 @@ impl Root {
         // live Storage verifies it through its retained database descriptor.
         if Self::metadata(&self.path)? != *self {
             return Err(
-                "起動設定に登録した保存先またはDBの実体が変更されています。自動修復しません".into(),
+                "登録したフォルダーまたは会議データのファイルが現在のものと一致しません。保存先を確認してください。".into(),
             );
         }
         Ok(())
@@ -218,6 +286,7 @@ enum Origin {
     Default,
     Relocated,
     Recovered,
+    Salvaged,
 }
 
 /// Durable intent only. Startup always opens `current`, never this target.
@@ -251,10 +320,22 @@ struct Record {
     activation: Option<Activation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     recovery: Option<recovery::Recovery>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    salvage: Option<salvage::SelectionRecord>,
 }
 impl Record {
+    fn pending_startup_review(&self) -> bool {
+        self.pending_move.is_some()
+            || self.recovery.as_ref().is_some_and(recovery::Recovery::needs_review)
+    }
+
     fn validate(&self) -> Result<(), String> {
         absolute(&self.current.path)?;
+        if let Some(selection) = &self.salvage {
+            selection.validate(&self.current.path)?;
+        } else if self.origin == Origin::Salvaged {
+            return Err("復元先の登録情報がありません".into());
+        }
         if let Some(recovery) = &self.recovery {
             recovery.validate()?;
         }
@@ -359,6 +440,7 @@ pub(crate) struct View {
     pub revision: u64,
     pub origin: String,
     pub recovery: Option<recovery::RecoveryView>,
+    pub salvage_available: bool,
     pub pending_operation_id: Option<String>,
     pub pending_target: Option<PathBuf>,
     pub kept_moves: Vec<move_recovery::KeptMove>,
@@ -372,6 +454,7 @@ pub(crate) struct Bootstrap {
     selected_identity: Identity,
     initial_origin: Origin,
     models_root: PathBuf,
+    invalid_salvage_journal: Option<(String, Option<salvage::Observed>)>,
     state: Mutex<State>,
     restart_required: std::sync::atomic::AtomicBool,
     recovered_this_launch: std::sync::atomic::AtomicBool,
@@ -381,12 +464,189 @@ pub(crate) struct Bootstrap {
 
 impl Bootstrap {
     pub(crate) fn open(config: &Path, app_data: &Path) -> Result<Self, String> {
-        Self::open_mode(config, app_data, false)
+        Self::open_mode(config, app_data, false, false).map_err(Into::into)
+    }
+    pub(crate) fn open_for_startup(
+        config: &Path,
+        app_data: &Path,
+    ) -> Result<Self, StartupStorageError> {
+        Self::open_mode(config, app_data, false, true)
     }
     fn open_for_reset(config: &Path, app_data: &Path) -> Result<Self, String> {
-        Self::open_mode(config, app_data, true)
+        Self::open_mode(config, app_data, true, false).map_err(Into::into)
     }
-    fn open_mode(config: &Path, app_data: &Path, resetting: bool) -> Result<Self, String> {
+    fn open_mode(
+        config: &Path,
+        app_data: &Path,
+        resetting: bool,
+        resume_salvage: bool,
+    ) -> Result<Self, StartupStorageError> {
+        let (mut result, stamp) = Self::lock_configuration(config, app_data)?;
+        if resume_salvage {
+            let journal_before = salvage::journal_observation(&result).ok();
+            match salvage::startup_intent(&result) {
+                Ok(true) => return Err(StartupStorageError::PendingSalvage),
+                Ok(false) => {}
+                Err(error) => {
+                    crate::internal_logs::report_error("salvage", &error);
+                    let observation = journal_before.filter(|before| {
+                        salvage::journal_observation(&result).as_ref() == Ok(before)
+                    });
+                    result.invalid_salvage_journal = Some((error, observation));
+                }
+            }
+        }
+        let mut loaded = result
+            .read_for_startup()
+            .map_err(|error| result.with_salvage_issue(error))?;
+        if loaded.is_none() && result.invalid_salvage_journal.is_some() {
+            return Err(result.with_salvage_issue("登録済みの会議保存先を確認できません".into()));
+        }
+        if loaded.is_some() != (stamp == STAMP) {
+            return Err(result.with_salvage_issue(StartupStorageError::Configuration(
+                "起動設定と初期化記録が一致しません。既定の空DBへ切り替えません".into(),
+            )));
+        }
+        result
+            .state
+            .get_mut()
+            .map_err(|_| "起動設定ロックを取得できません")?
+            .loaded = loaded.take();
+        if !resetting {
+            result
+                .recover_selection()
+                .map_err(|error| result.with_salvage_issue(error))?;
+        }
+        loaded = result
+            .state
+            .get_mut()
+            .map_err(|_| "起動設定ロックを取得できません")?
+            .loaded
+            .take();
+        let (selected, origin) = match &loaded {
+            Some(l) => {
+                if resetting {
+                    if !l
+                        .record
+                        .current
+                        .directory
+                        .matches(&directory(&l.record.current.path)?)
+                    {
+                        return Err("登録した会議データの保存先が変更されています。保存先を確認してください。".into());
+                    }
+                } else {
+                    l.record.current.verify()?;
+                }
+                (l.record.current.path.clone(), l.record.origin.clone())
+            }
+            None => {
+                #[cfg(windows)]
+                {
+                    (app_data.to_path_buf(), Origin::Default)
+                }
+                #[cfg(not(windows))]
+                {
+                    // An unregistered top-level database is outside the current
+                    // meeting root. Refuse startup and reset without changing it.
+                    match crate::native_fs::symlink_metadata(app_data.join("meetings.sqlite3")) {
+                        Ok(_) => return Err("現在の会議保存先とは別の場所に会議DBがあります。元のデータを保持しています。保存先を確認してください".into()),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.to_string().into()),
+                    }
+                    (app_data.join("data"), Origin::Default)
+                }
+            }
+        };
+        if crate::native_fs::symlink_metadata(&selected).is_ok_and(|m| !m.is_dir()) {
+            return Err("会議保存先が通常のフォルダーではありません".into());
+        }
+        // Only the native default path may be created before initialization.
+        // Configured roots were already verified, so a missing one never reaches here.
+        if resetting {
+            directory(&selected)?;
+        } else {
+            crate::native_fs::private_directories(&selected, true)?;
+        }
+        let selected = selected.canonicalize().map_err(|e| e.to_string())?;
+        local(&selected)?;
+        if let Ok(m) = crate::native_fs::symlink_metadata(selected.join("meetings.sqlite3")) {
+            if !regular(&m, false) {
+                return Err("会議DBのリンク・別実体を採用しません".into());
+            }
+            if !resetting {
+                Self::inspect_startup_root(&selected, loaded.as_ref())
+                    .map_err(|error| result.with_salvage_issue(error))?;
+            }
+        }
+        result.selected_identity = Identity::read(&directory(&selected)?)?;
+        if let Some(selection) = loaded.as_ref().and_then(|l| l.record.salvage.as_ref()) {
+            result.models_root = selection.models_root().to_owned();
+        }
+        result.selected = selected;
+        result.initial_origin = origin;
+        result
+            .state
+            .get_mut()
+            .map_err(|_| "起動設定ロックを取得できません")?
+            .loaded = loaded;
+        // Before Storage::open can recover or write the selected root.
+        if !resetting {
+            result.admit_activation()?;
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn with_salvage_issue(&self, error: StartupStorageError) -> StartupStorageError {
+        match &self.invalid_salvage_journal {
+            Some((journal_error, _)) => StartupStorageError::Other(format!(
+                "{}。復元操作の記録を確認できません。記録を保持しています: {journal_error}",
+                String::from(error),
+            )),
+            None => error,
+        }
+    }
+
+    pub(crate) fn retain_invalid_salvage_journal(&self) {
+        if let Some((_, Some(observed))) = &self.invalid_salvage_journal {
+            if let Err(error) = salvage::retain_invalid_journal(self, observed) {
+                crate::internal_logs::report_error("salvage", &error);
+            }
+        }
+    }
+
+    fn inspect_startup_root(path: &Path, loaded: Option<&Loaded>) -> Result<Root, StartupStorageError> {
+        Root::inspect_for_startup(path).map_err(|error| {
+            if !error.salvage_available() {
+                return error;
+            }
+            // Before SQLite admission, another process or unfinished move may
+            // still own the selected root. A bad header alone cannot attest to
+            // a stable source in either case.
+            if loaded.is_some_and(|loaded| loaded.record.pending_startup_review()) {
+                return error.without_salvage();
+            }
+            let verified = (|| -> Result<StartupStorageError, String> {
+                let (candidate, _) = Root::identity_metadata(path)?;
+                if loaded.is_some_and(|loaded| loaded.record.current != candidate) {
+                    return Err("登録したフォルダーまたは会議データのファイルが現在のものと一致しません。保存先を確認してください。".into());
+                }
+                let lease = reset::RootLease::acquire_for_salvage(path)
+                    .map_err(|e| format!("{}。{e}", String::from(error)))?;
+                lease.verify(path)?;
+                let verified = match Root::inspect_for_startup(path) {
+                    Err(error) => error,
+                    Ok(_) => return Err("確認中に会議データのファイルが変更されました。アプリを起動し直してください。".into()),
+                };
+                if Root::identity_metadata(path)?.0 != candidate {
+                    return Err("確認中に会議データのファイルが差し替わりました。保存先を確認してください。".into());
+                }
+                lease.verify(path)?;
+                Ok(verified)
+            })();
+            verified.unwrap_or_else(StartupStorageError::Other)
+        })
+    }
+    fn lock_configuration(config: &Path, app_data: &Path) -> Result<(Self, Vec<u8>), String> {
         absolute(config)?;
         absolute(app_data)?;
         if let Ok(m) = crate::native_fs::symlink_metadata(config) {
@@ -442,7 +702,7 @@ impl Bootstrap {
         if !stamp.is_empty() && stamp != STAMP {
             return Err("起動設定の初期化記録が不正です".into());
         }
-        let mut result = Self {
+        let result = Self {
             directory: dir,
             config,
             identity,
@@ -456,6 +716,7 @@ impl Bootstrap {
             },
             initial_origin: Origin::Default,
             models_root: app_data.join("models"),
+            invalid_salvage_journal: None,
             state: Mutex::new(State {
                 loaded: None,
                 uncertain: false,
@@ -464,91 +725,7 @@ impl Bootstrap {
             recovered_this_launch: std::sync::atomic::AtomicBool::new(false),
         };
         result.guard_directory()?;
-        let mut loaded = result.read()?;
-        if loaded.is_some() != (stamp == STAMP) {
-            return Err("起動設定と初期化記録が一致しません。既定の空DBへ切り替えません".into());
-        }
-        result
-            .state
-            .get_mut()
-            .map_err(|_| "起動設定ロックを取得できません")?
-            .loaded = loaded.take();
-        if !resetting {
-            result.recover_selection()?;
-        }
-        loaded = result
-            .state
-            .get_mut()
-            .map_err(|_| "起動設定ロックを取得できません")?
-            .loaded
-            .take();
-        let (selected, origin) = match &loaded {
-            Some(l) => {
-                if resetting {
-                    if !l
-                        .record
-                        .current
-                        .directory
-                        .matches(&directory(&l.record.current.path)?)
-                    {
-                        return Err("会議保存先の実体が変更されています".into());
-                    }
-                } else {
-                    l.record.current.verify()?;
-                }
-                (l.record.current.path.clone(), l.record.origin.clone())
-            }
-            None => {
-                #[cfg(windows)]
-                {
-                    (app_data.to_path_buf(), Origin::Default)
-                }
-                #[cfg(not(windows))]
-                {
-                    // An unregistered top-level database is outside the current
-                    // meeting root. Refuse startup and reset without changing it.
-                    match crate::native_fs::symlink_metadata(app_data.join("meetings.sqlite3")) {
-                        Ok(_) => return Err("現在の会議保存先とは別の場所に会議DBがあります。元のデータを保持しています。保存先を確認してください".into()),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(error) => return Err(error.to_string()),
-                    }
-                    (app_data.join("data"), Origin::Default)
-                }
-            }
-        };
-        if crate::native_fs::symlink_metadata(&selected).is_ok_and(|m| !m.is_dir()) {
-            return Err("会議保存先が通常のフォルダーではありません".into());
-        }
-        // Only the native default path may be created before initialization.
-        // Configured roots were already verified, so a missing one never reaches here.
-        if resetting {
-            directory(&selected)?;
-        } else {
-            crate::native_fs::private_directories(&selected, true)?;
-        }
-        let selected = selected.canonicalize().map_err(|e| e.to_string())?;
-        local(&selected)?;
-        if let Ok(m) = crate::native_fs::symlink_metadata(selected.join("meetings.sqlite3")) {
-            if !regular(&m, false) {
-                return Err("会議DBのリンク・別実体を採用しません".into());
-            }
-            if !resetting {
-                Root::inspect(&selected)?;
-            }
-        }
-        result.selected_identity = Identity::read(&directory(&selected)?)?;
-        result.selected = selected;
-        result.initial_origin = origin;
-        result
-            .state
-            .get_mut()
-            .map_err(|_| "起動設定ロックを取得できません")?
-            .loaded = loaded;
-        // Before Storage::open can recover or write the selected root.
-        if !resetting {
-            result.admit_activation()?;
-        }
-        Ok(result)
+        Ok((result, stamp))
     }
     pub(crate) fn root(&self) -> &Path {
         &self.selected
@@ -572,6 +749,9 @@ impl Bootstrap {
         Ok(())
     }
     fn read(&self) -> Result<Option<Loaded>, String> {
+        self.read_for_startup().map_err(Into::into)
+    }
+    fn read_for_startup(&self) -> Result<Option<Loaded>, StartupStorageError> {
         self.guard_directory()?;
         let c = std::ffi::CString::new(NAME).unwrap();
         let fd = unsafe {
@@ -587,7 +767,7 @@ impl Bootstrap {
             return if e.kind() == std::io::ErrorKind::NotFound {
                 Ok(None)
             } else {
-                Err(format!("起動設定を読めません。保存先を変更しません: {e}"))
+                Err(format!("起動設定を読めません。保存先を変更しません: {e}").into())
             };
         }
         let mut file = unsafe { File::from_raw_fd(fd) };
@@ -604,23 +784,36 @@ impl Bootstrap {
         if bytes.len() as u64 > LIMIT {
             return Err("起動設定が読込中に容量上限を超えました".into());
         }
-        let doc: Document = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("起動設定が不正です。空DBへ切り替えません: {e}"))?;
-        if doc.schema_version != 3
-            || (doc.record.origin == Origin::Relocated && doc.record.activation.is_none())
-            || !sha(&doc.sha256)
-            || hash(&serde_json::to_vec(&doc.record).map_err(|e| e.to_string())?) != doc.sha256
+        // Only classify the document after rechecking the file and its owner.
+        let current = crate::native_fs::symlink_metadata(self.config.join(NAME))
+            .map_err(|e| e.to_string())?;
+        if !identity.matches(&current)
+            || current.len() != metadata.len()
+            || current.mtime() != metadata.mtime()
+            || current.mtime_nsec() != metadata.mtime_nsec()
+            || current.ctime() != metadata.ctime()
+            || current.ctime_nsec() != metadata.ctime_nsec()
         {
-            return Err("起動設定の形式版またはSHAが一致しません".into());
-        }
-        doc.record.validate()?;
-        if !identity.matches(
-            &crate::native_fs::symlink_metadata(self.config.join(NAME))
-                .map_err(|e| e.to_string())?,
-        ) {
             return Err("起動設定が読込中に差し替えられています".into());
         }
         self.guard_directory()?;
+        let doc: Document = serde_json::from_slice(&bytes).map_err(|e| {
+            StartupStorageError::Configuration(format!(
+                "起動設定が不正です。空DBへ切り替えません: {e}"
+            ))
+        })?;
+        if doc.schema_version != 3
+            || !sha(&doc.sha256)
+            || hash(&serde_json::to_vec(&doc.record).map_err(|e| e.to_string())?) != doc.sha256
+        {
+            return Err(StartupStorageError::Configuration(
+                "起動設定の形式版またはSHAが一致しません".into(),
+            ));
+        }
+        if doc.record.origin == Origin::Relocated && doc.record.activation.is_none() {
+            return Err("保存先切替の検証記録がありません。データを保持します".into());
+        }
+        doc.record.validate()?;
         Ok(Some(Loaded {
             record: doc.record,
             identity,
@@ -752,6 +945,7 @@ impl Bootstrap {
                 pending_move: None,
                 activation: None,
                 recovery: None,
+                salvage: None,
             },
         )
     }
@@ -777,9 +971,11 @@ impl Bootstrap {
                 Origin::Default => "default",
                 Origin::Relocated => "relocated",
                 Origin::Recovered => "recovered",
+                Origin::Salvaged => "salvaged",
             }
             .into(),
             recovery: r.recovery.as_ref().map(|r| r.view(&self.config)),
+            salvage_available: r.salvage.is_some(),
             pending_operation_id: r.pending_move.as_ref().map(|p| p.operation_id.clone()),
             pending_target: r.pending_move.as_ref().map(|p| p.target.clone()),
             kept_moves: self.kept_moves(r)?,

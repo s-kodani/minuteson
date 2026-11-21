@@ -23,11 +23,11 @@ export interface TranscriptRowActions {
 }
 type SharedProps = {
   colorKeys?: Readonly<Record<string,string>>;
-  meetingId: string; speakers: readonly Speaker[]; canPlay: boolean;
+  meetingId: string; speakers: readonly Speaker[]; canPlay: boolean; editable: boolean;
   saveFailed: boolean; dirty: boolean; actions: RefObject<TranscriptRowActions>;
 };
 
-const TranscriptRow = memo(function TranscriptRow({ utterance, text, playing, meetingId, speakers, colorKeys, canPlay, saveFailed, dirty, actions }: SharedProps & {
+const TranscriptRow = memo(function TranscriptRow({ utterance, text, playing, meetingId, speakers, colorKeys, canPlay, editable, saveFailed, dirty, actions }: SharedProps & {
   utterance: Utterance; text: string | undefined; playing: boolean;
 }) {
   const label = timeLabel(utterance.startUs);
@@ -42,19 +42,19 @@ const TranscriptRow = memo(function TranscriptRow({ utterance, text, playing, me
         disabled={!canPlay} onClick={() => actions.current.play(utterance, false)}><time>{label}</time></button></div>
     <IdentificationBadge value={utterance.speakerIdentification}/>
     {text !== undefined ? <div className="utterance-text-edit">
-      <textarea autoFocus aria-label={label + "の発言"} rows={2} maxLength={20000} value={text}
+      <textarea autoFocus aria-label={label + "の発言"} rows={2} maxLength={20000} value={text} readOnly={!editable}
         onChange={event => actions.current.changeText(utterance.id, event.target.value)} onKeyDown={event => {
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat) return;
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); actions.current.saveText(utterance.id); }
           if (event.key === "Escape") { event.preventDefault(); actions.current.cancelText(utterance.id); }
         }} />
-      <div className="transcript-actions"><button type="button" disabled={saveFailed} onClick={() => actions.current.saveText(utterance.id)}>保存</button>
+      <div className="transcript-actions"><button type="button" disabled={!editable || saveFailed} onClick={() => actions.current.saveText(utterance.id)}>保存</button>
         <button type="button" className="small-secondary" disabled={saveFailed || dirty} onClick={() => actions.current.cancelText(utterance.id)}>キャンセル</button></div>
-    </div> : <div className="utterance-text"><span role="button" className="transcript-body-edit" aria-label={label + "の発言を編集"} tabIndex={0}
+    </div> : <div className="utterance-text">{editable ? <span role="button" className="transcript-body-edit" aria-label={label + "の発言を編集"} tabIndex={0}
       onKeyDown={event => { if (shouldOpenTranscriptBodyFromKey(event.nativeEvent)) { event.preventDefault(); actions.current.openText(utterance); } }}
-      onClick={event => { const body = event.currentTarget; if (shouldOpenTranscriptBody(event.detail, body.ownerDocument.getSelection(), node => body.contains(node))) actions.current.openText(utterance); }}>{utterance.effectiveText}</span></div>}
+      onClick={event => { const body = event.currentTarget; if (shouldOpenTranscriptBody(event.detail, body.ownerDocument.getSelection(), node => body.contains(node))) actions.current.openText(utterance); }}>{utterance.effectiveText}</span> : <span>{utterance.effectiveText}</span>}</div>}
     <div className="utterance-edit-tools options-modal">
-      <IconButton className="options-modal-trigger" label={label + "の話者を変更"} icon="more" aria-haspopup="dialog" disabled={saveFailed}
+      <IconButton className="options-modal-trigger" label={label + "の話者を変更"} icon="more" aria-haspopup="dialog" disabled={!editable || saveFailed}
         onClick={event => actions.current.assign(utterance, event.currentTarget)} />
     </div>
   </article>;

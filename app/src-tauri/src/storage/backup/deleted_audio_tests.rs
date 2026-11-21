@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 #[path = "deleted_audio_publication_tests.rs"]
 mod publication_tests;
 
-pub(in crate::storage::backup) fn deleted(storage: &Storage, meeting: &str) -> String {
+pub(in crate::storage) fn deleted(storage: &Storage, meeting: &str) -> String {
     let lease = AnalysisController::default()
         .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
         .unwrap();

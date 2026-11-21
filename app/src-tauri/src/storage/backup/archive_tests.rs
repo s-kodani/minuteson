@@ -24,7 +24,7 @@ pub(in crate::storage::backup) fn cached_archive(
     std::fs::write(path, bytes).unwrap();
 }
 
-pub(in crate::storage::backup) fn meeting(storage: &Storage, operation: &str) -> String {
+pub(in crate::storage) fn meeting(storage: &Storage, operation: &str) -> String {
     meeting_source(storage, operation, false)
 }
 pub(in crate::storage::backup) fn meeting_with_mix(storage: &Storage, operation: &str) -> String {

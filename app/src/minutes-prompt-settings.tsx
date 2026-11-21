@@ -33,6 +33,9 @@ export function MinutesPromptSettings({ visible, locked }: { visible: boolean; l
     const unregister = registerPendingEdits(flush, () => {
       const current = queue.snapshot();
       return current.dirty || current.saving || !!composition.current;
+    }, () => {
+      if (composition.current) throw Error("プロンプトの日本語入力を確定してから退避してください。");
+      return { kind: "minutes_prompts", input: queue.snapshot().payload };
     });
     return () => { unsubscribe(); unregister(); composition.current?.finish(); };
   }, [queue]);
