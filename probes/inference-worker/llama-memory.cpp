@@ -42,13 +42,13 @@ int mon_llama_memory(int argc, char **argv) {
         }
         llama_backend_init();
         std::vector<ggml_backend_dev_t> devices;
-        uint32_t layers = 0, trained_context = 0, experts = 0;
+        uint32_t layers = 0, skipped_layers = 0, trained_context = 0, experts = 0;
         // This engine API forces no_alloc and metadata-only model loading,
         // measures the full prospective model/context/compute allocations and
         // frees its temporary model/context before returning. It never touches
         // the completion worker's separately owned resident cache.
-        auto memory = common_get_device_memory_data(params.model.path.c_str(), &mparams, &cparams,
-                devices, layers, trained_context, experts, GGML_LOG_LEVEL_ERROR);
+        auto memory = common_get_device_memory_data(params.model.get_paths(), &mparams, &cparams,
+                devices, layers, skipped_layers, trained_context, experts, GGML_LOG_LEVEL_ERROR);
         if (devices.size() > 64 || memory.size() != devices.size() + 1 || (cpu && !devices.empty())) {
             throw std::runtime_error("invalid memory estimate device count");
         }
@@ -72,7 +72,8 @@ int mon_llama_memory(int argc, char **argv) {
                 {"contextBytes", static_cast<uint64_t>(part.context)},
                 {"computeBytes", static_cast<uint64_t>(part.compute)}});
         }
-        const uint32_t effective_layers = cpu ? 0 : std::min(static_cast<uint32_t>(params.n_gpu_layers), layers + 1);
+        const uint32_t effective_layers = cpu ? 0 : static_cast<uint32_t>(std::min(
+                static_cast<uint64_t>(params.n_gpu_layers), static_cast<uint64_t>(layers) + skipped_layers + 1));
         const auto result = nlohmann::ordered_json({{"schemaVersion", 1},
             {"contextTokens", params.n_ctx}, {"gpuLayers", effective_layers}, {"devices", entries}}).dump() + "\n";
         if (result.size() > 32 * 1024) throw std::runtime_error("memory estimate output exceeds limit");

@@ -250,7 +250,7 @@ def main(argv=None):
             try:
                 choice=next(c for c in choices if c['id'].removeprefix('windows-')==ident)
                 current['choice'] = choice['id']
-                if choice['recipe']['manifest']['engineVersion']!='b11960':raise ValueError('unreviewed runtime')
+                if choice['recipe']['manifest']['engineVersion']!='b12556':raise ValueError('unreviewed runtime')
                 with tempfile.TemporaryDirectory(prefix='mon-llama-runtime-check-') as temporary:
                     try:
                         current.update(check(choice,Path(temporary).resolve(),fetch,args.models_dir.resolve() if args.models_dir else None,worker.resolve(),args.metal,current))

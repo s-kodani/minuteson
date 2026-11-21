@@ -119,6 +119,45 @@ fn current_and_pre_update_eres2net_packages_keep_offline_terms() {
     }
 }
 #[test]
+fn previous_llama_runtime_packages_keep_offline_terms_by_weight_identity() {
+    use crate::model_inspection::PackageManifestExt;
+
+    // Exact pre-update Mac catalog manifests from 5d76e2ab, including their
+    // runtime files and notices. A target-only Windows conversion is invalid.
+    let previous: Vec<PackageManifest> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/model-license-llama-b11960-macos.json"
+    ))
+    .unwrap();
+    assert_eq!(previous.len(), 5);
+    assert_eq!(
+        previous
+            .iter()
+            .map(|m| &m.model_name)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        5
+    );
+    let current_catalog = fixed();
+    for manifest in previous {
+        assert_eq!(manifest.engine, Engine::Llama);
+        assert_eq!(manifest.target, Target::MacosAarch64);
+        assert_eq!(manifest.engine_version, "b11960");
+        manifest.validate(Target::MacosAarch64).unwrap();
+        let current_manifest = current_catalog
+            .iter()
+            .find(|m| m.engine == manifest.engine && m.model_name == manifest.model_name)
+            .unwrap();
+        assert_ne!(manifest.engine_version, current_manifest.engine_version);
+        let previous = official(&manifest).unwrap().unwrap();
+        let current = official(current_manifest).unwrap().unwrap();
+        assert!(previous.official);
+        assert_eq!(previous.disclosure_hash, current.disclosure_hash);
+        // Preserved model terms do not authorize an old runtime as the current
+        // catalog package; installed package identity remains exact.
+        assert!(!installed(&manifest, &current_catalog).unwrap().official);
+    }
+}
+#[test]
 fn all_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_changes() {
     let network: serde_json::Value =
         serde_json::from_str(include_str!("../../../model-catalog/whisper-network.json")).unwrap();
@@ -210,7 +249,7 @@ fn disclosure_hash_matches_renderer_golden_with_original_notice_bytes() {
     let manifest = qwen();
     assert_eq!(
         official(&manifest).unwrap().unwrap().disclosure_hash,
-        "77b6234add679035e883adc9955877111dd475233e2897fe7d3d7456b9570de3"
+        "f1e9cb42cf6429e7a7f61d731057f1dce9bb2d5259889d3f60a1e47e8ac2ec39"
     );
     let gemma = fixed()
         .into_iter()

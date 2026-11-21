@@ -3,7 +3,9 @@
     "id": "sherpa-1138-pyannote3-eres2net-base",
     "label": "Pyannote + ERes2Net base",
     "speakerEmbeddingName": "3D-Speaker ERes2Net base",
-    "previousSpeakerEmbeddingHashes": ["1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"],
+    "previousSpeakerEmbeddingHashes": [
+      "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+    ],
     "description": "pyannote segmentation 3.0・3D-Speaker ERes2Net base。人数は通常自動推定です。品質・速度は正式評価前で、取得後にCPU動作確認と適用が必要です。",
     "group": "base",
     "recipeSchemaVersion": 4,
@@ -229,7 +231,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11960",
+      "engineVersion": "b12556",
       "modelName": "Qwen3-8B",
       "modelVersion": "7c41481f57cb95916b40956ab2f0b139b296d974",
       "quantization": "Q4_K_M",
@@ -262,12 +264,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 16465074,
-          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
-          "memberPath": "llama-b11960/LICENSE"
+          "expectedSize": 16449908,
+          "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
+          "memberPath": "llama-b12556/LICENSE"
         }
       },
       {
@@ -295,7 +297,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11960",
+      "engineVersion": "b12556",
       "modelName": "Qwen3-4B",
       "modelVersion": "bc640142c66e1fdd12af0bd68f40445458f3869b",
       "quantization": "Q4_K_M",
@@ -328,12 +330,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 16465074,
-          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
-          "memberPath": "llama-b11960/LICENSE"
+          "expectedSize": 16449908,
+          "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
+          "memberPath": "llama-b12556/LICENSE"
         }
       },
       {
@@ -361,7 +363,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11960",
+      "engineVersion": "b12556",
       "modelName": "Qwen3.5-4B",
       "modelVersion": "e87f176479d0855a907a41277aca2f8ee7a09523",
       "quantization": "Q4_K_M",
@@ -394,12 +396,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 16465074,
-          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
-          "memberPath": "llama-b11960/LICENSE"
+          "expectedSize": 16449908,
+          "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
+          "memberPath": "llama-b12556/LICENSE"
         }
       },
       {
@@ -427,7 +429,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11960",
+      "engineVersion": "b12556",
       "modelName": "Qwen3.5-9B",
       "modelVersion": "3885219b6810b007914f3a7950a8d1b469d598a5",
       "quantization": "Q4_K_M",
@@ -460,12 +462,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 16465074,
-          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
-          "memberPath": "llama-b11960/LICENSE"
+          "expectedSize": 16449908,
+          "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
+          "memberPath": "llama-b12556/LICENSE"
         }
       },
       {
@@ -757,7 +759,7 @@
     "manifest": {
       "schemaVersion": 1,
       "engine": "llama.cpp",
-      "engineVersion": "b11960",
+      "engineVersion": "b12556",
       "modelName": "gemma-4-E4B-it",
       "modelVersion": "bfc15c382204943c3a8fff0c750b94ae2364d7a3",
       "quantization": "Q4_K_M",
@@ -790,12 +792,12 @@
       },
       {
         "relativePath": "notices/llama-MIT.txt",
-        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
         "archive": {
           "format": "tar",
-          "expectedSize": 16465074,
-          "expectedHash": "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
-          "memberPath": "llama-b11960/LICENSE"
+          "expectedSize": 16449908,
+          "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
+          "memberPath": "llama-b12556/LICENSE"
         }
       },
       {
