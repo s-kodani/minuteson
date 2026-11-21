@@ -147,6 +147,7 @@ pub struct Storage {
     execution_progress: Mutex<std::collections::HashMap<String, jobs::ExecutionProgress>>,
     post_analysis_drain: Mutex<()>,
     voice_audio_lock: Mutex<()>,
+    playback_wav: crate::audio::PlaybackWavCache,
     maintenance: std::sync::atomic::AtomicBool,
     // Process-local, irreversible. Bootstrap decides which root to open next.
     retired: std::sync::atomic::AtomicBool,
@@ -710,6 +711,7 @@ impl Storage {
             execution_progress: Mutex::default(),
             post_analysis_drain: Mutex::default(),
             voice_audio_lock: Mutex::default(),
+            playback_wav: Default::default(),
             maintenance: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),
             scratch,

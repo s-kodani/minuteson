@@ -331,9 +331,11 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
                 for target in targets:
                     binary = build/"bin"/target
                     if not binary.exists(): binary = build/target
-                    shutil.copyfile(binary,pending/target); (pending/target).chmod(0o700)
-                    asr.command(["/usr/bin/codesign","--force","--sign","-",str(pending/target)])
-                    asr.verify_binary(pending/target)
+                    worker = pending/target
+                    shutil.copyfile(binary,worker); worker.chmod(0o700)
+                    asr.command(["/usr/bin/strip","-x",str(worker)])
+                    asr.command(["/usr/bin/codesign","--force","--sign","-",str(worker)])
+                    asr.verify_binary(worker)
             index = [{"protocol":1,"engine":engine,"name":name,"bytes":(pending/name).stat().st_size,"sha256":asr.digest(pending/name)} for engine,name in NAMES.items()]
             (pending/"runtime-index.json").write_text(json.dumps(index,indent=2)+"\n")
             (pending/"build-info.json").write_text(json.dumps({"recipeSha256":stamp,"buildFingerprint":fingerprint,"whisperCommit":asr.COMMIT,"llamaCommit":LLAMA_COMMIT,"sherpaCommit":SHERPA_COMMIT,"protocol":1,"licenseReview":"not_verified","distributionReady":False},indent=2)+"\n")

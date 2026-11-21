@@ -103,6 +103,10 @@ impl ImportController {
             .clone())
     }
     fn begin(&self, phase: &str) -> Result<Snapshot, String> {
+        self.begin_with_previous(phase)
+            .map(|(snapshot, _)| snapshot)
+    }
+    fn begin_with_previous(&self, phase: &str) -> Result<(Snapshot, Option<Snapshot>), String> {
         let mut state = self
             .state
             .lock()
@@ -110,6 +114,8 @@ impl ImportController {
         if state.snapshot.busy || state.snapshot.recording_blocked || state.closing {
             return Err("取り込み・録音開始・終了処理が進行中です".into());
         }
+        let previous = (phase == "choosing" && state.snapshot.phase == "ready")
+            .then(|| state.snapshot.clone());
         let revision = state.snapshot.revision + 1;
         state.snapshot = Snapshot {
             revision,
@@ -118,11 +124,41 @@ impl ImportController {
             token: Some(Uuid::new_v4().to_string()),
             ..Snapshot::default()
         };
-        state.selected = None;
+        if previous.is_none() {
+            state.selected = None;
+        }
         state.request = None;
         state.last_progress = None;
         state.cancel = Arc::new(AtomicBool::new(false));
-        Ok(state.snapshot.clone())
+        Ok((state.snapshot.clone(), previous))
+    }
+    fn finish_picker(
+        &self,
+        previous: Option<Snapshot>,
+        picked: &Result<Option<PathBuf>, String>,
+    ) -> Result<Snapshot, String> {
+        self.change(|state| {
+            if state.cancel.load(Ordering::Acquire) || state.closing {
+                state.snapshot.mark_cancelled();
+                state.snapshot.busy = false;
+                state.selected = None;
+            } else if matches!(picked, Ok(Some(_))) {
+                state.snapshot.phase = "inspecting".into();
+                state.selected = None;
+            } else if let Some(previous) = previous {
+                let revision = state.snapshot.revision;
+                state.snapshot = Snapshot {
+                    revision,
+                    ..previous
+                };
+            } else {
+                state.snapshot.busy = false;
+                match picked {
+                    Ok(_) => state.snapshot.phase = "idle".into(),
+                    Err(error) => state.snapshot.finish_error(error.clone(), false),
+                }
+            }
+        })
     }
     fn change(&self, change: impl FnOnce(&mut State)) -> Result<Snapshot, String> {
         let mut state = self
@@ -185,33 +221,31 @@ impl ImportController {
         if app.state::<SessionStore>().snapshot().is_active() {
             return Err("録音中は音声を取り込めません".into());
         }
-        let initial = app.state::<Self>().begin(if path.is_some() {
+        let controller = app.state::<Self>();
+        let (initial, previous) = controller.begin_with_previous(if path.is_some() {
             "inspecting"
         } else {
             "choosing"
         })?;
         Self::emit(&app, initial);
-        let selected = match path {
-            Some(path) => Ok(Some(path)),
-            None => select_file(window).await,
-        };
-        match selected {
-            Ok(Some(path)) => {
-                Self::update(&app, |s| s.snapshot.phase = "inspecting".into());
-                let worker = app.clone();
-                std::thread::spawn(move || Self::inspect(&worker, path));
+        let path = match path {
+            Some(path) => Some(path),
+            None => {
+                let picked = select_file(window).await;
+                let snapshot = controller.finish_picker(previous, &picked)?;
+                Self::emit(&app, snapshot.clone());
+                match picked {
+                    Ok(path) if snapshot.phase == "inspecting" => path,
+                    Err(error) if snapshot.phase == "ready" => return Err(error),
+                    _ => None,
+                }
             }
-            Ok(None) => Self::update(&app, |s| {
-                s.snapshot.phase = "idle".into();
-                s.snapshot.busy = false;
-            }),
-            Err(error) => Self::update(&app, |s| {
-                s.snapshot.phase = "failed".into();
-                s.snapshot.error_message = Some(error);
-                s.snapshot.busy = false;
-            }),
+        };
+        if let Some(path) = path {
+            let worker = app.clone();
+            std::thread::spawn(move || Self::inspect(&worker, path));
         }
-        app.state::<Self>().snapshot()
+        controller.snapshot()
     }
     fn inspect(app: &AppHandle, path: PathBuf) {
         let cancel = app.state::<Self>().state.lock().unwrap().cancel.clone();
@@ -697,6 +731,56 @@ mod tests {
         );
     }
     use super::*;
+
+    #[test]
+    fn dismissed_picker_restores_the_previous_ready_token_and_metadata() {
+        let controller = ImportController::default();
+        let ready = controller
+            .change(|state| {
+                state.snapshot.phase = "ready".into();
+                state.snapshot.token = Some("original".into());
+                state.snapshot.file_name = Some("original.wav".into());
+                state.snapshot.required_bytes = Some(123);
+            })
+            .unwrap();
+        let (choosing, previous) = controller.begin_with_previous("choosing").unwrap();
+        assert!(choosing.busy && choosing.revision > ready.revision);
+        assert_ne!(choosing.token, ready.token);
+        let restored = controller.finish_picker(previous, &Ok(None)).unwrap();
+        assert_eq!(restored.phase, "ready");
+        assert!(!restored.busy && restored.revision > choosing.revision);
+        assert_eq!(restored.token, ready.token);
+        assert_eq!(restored.file_name, ready.file_name);
+        assert_eq!(restored.required_bytes, ready.required_bytes);
+
+        let (choosing, previous) = controller.begin_with_previous("choosing").unwrap();
+        let picked = controller
+            .finish_picker(previous, &Ok(Some(PathBuf::from("replacement.wav"))))
+            .unwrap();
+        assert!(picked.busy && picked.revision > choosing.revision);
+        assert_eq!(picked.phase, "inspecting");
+        assert_eq!(picked.token, choosing.token);
+        assert!(picked.file_name.is_none());
+    }
+
+    #[test]
+    fn operation_cancellation_does_not_revive_the_previous_source() {
+        let controller = ImportController::default();
+        controller
+            .change(|state| {
+                state.snapshot.phase = "ready".into();
+                state.snapshot.token = Some("original".into());
+            })
+            .unwrap();
+        let (choosing, previous) = controller.begin_with_previous("choosing").unwrap();
+        controller
+            .cancel(choosing.token.as_deref().unwrap())
+            .unwrap();
+        let stopped = controller.finish_picker(previous, &Ok(None)).unwrap();
+        assert_eq!(stopped.phase, "cancelled");
+        assert!(!stopped.busy);
+        assert_eq!(stopped.token, choosing.token);
+    }
 
     fn measured(completed: u64) -> crate::operation_observation::Progress {
         crate::operation_observation::Progress {

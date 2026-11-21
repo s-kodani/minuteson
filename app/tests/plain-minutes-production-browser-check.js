@@ -8,15 +8,28 @@ async (page,capturePath) => {
   const open=async()=>{await page.getByRole("button",{name:"議事録UI確認",exact:true}).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();await panel().getByRole("button",{name:"議事録を編集",exact:true}).waitFor();};
   const generate=()=>panel().getByRole("button",{name:"議事録を生成",exact:true}).click();
   const dismiss=async()=>{await dialog().locator(":scope > .common-modal-dismiss-row > [data-dialog-cancel]").click();};
-  await page.setViewportSize({width:1280,height:820});await open();
+  await page.setViewportSize({width:1280,height:820});
+  await page.getByRole("button",{name:"議事録UI確認",exact:true}).click();
+  const tab = name => page.getByRole("tab", {name, exact:true});
+  const reads = command => page.evaluate(command => window.__mon.plainReads.filter(cmd => cmd === command).length, command);
+  await tab("文字起こし").waitFor();
+  await page.clock.runFor(3100);
+  check(await reads("get_minutes_markdown")===0 && await reads("get_minutes_source")===0, "opening transcription queried the unvisited minutes tab");
+  await tab("議事録").click();
   await panel().getByRole("heading",{name:"点検会議",exact:true}).waitFor();
   check(await count("save_minutes_markdown")===0&&await count("start_markdown_minutes_generation")===0,"initial mount saved or generated");
   check(await panel().locator('[contenteditable],.minutes-primary-toolbar,.fixed-evidence,[data-evidence-id]').count()===0,"advanced editor/evidence survived production switch");
   results.push("product main window previews exact saved Markdown without implicit generation/save or rich evidence controls");
   await panel().getByRole("button",{name:"議事録を編集",exact:true}).click();await input().fill("# 人間の編集\n\n- 点検日\n");
-  await page.getByRole("tab",{name:"文字起こし",exact:true}).click();await page.getByRole("tab",{name:"議事録",exact:true}).click();
+  await tab("文字起こし").click();
+  const hiddenReads = await Promise.all([reads("get_minutes_markdown"), reads("get_minutes_source")]);
+  await page.evaluate(() => { window.__mon.emitPlain("analysis-version-changed"); window.__mon.emitPlain("model-profile-changed"); });
+  await page.clock.runFor(6100);
+  check(await reads("get_minutes_markdown")===hiddenReads[0] && await reads("get_minutes_source")===hiddenReads[1], "a hidden minutes tab read on versions or polling");
+  await tab("議事録").click();
   check(await input().inputValue()==="# 人間の編集\n\n- 点検日\n"&&await count("save_minutes_markdown")===0,"tab switch lost or autosaved human input");
-  results.push("tab switching preserves the same plain textarea and never autosaves");
+  await page.waitForFunction(before => window.__mon.plainReads.filter(cmd => cmd === "get_minutes_markdown").length > before, hiddenReads[0]);
+  results.push("the minutes tab skips reads before first visit and while hidden, verifies on reopen and preserves the draft without autosaving");
   await meetings().click();await dialog().getByRole("heading",{name:"議事録の未保存の編集"}).waitFor();
   await dialog().getByRole("button",{name:"確認をキャンセル",exact:true}).click();
   check(await input().inputValue().then(v=>v.includes("人間の編集"))&&await count("save_minutes_markdown")===0,"cancel navigated or saved");
@@ -130,7 +143,7 @@ async (page,capturePath) => {
     await panel().getByText(/生成設定を確認できませんでした/).waitFor();
     const minutesNotice = await noticeLayout(page.locator("#meeting-panel-minutes"));
     check(Math.abs(minutesNotice.left) <= 1 && Math.abs(transcriptNotice.left) <= 1, `notice text and heading do not share a left edge at ${width}px`);
-    check(Math.abs(minutesNotice.top - transcriptNotice.top) <= 1, `notice text does not start in the same position below both headings at ${width}px`);
+    check(Math.abs(minutesNotice.top - transcriptNotice.top) <= 1, `notice text does not start in the same position below both headings at ${width}px (minutes: ${JSON.stringify(minutesNotice)}, transcript: ${JSON.stringify(transcriptNotice)})`);
     check(JSON.stringify(minutesNotice.font) === JSON.stringify(transcriptNotice.font), `generation and transcript notice styles differ at ${width}px`);
     const gap = width > 760 ? 12 : 8;
     for (const [name, notice] of [["minutes", minutesNotice], ["transcript", transcriptNotice]]) {
@@ -227,6 +240,7 @@ async (page,capturePath) => {
   await page.evaluate(()=>{
     window.__mon.plainReadFailure=false;window.__mon.minutesPrefReadFailure=false;window.__mon.health.modelListingFailure=false;
     window.__mon.emitPlain("analysis-version-changed");
+    window.__mon.emitPlain("model-profile-changed");
   });
   await panel().getByRole("heading",{name:"補助データに障害があっても保存"}).waitFor();
   await page.getByRole("alert").filter({ hasText: "モデル削除: 削除記録を確認できません" }).waitFor({ state: "hidden" });

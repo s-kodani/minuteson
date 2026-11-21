@@ -4,6 +4,7 @@ import { stageLabel, stageDetail } from "./stage-progress.ts";
 import type { DataSnapshot, DataJob } from "./data-operation-state.ts";
 import { displayNativePath } from "./native-path.ts";
 import { bytesLabel, importLabel, type ImportSnapshot } from "./import-state.ts";
+import type { ModelCleanupJob } from "./model-cleanup.ts";
 
 export interface OperationProgress {
   id: string;
@@ -173,6 +174,10 @@ export function modelProgress(target: string, stage: string | undefined, transfe
     completed: counting ? transfer?.receivedBytes ?? null : null, total: counting ? transfer?.totalBytes ?? null : null,
     detail: stage === "download" && transfer ? `${bytesLabel(transfer.receivedBytes)} / ${bytesLabel(transfer.totalBytes)}${verifying ? " 取得済み（100%）" : ""}` : undefined,
   };
+}
+
+export function modelCleanupProgress(job: ModelCleanupJob, startedAtMs = job.startedAtMs): OperationProgress {
+  return { ...modelProgress(job.target, "cleanup", null, "running", startedAtMs), id: `model:${job.id}` };
 }
 
 /** UI-only progress; never authorizes commands or establishes success. */

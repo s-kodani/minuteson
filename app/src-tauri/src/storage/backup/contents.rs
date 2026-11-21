@@ -23,6 +23,24 @@ pub(in crate::storage) struct Asset {
     pub(in crate::storage) size: i64,
     pub(in crate::storage) hash: String,
 }
+
+pub(super) struct AudioBody<'a> {
+    pub(super) asset: &'a Asset,
+    frames: i64,
+    voice_clip: bool,
+}
+
+impl AudioBody<'_> {
+    pub(super) fn verify_header(&self, file: &mut File, size: u64) -> Result<(), String> {
+        let layout = crate::audio::wave::inspect(file, size)?;
+        if i64::try_from(layout.frames).map_err(err)? != self.frames
+            || (self.voice_clip && layout.data_offset != 44)
+        {
+            return Err("バックアップ音声の形式・長さが不正です".into());
+        }
+        file.rewind().map_err(err)
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(in crate::storage) struct Audio {
@@ -409,28 +427,49 @@ impl Contents {
         assets: &BTreeMap<String, PathBuf>,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        let verify = |a: &Asset, frames: i64, voice_clip: bool| -> Result<(), String> {
+        for body in self.audio_bodies()?.into_values() {
+            let a = body.asset;
             let path = assets
                 .get(&a.id)
                 .ok_or("バックアップに音声ファイルがありません")?;
             let mut file = File::open(path).map_err(err)?;
             let size = u64::try_from(a.size).map_err(err)?;
-            if !voice_clip {
-                verify_meeting_wav(&mut file, size, frames)?;
+            if !body.voice_clip {
+                verify_meeting_wav(&mut file, size, body.frames)?;
             }
             let audio =
                 crate::audio::VerifiedAudio::open_cancellable(file, size, &a.hash, cancelled)?;
-            if (voice_clip && !audio.format.is_voice_clip())
-                || i64::try_from(audio.format.frames).map_err(err)? != frames
+            if (body.voice_clip && !audio.format.is_voice_clip())
+                || i64::try_from(audio.format.frames).map_err(err)? != body.frames
             {
                 return Err("バックアップ音声の形式・長さが不正です".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn audio_bodies<'a>(&'a self) -> Result<BTreeMap<&'a str, AudioBody<'a>>, String> {
+        let mut bodies = BTreeMap::new();
+        let mut add = |asset: &'a Asset, frames, voice_clip| -> Result<(), String> {
+            if bodies
+                .insert(
+                    asset.id.as_str(),
+                    AudioBody {
+                        asset,
+                        frames,
+                        voice_clip,
+                    },
+                )
+                .is_some()
+            {
+                return Err("バックアップの音声識別子が重複しています".into());
             }
             Ok(())
         };
         for m in &self.meetings {
             if let Some(a) = &m.audio {
                 if !a.deleted {
-                    verify(&a.asset, a.frames, false)?;
+                    add(&a.asset, a.frames, false)?;
                 }
             }
         }
@@ -440,13 +479,13 @@ impl Contents {
                     if a.id != s.id {
                         return Err("登録音声の識別子が一致しません".into());
                     }
-                    verify(a, s.frames.ok_or("登録音声の長さがありません")?, true)?;
+                    add(a, s.frames.ok_or("登録音声の長さがありません")?, true)?;
                 } else if s.frames.is_some() {
                     return Err("欠落した登録音声に長さがあります".into());
                 }
             }
         }
-        Ok(())
+        Ok(bodies)
     }
 
     pub(super) fn write_database(

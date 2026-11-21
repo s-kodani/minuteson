@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "./ipc.ts";
+import { listen } from "@tauri-apps/api/event";
 import { subscribeInvalidations } from "./native-snapshots";
 import { observeInvalidations } from "./snapshot-resource";
 import { browserFocus, browserSchedule } from "./snapshot-browser";
@@ -15,7 +16,6 @@ import { MinutesMarkdownPreview } from "./minutes-markdown-preview";
 import { MarkdownSaveController, markdownStamp, type MarkdownDocument } from "./minutes-markdown-state";
 import { confirmMarkdownLeave } from "./minutes-markdown-leave";
 import { MarkdownExportController, type MarkdownExportRecord, type MarkdownExportStatus } from "./minutes-markdown-export";
-import "./minutes-markdown-editor.css";
 import { validateAudioSummary, type MeetingAudioSummary } from "./minutes-audio-state";
 import { useMeetingAudio } from "./meeting-audio";
 import { topOpenModal } from "./modal-state";
@@ -30,7 +30,7 @@ type Job = AnalysisJob & { operationId: string };
 export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingActive, locked, navigationLocked = false, withSavedEdits, visible = true }: {
   meetingId: string; meetingTitle: string; sourceEpoch: number; recordingActive: boolean; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
-  onHeadChanged: () => Promise<void>; visible?: boolean; navigationLocked?: boolean;
+  visible?: boolean; navigationLocked?: boolean;
 }) {
   const documentWritable = useRef(false);
   const [controller] = useState(() => new MarkdownSaveController(meetingId, async request => {
@@ -60,6 +60,11 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const [actionsHost, setActionsHost] = useState<HTMLDivElement | null>(null);
   const alive = useRef(true), running = useRef(false);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const refreshJobs = useRef<() => Promise<unknown>>(async () => {});
+  const refreshSource = useRef<() => Promise<unknown>>(async () => {});
+  const refreshAudio = useRef<() => Promise<unknown>>(async () => {});
+  const previousSourceEpoch = useRef(sourceEpoch);
+  const previousAudioAvailability = useRef(canInspectSource);
   const admissions = useSyncExternalStore(minutesAdmissions.subscribe, minutesAdmissions.getSnapshot);
   const preparing = admissions.some(item => item.meetingId === meetingId && item.pending);
   // Navigation/quit sets a main-window lock while awaiting this decision.
@@ -109,17 +114,27 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     return () => { alive.current = false; unsubscribe(); unregister(); };
   }, [controller]);
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!visible || !isTauri()) return;
     let disposed = false;
-    const observe = (refresh: () => Promise<void>, onError: (cause: unknown) => void) => observeInvalidations({
+    const subscribeVersion = (notify: () => void) => listen<string>("analysis-version-changed", ({ payload }) => {
+      if (payload == null || payload === meetingId) notify();
+    });
+    const subscribeJobs = (notify: () => void, publicationOnly = false) => listen<Job & { meetingId: string }>("analysis-job-changed", ({ payload }) => {
+      if (payload && (payload.meetingId !== meetingId || payload.kind !== "minutes_generation" || publicationOnly && payload.state !== "succeeded")) return;
+      notify();
+    });
+    const observe = (subscribe: (notify: () => void) => Promise<() => void>, refresh: () => Promise<void>, onError: (cause: unknown) => void, intervalMs = 30000) => observeInvalidations({
       read: refresh,
-      subscribe: notify => subscribeInvalidations(["analysis-job-changed", "analysis-version-changed", "model-profile-changed"], notify),
+      subscribe,
       error: cause => { if (!disposed) onError(cause); },
-      intervalMs: 3000,
+      intervalMs,
       schedule: browserSchedule,
       focus: browserFocus,
     });
-    const document = observe(async () => {
+    const document = observe(async notify => {
+      const stops = await Promise.allSettled([subscribeVersion(notify), subscribeJobs(notify, true)]);
+      return () => stops.forEach(stop => { if (stop.status === "fulfilled") stop.value(); });
+    }, async () => {
       try {
         const saved = await read();
         if (disposed) return;
@@ -134,28 +149,40 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
         if (!disposed) setReview(fallback);
       }
     }, () => { /* An event subscription failure is recovered by polling. */ });
-    const transcript = observe(async () => {
+    const transcript = observe(subscribeVersion, async () => {
       const value = await invoke<MinutesSource>("get_minutes_source", { meetingId });
       if (!disposed) { setSource(value); setSourceError(""); }
     }, cause => { setSource(null); setSourceError(String(cause)); });
-    const preferences = observe(async () => {
+    const preferences = observe(notify => subscribeInvalidations(["model-profile-changed", "model-inventory-changed"], notify), async () => {
       const value = await invoke<VersionedDraft<MinutesPreferences>>("get_minutes_preferences");
       if (!disposed) { setSettings(value.payload); setSettingsError(""); }
     }, cause => { setSettings(null); setSettingsError(String(cause)); });
-    const jobList = observe(async () => {
+    const jobList = observe(subscribeJobs, async () => {
       const rows = await invoke<Job[]>("get_analysis_jobs", { meetingId });
       if (!Array.isArray(rows)) throw Error("議事録生成のジョブを確認できません。");
       if (!disposed) { setJobs(rows); setJobsError(""); minutesAdmissions.observe(meetingId, rows.map(job => job.operationId)); }
-    }, cause => { setJobsError(String(cause)); });
-    const audio = observe(async () => {
+    }, cause => { setJobsError(String(cause)); }, 3000);
+    const audio = observe(subscribeVersion, async () => {
       const value = sourceAvailable.current ? validateAudioSummary(await invoke<MeetingAudioSummary>("get_meeting_audio_summary", { meetingId })) : null;
       if (!disposed) setAudioSummary(value);
     }, () => setAudioSummary(null));
     const resources = [document, transcript, preferences, jobList, audio];
-    refreshRef.current = async () => { for (const resource of resources) void resource.refresh(); };
+    refreshRef.current = async () => { await Promise.all(resources.map(resource => resource.refresh())); };
+    refreshJobs.current = jobList.refresh;
+    refreshSource.current = transcript.refresh;
+    refreshAudio.current = audio.refresh;
     return () => { disposed = true; resources.forEach(resource => resource.stop()); };
-  }, [meetingId, controller]);
-  useEffect(() => { void refreshRef.current(); }, [sourceEpoch]);
+  }, [meetingId, controller, visible]);
+  useEffect(() => {
+    if (previousSourceEpoch.current === sourceEpoch) return;
+    previousSourceEpoch.current = sourceEpoch;
+    if (visible) void refreshSource.current();
+  }, [sourceEpoch, visible]);
+  useEffect(() => {
+    if (previousAudioAvailability.current === canInspectSource) return;
+    previousAudioAvailability.current = canInspectSource;
+    if (visible) void refreshAudio.current();
+  }, [canInspectSource, visible]);
   const run = async (action: () => Promise<void>) => {
     if (running.current || locked || !isTauri()) return;
     running.current = true; setBusy(true); setError("");
@@ -202,7 +229,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       // The main-window admission owner also reports failures after this
       // meeting view unmounts; do not emit a second local error toast.
       try { await submit(); } catch { return; }
-      if (alive.current) await refreshRef.current();
+      if (alive.current) await refreshJobs.current();
     }
   });
   const exportMarkdown = (opener:HTMLButtonElement) => run(async () => {
@@ -227,12 +254,12 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     });
   });
   const jobAction = (command: string, jobId: string) => run(async () => {
-    await invoke(command, { jobId }); await refreshRef.current();
+    await invoke(command, { jobId }); await refreshJobs.current();
   });
   const cancelJob = (job: Job) => run(async () => {
     await confirm({ title: "議事録生成を取り消す", target: `会議「${meetingTitle}」`,
       message: "生成を取り消します。保存済みの議事録と編集中の入力は保持します。", confirmLabel: "生成を取り消す",
-      action: async () => { await invoke("cancel_analysis_job", { jobId: job.id }); await refreshRef.current(); } });
+      action: async () => { await invoke("cancel_analysis_job", { jobId: job.id }); await refreshJobs.current(); } });
   });
   const generationJobs = jobs.filter(j => j.kind === "minutes_generation");
   const pending = generationJobs.some(j => ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state));

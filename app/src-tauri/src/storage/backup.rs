@@ -344,7 +344,7 @@ impl Storage {
         crate::operation_observation::stage("checking_source", None, "bytes");
         drop(db);
         let (database_size, database_hash) = digest_file(&database, cancelled)?;
-        let snapshot = Snapshot {
+        Ok(Snapshot {
             stage,
             database,
             database_hash,
@@ -354,9 +354,7 @@ impl Storage {
             deleted_audio,
             contents,
             _maintenance: maintenance,
-        };
-        snapshot.verify(cancelled)?;
-        Ok(snapshot)
+        })
     }
 }
 
@@ -420,7 +418,7 @@ fn snapshot_database(
 }
 
 impl Snapshot<'_> {
-    pub(super) fn verify(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
+    fn verify_control(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
         if digest_file(&self.database, cancelled)?
             != (self.database_size, self.database_hash.clone())
         {
@@ -430,18 +428,7 @@ impl Snapshot<'_> {
             self._maintenance.storage,
             &read_only(&self.database)?,
             cancelled,
-        )?;
-        for staged in &self.assets {
-            if staged.asset.state == "missing" {
-                // Only validated exclusion metadata is staged; no dummy body.
-                continue;
-            }
-            let (size, hash) = digest_file(&staged.path, cancelled)?;
-            if size != staged.asset.size_bytes as u64 || hash != staged.asset.content_hash {
-                return Err("一時バックアップの管理ファイルが変更されています".into());
-            }
-        }
-        Ok(())
+        )
     }
 }
 

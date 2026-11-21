@@ -2,7 +2,7 @@
 import hashlib
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import tarfile
 # Support both direct CLI execution and file-based release/test imports.
 import importlib.util
@@ -11,7 +11,8 @@ mon_model_catalog = importlib.util.module_from_spec(_catalog_spec)
 _catalog_spec.loader.exec_module(mon_model_catalog)
 
 def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    with path.open('rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
 def assemble(package):
     package = Path(package)
     name = 'mon-transducer-worker' + ('.exe' if (package/'mon-transducer-worker.exe').exists() else '')
@@ -33,27 +34,44 @@ def append_windows_choices(package):
     import shutil
     package=Path(package)
     asr=package/'asr'
-    (asr/'bin').mkdir(parents=True,exist_ok=True)
-    (asr/'lib').mkdir(exist_ok=True)
-    (asr/'notices').mkdir(exist_ok=True)
-    shutil.copyfile(package/'workers/mon-transducer-worker.exe',asr/'bin/mon-transducer-worker.exe')
-    shutil.copyfile(package/'workers/nlohmann-MIT.txt',asr/'notices/nlohmann-MIT.txt')
-    for source in (package/'sherpa').glob('*.dll'):
-        shutil.copyfile(source,asr/'lib'/source.name)
-    common = sorted(path for directory in ('bin', 'lib', 'notices')
-                    for path in (asr/directory).rglob('*') if path.is_file())
+    worker=asr/'bin/mon-transducer-worker.exe'
+    notice=asr/'notices/nlohmann-MIT.txt'
+    worker.parent.mkdir(parents=True,exist_ok=True)
+    notice.parent.mkdir(parents=True,exist_ok=True)
+    shutil.copyfile(package/'workers/mon-transducer-worker.exe',worker)
+    shutil.copyfile(package/'workers/nlohmann-MIT.txt',notice)
+    added=[(worker,'bin/mon-transducer-worker.exe','executable'),
+           (notice,'notices/nlohmann-MIT.txt','notice')]
+    native_files=[]
     target=package/'runtime-asr.pending.tar'
     with tarfile.open(package/'runtime.tar') as original,tarfile.open(target,'w',format=tarfile.USTAR_FORMAT) as output:
         for member in original:
             if not member.isfile() or member.name.startswith('asr/'):continue
-            output.addfile(member,original.extractfile(member))
-        for source in common:
-            if source.is_file():
-                data=source.read_bytes();entry=tarfile.TarInfo(source.relative_to(package).as_posix());entry.size=len(data);entry.mode=0o600;entry.mtime=0
-                output.addfile(entry,io.BytesIO(data))
+            with original.extractfile(member) as stream:
+                output.addfile(member,stream)
+                path=PurePosixPath(member.name)
+                if path.parent==PurePosixPath('sherpa') and path.suffix.lower()=='.dll':
+                    # ASR installs its DLLs under lib/ while diarization uses the
+                    # runtime root. Both recipes extract the same signed member.
+                    stream.seek(0)
+                    file=dict(relativePath=f'lib/{path.name}',role='runtime_library',expectedSize=member.size,
+                              expectedHash=hashlib.file_digest(stream,'sha256').hexdigest())
+                    native_files.append((file,member.name))
+        if not any(member=='sherpa/sherpa-onnx-c-api.dll' for _,member in native_files):
+            raise ValueError('Windows sherpa C API missing')
+        for source,relative,role in added:
+            entry=tarfile.TarInfo(f'asr/{relative}');entry.size=source.stat().st_size;entry.mode=0o600;entry.mtime=0
+            with source.open('rb') as stream:
+                output.addfile(entry,stream)
+            file=dict(relativePath=relative,role=role,expectedSize=entry.size,expectedHash=digest(source))
+            native_files.append((file,entry.name))
     target.replace(package/'runtime.tar')
     archive=dict(format='tar',expectedSize=(package/'runtime.tar').stat().st_size,expectedHash=digest(package/'runtime.tar'))
     windows_uri='mon-bundled://windows-runtime-v1/runtime.tar'
+    native_files.sort(key=lambda item:item[0]['relativePath'])
+    files=[file for file,_ in native_files]
+    sources=[dict(relativePath=file['relativePath'],url=windows_uri,archive=dict(archive,memberPath=member))
+             for file,member in native_files]
     choices=json.loads((package/'catalog.json').read_text(encoding='utf8'))
     choices=[c for c in choices if c['recipe']['manifest']['engine']!='asr']
     for choice in choices:
@@ -62,14 +80,7 @@ def append_windows_choices(package):
     for template in mon_model_catalog.compile_target('windows_x86_64', 'asr'):
         choice=copy.deepcopy(template);recipe=choice['recipe'];manifest=recipe['manifest']
         pairs=[(f,s) for f,s in zip(manifest['files'],recipe['sources']) if f['role']!='runtime_library']
-        files=[];sources=[]
-        for path in common:
-            if not path.is_file():continue
-            relative=path.relative_to(asr).as_posix()
-            files.append(dict(relativePath=relative,role='executable' if path.suffix=='.exe' else 'runtime_library' if path.suffix=='.dll' else 'notice',expectedSize=path.stat().st_size,expectedHash=digest(path)))
-            sources.append(dict(relativePath=relative,url=windows_uri,archive=dict(archive,memberPath='asr/'+relative)))
         manifest['files']=files+[f for f,s in pairs];recipe['sources']=sources+[s for f,s in pairs]
         manifest['backend']['files']['library']='lib/sherpa-onnx-c-api.dll'
-        if not (asr/manifest['backend']['files']['library']).is_file():raise ValueError('Windows sherpa C API missing')
         choices.append(choice)
     (package/'catalog.json').write_text(json.dumps(choices,ensure_ascii=False,indent=2)+'\n',encoding='utf8',newline='\n')

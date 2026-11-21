@@ -279,6 +279,35 @@ fn format8_reader_rejects_corruption_truncation_extra_bytes_and_old_versions() {
 }
 
 #[test]
+fn written_archive_readback_matches_receipt_and_rejects_changed_payload() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::open(root.path().into()).unwrap();
+    meeting(&storage, "output-readback");
+    let out = tempfile::tempdir().unwrap();
+    let (path, receipt) = write(&storage, out.path());
+    let mut bytes = std::fs::read(&path).unwrap();
+    assert_eq!(receipt.sha256, format!("{:x}", Sha256::digest(&bytes)));
+    assert_eq!(receipt.size, bytes.len() as u64);
+    let header_size = HEADER_BYTES as usize;
+    let manifest_size = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let data_start = header_size + manifest_size;
+    let manifest = serde_json::from_slice::<Manifest>(&bytes[header_size..data_start]).unwrap();
+    let mut changed_file = tempfile::tempfile().unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    changed_file.write_all(&bytes).unwrap();
+    let error = verify_written_archive(
+        &mut changed_file,
+        &bytes[..header_size],
+        &bytes[header_size..data_start],
+        &manifest.entries,
+        receipt.size,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap_err();
+    assert!(error.contains("ハッシュ"));
+}
+
+#[test]
 fn archive_rejects_wrong_paths_and_audio_even_with_recomputed_hashes() {
     let root = tempfile::tempdir().unwrap();
     let s = Storage::open(root.path().into()).unwrap();

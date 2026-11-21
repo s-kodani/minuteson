@@ -15,6 +15,7 @@ const f = window.operationProgressFixture = {
   closeCalls: [], hidden: false, hideFailure: false,
   writeStateFailure: false,
   holdCleanup: false,
+  automaticCleanup: active => publishCleanup(active ? {id:"automatic-cleanup",target:"起動時のモデル整理",startedAtMs:Date.now(),appliedPackage:null} : null),
   finishCleanup: async () => {
     const job = cleanup.snapshot.active;
     cleanup.history = { items: [{ id: `model:${job.id}`, kind: "model", target: job.target, meetingId: null,

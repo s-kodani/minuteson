@@ -56,12 +56,19 @@ void atomic_json(const fs::path& path,const Json& value,bool durable=true){
   const auto elapsed=GetTickCount64()-started;if(elapsed>=250)std::cerr<<"mon_capture_io: file="<<utf8(path.filename().wstring())<<" durable="<<durable<<" elapsedMs="<<elapsed<<std::endl;
 }
 #include "metadata_worker.h"
-Json process_identity(DWORD pid){
-  Handle process(OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid));if(!process.value||WaitForSingleObject(process.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("application is no longer available");
-  FILETIME created,ended,kernel,user;if(!GetProcessTimes(process.value,&created,&ended,&kernel,&user))throw std::runtime_error("application creation time unavailable");
-  std::wstring path(32768,0);DWORD n=DWORD(path.size());if(!QueryFullProcessImageNameW(process.value,0,path.data(),&n))throw std::runtime_error("application identity unavailable");path.resize(n);
-  if(WaitForSingleObject(process.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("application is no longer available");
+bool process_is_running(HANDLE process){
+  return process&&process!=INVALID_HANDLE_VALUE&&WaitForSingleObject(process,0)==WAIT_TIMEOUT;
+}
+Json process_identity(DWORD pid,HANDLE process){
+  if(!process_is_running(process))throw std::runtime_error("application is no longer available");
+  FILETIME created,ended,kernel,user;if(!GetProcessTimes(process,&created,&ended,&kernel,&user))throw std::runtime_error("application creation time unavailable");
+  std::wstring path(32768,0);DWORD n=DWORD(path.size());if(!QueryFullProcessImageNameW(process,0,path.data(),&n))throw std::runtime_error("application identity unavailable");path.resize(n);
+  if(!process_is_running(process))throw std::runtime_error("application is no longer available");
   return Json{{"pid",pid},{"bundleIdentifier",utf8(path)},{"launchTimeUs",(ticks(created)-EPOCH)/10}};
+}
+Json process_identity(DWORD pid){
+  Handle process(OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid));
+  return process_identity(pid,process.value);
 }
 DWORD capture_parent_pid(){
   Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0));
