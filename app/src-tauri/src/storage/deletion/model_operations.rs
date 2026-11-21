@@ -262,15 +262,21 @@ pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String>
             let (startup_reason, other_pending) = {
                 let db = crate::operation_observation::lock(&storage.connection)?;
                 let reason = super::super::startup::reason(&db, &operation_id)?.filter(|reason| {
-                    matches!(reason.as_str(), "model_completed_scope_reappeared"
-                        | "model_completed_receipt_invalid" | "model_completed_scope_uninspectable")
+                    matches!(
+                        reason.as_str(),
+                        "model_completed_scope_reappeared"
+                            | "model_completed_receipt_invalid"
+                            | "model_completed_scope_uninspectable"
+                    )
                 });
                 let other = super::super::fence::other_pending(&db, Some(&operation_id))?;
                 (reason, other)
             };
             let blocker = pending_review_blocker(storage)
                 .or(other_pending.then_some("別の未完了保守操作を先に確認してください"));
-            let target = model_storage.clone().and_then(|()| load(storage, root, &operation_id));
+            let target = model_storage
+                .clone()
+                .and_then(|()| load(storage, root, &operation_id));
             Ok(match target {
                 Ok(target) => Item {
                     operation_id,

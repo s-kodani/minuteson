@@ -26,7 +26,11 @@ fn legacy_restore_journals_roll_back_or_finish_based_on_published_bootstrap() {
             } else {
                 &journal.meeting.path
             };
-            let root = journal.roots.iter().position(|root| root.path == parent).unwrap();
+            let root = journal
+                .roots
+                .iter()
+                .position(|root| root.path == parent)
+                .unwrap();
             let reserved = journal.workspace(root).join(format!("new-{name}"));
             create_directory(&reserved).unwrap();
             std::fs::write(reserved.join("reconstructed"), name.as_bytes()).unwrap();
@@ -46,9 +50,18 @@ fn legacy_restore_journals_roll_back_or_finish_based_on_published_bootstrap() {
         assert!(!f.root.join(PENDING).exists());
 
         if published {
-            assert_eq!(std::fs::read(f.root.join("meetings/reconstructed")).unwrap(), b"meetings");
-            assert_eq!(std::fs::read(f.root.join("voices/reconstructed")).unwrap(), b"voices");
-            assert_eq!(std::fs::read(f.data.join("models/reconstructed")).unwrap(), b"models");
+            assert_eq!(
+                std::fs::read(f.root.join("meetings/reconstructed")).unwrap(),
+                b"meetings"
+            );
+            assert_eq!(
+                std::fs::read(f.root.join("voices/reconstructed")).unwrap(),
+                b"voices"
+            );
+            assert_eq!(
+                std::fs::read(f.data.join("models/reconstructed")).unwrap(),
+                b"models"
+            );
             assert!(!f.root.join("meetings/old").exists());
             assert!(!f.root.join("voices/original").exists());
             assert!(!f.data.join("models/large").exists());
@@ -57,13 +70,16 @@ fn legacy_restore_journals_roll_back_or_finish_based_on_published_bootstrap() {
             assert!(f.root.join("meetings/old/audio.flac").is_file());
             assert!(f.root.join("voices/original").is_file());
             assert!(f.data.join("models/large/model.bin").is_file());
-            for fresh in journal.fresh.iter().filter(|fresh| {
-                ["meetings", "voices", "models"].contains(&fresh.name.as_str())
-            }) {
+            for fresh in journal
+                .fresh
+                .iter()
+                .filter(|fresh| ["meetings", "voices", "models"].contains(&fresh.name.as_str()))
+            {
                 assert!(!journal.fresh_path(fresh).join("reconstructed").exists());
                 let workspace = journal.fresh_workspace(fresh).unwrap();
                 let retained = workspace
-                    .parent().unwrap()
+                    .parent()
+                    .unwrap()
                     .with_file_name(format!("MON-reset-retained-{id}"));
                 assert!(retained
                     .join(workspace.file_name().unwrap())

@@ -2112,7 +2112,8 @@ async fn finish_main_close(
         }
         #[cfg(any(target_os = "macos", windows))]
         if salvaging {
-            window.state::<bootstrap::Bootstrap>()
+            window
+                .state::<bootstrap::Bootstrap>()
                 .require_ready_salvage(&window.state::<Storage>())?;
         }
         #[cfg(not(target_os = "macos"))]

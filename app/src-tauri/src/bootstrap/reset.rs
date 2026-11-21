@@ -54,7 +54,10 @@ impl RootLease {
                 Err(e) => return Err(e),
             }
         }
-        let file = open_file(&root.join(ROOT_LOCK), if create { libc::O_RDWR } else { libc::O_RDONLY })?;
+        let file = open_file(
+            &root.join(ROOT_LOCK),
+            if create { libc::O_RDWR } else { libc::O_RDONLY },
+        )?;
         let m = crate::native_fs::metadata(&file).map_err(err)?;
         if !regular(&m, true) {
             return Err("保存先の排他ファイルが不正です".into());
@@ -259,8 +262,17 @@ pub(crate) fn inspect(bootstrap: &Bootstrap, data: &Path) -> Result<Selection, S
         data: Location::new(&data.canonicalize().map_err(err)?)?,
         meeting: Location::new(bootstrap.root())?,
         bootstrap: state.loaded.as_ref().map(|l| l.bytes_hash.clone()),
-        model_parent: state.loaded.as_ref().and_then(|l| l.record.salvage.as_ref())
-            .map(|s| Location::new(s.models_root().parent().ok_or("モデル保存先の親がありません")?))
+        model_parent: state
+            .loaded
+            .as_ref()
+            .and_then(|l| l.record.salvage.as_ref())
+            .map(|s| {
+                Location::new(
+                    s.models_root()
+                        .parent()
+                        .ok_or("モデル保存先の親がありません")?,
+                )
+            })
             .transpose()?,
         database: if exists(&bootstrap.root().join(DB))? {
             Some(Identity::read(&meta(&bootstrap.root().join(DB))?)?)
@@ -521,7 +533,9 @@ impl Journal {
                 || !(root.path == self.meeting.path && meeting_name(&e.name)
                     || root.path == self.model_parent() && e.name == "models"
                     || root.path == self.data.path && e.name != "models" && data_name(&e.name)
-                    || root.path == self.config.path && self.model_parent.is_none() && config_name(&e.name))
+                    || root.path == self.config.path
+                        && self.model_parent.is_none()
+                        && config_name(&e.name))
                 || !names.insert((e.root, e.name.clone()))
             {
                 return Err("初期化記録の対象名が不正です".into());
@@ -558,13 +572,18 @@ impl Journal {
             if doc.record.current.path != self.meeting.path
                 || doc.record.current.directory != self.meeting.identity
                 || doc.record.salvage.as_ref().map(|s| s.models_root())
-                    != self.model_parent.as_ref().map(|p| p.path.join("models")).as_deref()
+                    != self
+                        .model_parent
+                        .as_ref()
+                        .map(|p| p.path.join("models"))
+                        .as_deref()
                 || hash(&serde_json::to_vec(&doc.record).map_err(err)?) != doc.sha256
             {
                 return Err("初期化の旧保存先情報が一致しません".into());
             }
-        } else if self.model_parent.is_some() || (self.meeting.path != self.data.path
-            && self.meeting.path != self.data.path.join("data"))
+        } else if self.model_parent.is_some()
+            || (self.meeting.path != self.data.path
+                && self.meeting.path != self.data.path.join("data"))
         {
             return Err("未登録の初期化対象を回復しません".into());
         }
@@ -1014,9 +1033,12 @@ pub(crate) fn execute(
             rename(&reserved, &s.root().join(name), false)?;
             checkpoint("fresh_installed")?;
         }
-        let storage =
-            Storage::open_for_reset(s.root().into(), s.model_parent().join("models"), lease.clone())
-                .map_err(err)?;
+        let storage = Storage::open_for_reset(
+            s.root().into(),
+            s.model_parent().join("models"),
+            lease.clone(),
+        )
+        .map_err(err)?;
         storage.validate_startup_reset()?;
         let current = Root::bound(&storage)?;
         let revision = b
@@ -1031,7 +1053,12 @@ pub(crate) fn execute(
                     .checked_add(1)
                     .ok_or("起動設定の版番号上限です")
             })?;
-        let mut salvage = b.state.lock().map_err(err)?.loaded.as_ref()
+        let mut salvage = b
+            .state
+            .lock()
+            .map_err(err)?
+            .loaded
+            .as_ref()
             .and_then(|loaded| loaded.record.salvage.clone());
         if let Some(binding) = salvage.as_mut() {
             let models = binding.models_root();
@@ -1039,7 +1066,10 @@ pub(crate) fn execute(
                 let fresh = Fresh {
                     name: "models".into(),
                     identity: {
-                        let parent = j.roots.iter().position(|root| root.path == s.model_parent())
+                        let parent = j
+                            .roots
+                            .iter()
+                            .position(|root| root.path == s.model_parent())
                             .ok_or("モデル保存先の所有がありません")?;
                         let reserved = j.workspace(parent).join("new-models");
                         create_directory(&reserved)?;

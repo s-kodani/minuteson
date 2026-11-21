@@ -145,7 +145,11 @@ pub(super) fn meeting(db: &Connection, id: &str) -> Result<Option<MeetingRecord>
         }).transpose()
 }
 
-fn validate_deleted_audio(db: &Connection, meeting: &str, record: &MeetingRecord) -> Result<(), String> {
+fn validate_deleted_audio(
+    db: &Connection,
+    meeting: &str,
+    record: &MeetingRecord,
+) -> Result<(), String> {
     if !record.audio_deleted {
         return Ok(());
     }

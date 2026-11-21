@@ -333,11 +333,7 @@ impl<F: Fn() -> bool> Inspection<'_, F> {
         }))
     }
 
-    fn audio_was_deleted(
-        &self,
-        db: &Connection,
-        meeting: &str,
-    ) -> Result<bool, String> {
+    fn audio_was_deleted(&self, db: &Connection, meeting: &str) -> Result<bool, String> {
         if let Some(record) = salvage_schema::meeting(db, meeting)? {
             if let Some(reason) = record.audio_unavailable {
                 return Err(reason);
@@ -436,7 +432,8 @@ impl<F: Fn() -> bool> Inspection<'_, F> {
                         })
                         .transpose()
                 });
-                let body_only = "保存済みの文字起こしを引き継ぎます。編集途中の下書きは復元できません";
+                let body_only =
+                    "保存済みの文字起こしを引き継ぎます。編集途中の下書きは復元できません";
                 let reason = match draft {
                     Ok(None) => None,
                     Err(_) => Some(body_only),
@@ -682,10 +679,17 @@ impl<F: Fn() -> bool> Inspection<'_, F> {
             .find(|m| Some(m.meeting.id.as_str()) == original.as_deref());
         let note = original
             .as_ref()
-            .map(|_| owner.map_or_else(
-                || "元の会議との関連は引き継げません".into(),
-                |meeting| format!("元の会議「{}」との関連を引き継ぎます", meeting.meeting.title),
-            ))
+            .map(|_| {
+                owner.map_or_else(
+                    || "元の会議との関連は引き継げません".into(),
+                    |meeting| {
+                        format!(
+                            "元の会議「{}」との関連を引き継ぎます",
+                            meeting.meeting.title
+                        )
+                    },
+                )
+            })
             .into_iter()
             .collect();
         Ok((

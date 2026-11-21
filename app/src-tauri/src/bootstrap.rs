@@ -218,11 +218,14 @@ impl Root {
         if !regular(&m, false) {
             return Err("会議DBは単独の通常ファイルである必要があります".into());
         }
-        Ok((Self {
-            path: path.into(),
-            directory: Identity::read(&d)?,
-            database: Identity::read(&m)?,
-        }, m.len()))
+        Ok((
+            Self {
+                path: path.into(),
+                directory: Identity::read(&d)?,
+                database: Identity::read(&m)?,
+            },
+            m.len(),
+        ))
     }
     // Only before SQLite opens this database (or for an inactive copy).
     // Closing ANY descriptor for a live database drops this process's POSIX
@@ -326,7 +329,10 @@ struct Record {
 impl Record {
     fn pending_startup_review(&self) -> bool {
         self.pending_move.is_some()
-            || self.recovery.as_ref().is_some_and(recovery::Recovery::needs_review)
+            || self
+                .recovery
+                .as_ref()
+                .is_some_and(recovery::Recovery::needs_review)
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -503,9 +509,11 @@ impl Bootstrap {
             return Err(result.with_salvage_issue("登録済みの会議保存先を確認できません".into()));
         }
         if loaded.is_some() != (stamp == STAMP) {
-            return Err(result.with_salvage_issue(StartupStorageError::Configuration(
-                "起動設定と初期化記録が一致しません。既定の空DBへ切り替えません".into(),
-            )));
+            return Err(
+                result.with_salvage_issue(StartupStorageError::Configuration(
+                    "起動設定と初期化記録が一致しません。既定の空DBへ切り替えません".into(),
+                )),
+            );
         }
         result
             .state
@@ -614,7 +622,10 @@ impl Bootstrap {
         }
     }
 
-    fn inspect_startup_root(path: &Path, loaded: Option<&Loaded>) -> Result<Root, StartupStorageError> {
+    fn inspect_startup_root(
+        path: &Path,
+        loaded: Option<&Loaded>,
+    ) -> Result<Root, StartupStorageError> {
         Root::inspect_for_startup(path).map_err(|error| {
             if !error.salvage_available() {
                 return error;

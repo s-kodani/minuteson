@@ -321,9 +321,13 @@ fn decode_saved_draft(
         return Err("保存済み下書きの内容が変化しています".into());
     }
     if schema_version != i64::from(crate::current_formats::TRANSCRIPT_DRAFT) {
-        let header: serde_json::Value = serde_json::from_str(&serialized)
-            .map_err(|_| "保存済み下書きの形式が不正です")?;
-        if header.get("schema_version").and_then(serde_json::Value::as_i64) != Some(schema_version) {
+        let header: serde_json::Value =
+            serde_json::from_str(&serialized).map_err(|_| "保存済み下書きの形式が不正です")?;
+        if header
+            .get("schema_version")
+            .and_then(serde_json::Value::as_i64)
+            != Some(schema_version)
+        {
             return Err("保存済み下書きの形式版が一致しません".into());
         }
         // Matching version evidence can identify an intact draft from a newer reader.
@@ -911,7 +915,9 @@ mod tests {
             let db = storage.connection.lock().unwrap();
             assert_eq!(stored_draft_count(&db, &draft.id), 0);
         }
-        let draft = storage.create_transcript_draft(&meeting.id, "analysis").unwrap();
+        let draft = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
         {
             let db = storage.connection.lock().unwrap();
             let serialized = r#"{"schema_version":9,"edits":[]}"#;
@@ -921,8 +927,14 @@ mod tests {
             )
             .unwrap();
         }
-        assert!(storage.load_transcript_draft(&meeting.id).unwrap_err().contains("未対応"));
-        assert_eq!(stored_draft_count(&storage.connection.lock().unwrap(), &draft.id), 1);
+        assert!(storage
+            .load_transcript_draft(&meeting.id)
+            .unwrap_err()
+            .contains("未対応"));
+        assert_eq!(
+            stored_draft_count(&storage.connection.lock().unwrap(), &draft.id),
+            1
+        );
     }
 
     #[test]
@@ -931,7 +943,9 @@ mod tests {
         let storage = Storage::open(temp.path().to_owned()).unwrap();
         let meeting = storage.create_meeting("編集").unwrap();
         committed_analysis_with_utterance(&storage, &meeting.id);
-        let draft = storage.create_transcript_draft(&meeting.id, "analysis").unwrap();
+        let draft = storage
+            .create_transcript_draft(&meeting.id, "analysis")
+            .unwrap();
         assign_invalid_reference(&storage, &draft);
         {
             let db = storage.connection.lock().unwrap();

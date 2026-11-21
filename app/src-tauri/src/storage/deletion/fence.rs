@@ -62,7 +62,8 @@ fn startup_scopes(db: &Connection) -> Result<StartupScopes, String> {
         .filter(|id| canonical_meeting(id));
         let historical = matches!(state.as_str(), "completed" | "recovered");
         if !historical
-            && claimed.zip(meeting.as_deref().filter(|id| canonical_meeting(id)))
+            && claimed
+                .zip(meeting.as_deref().filter(|id| canonical_meeting(id)))
                 .is_some_and(|(manifest, column)| manifest != column)
         {
             scopes.conflicting_shared_target = true;

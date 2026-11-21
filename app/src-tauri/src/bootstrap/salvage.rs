@@ -49,7 +49,9 @@ impl SelectionRecord {
 
     pub(crate) fn verify_models(&self) -> Result<(), String> {
         if !self.models_identity.matches(&directory(&self.models)?) {
-            return Err("復元したモデルのフォルダーが変わりました。モデルの保存先を確認してください".into());
+            return Err(
+                "復元したモデルのフォルダーが変わりました。モデルの保存先を確認してください".into(),
+            );
         }
         Ok(())
     }
@@ -231,7 +233,8 @@ fn copy_controls(
         .enumerate()
         .filter_map(|(index, file)| (index != 2).then_some(file.as_ref()).flatten())
         .try_fold(0u64, |n, file| {
-            n.checked_add(file.len).ok_or("元の会議データが大きすぎてコピーできません")
+            n.checked_add(file.len)
+                .ok_or("元の会議データが大きすぎてコピーできません")
         })?;
     if movement::capacity(&scratch.path)? < required {
         return Err("元の会議データをコピーする空き容量が不足しています。空き容量の多い復元先を選んでください".into());
@@ -256,7 +259,9 @@ fn copy_controls(
             )
         };
         if observed(&input)? != *expected {
-            return Err("コピーを始める前に元の会議データが変わりました。復元元を確認してください".into());
+            return Err(
+                "コピーを始める前に元の会議データが変わりました。復元元を確認してください".into(),
+            );
         }
         scratch.verify()?;
         let mut output = reset::open_file(
@@ -363,11 +368,17 @@ pub(super) fn retain_invalid_journal(b: &Bootstrap, observed: &Observed) -> Resu
     if journal_observation(b)? != *observed {
         return Err("復元操作記録の実体が変わりました。記録を保持します".into());
     }
-    let retained = b.config.join(format!(".retained-salvage-operation-{}.json", Uuid::new_v4()));
+    let retained = b.config.join(format!(
+        ".retained-salvage-operation-{}.json",
+        Uuid::new_v4()
+    ));
     reset::rename(&b.config.join(JOURNAL), &retained, false)?;
     crate::internal_logs::report_error(
         "salvage",
-        &format!("再開できない復元操作記録を保持しました: {}", retained.display()),
+        &format!(
+            "再開できない復元操作記録を保持しました: {}",
+            retained.display()
+        ),
     );
     Ok(())
 }
@@ -473,7 +484,10 @@ impl Bootstrap {
 
     fn request_salvage_locked(&self, state: &State) -> Result<(), String> {
         if read_journal(self)?.is_some() {
-            return Err("前回のデータ復元が残っています。アプリを起動し直して復元画面を開いてください".into());
+            return Err(
+                "前回のデータ復元が残っています。アプリを起動し直して復元画面を開いてください"
+                    .into(),
+            );
         }
         save_journal(self, &initial(self, state.loaded.as_ref())?, None)
     }
@@ -1283,7 +1297,9 @@ mod tests {
         assert_eq!(std::fs::read(database).unwrap(), checked_database);
         let storage = b.open_storage().unwrap();
         assert_eq!(storage.list_meetings().unwrap()[0].title, "読み取れる会議");
-        assert!(storage.create_meeting("モデル未接続でも保存できる会議").is_ok());
+        assert!(storage
+            .create_meeting("モデル未接続でも保存できる会議")
+            .is_ok());
         assert!(storage.native_models_root().is_err());
         assert!(storage.list_model_placements().is_err());
         let deletion = storage.list_model_deletion_items().unwrap();
@@ -1299,7 +1315,10 @@ mod tests {
         let pending = crate::startup_attention::admit_storage(&config, &app_data)
             .err()
             .expect("valid request resumes restoration");
-        assert_eq!(serde_json::to_value(pending).unwrap()["stage"], "partial_salvage");
+        assert_eq!(
+            serde_json::to_value(pending).unwrap()["stage"],
+            "partial_salvage"
+        );
 
         let corrupt = b"{ truncated";
         let journal = config.join(JOURNAL);
@@ -1308,13 +1327,23 @@ mod tests {
             let (storage, _bootstrap) =
                 crate::startup_attention::admit_storage(&config, &app_data).unwrap();
             assert_eq!(storage.root(), source);
-            assert!(storage.list_meetings().unwrap().iter().any(|m| m.title == "読み取れる会議"));
+            assert!(storage
+                .list_meetings()
+                .unwrap()
+                .iter()
+                .any(|m| m.title == "読み取れる会議"));
             assert!(storage.create_meeting("通常起動").is_ok());
             assert!(!journal.exists());
         }
-        let retained = std::fs::read_dir(&config).unwrap()
+        let retained = std::fs::read_dir(&config)
+            .unwrap()
             .map(|entry| entry.unwrap().path())
-            .find(|file| file.file_name().is_some_and(|name| name.to_string_lossy().starts_with(".retained-salvage-operation-")))
+            .find(|file| {
+                file.file_name().is_some_and(|name| {
+                    name.to_string_lossy()
+                        .starts_with(".retained-salvage-operation-")
+                })
+            })
             .unwrap();
         assert_eq!(std::fs::read(retained).unwrap(), corrupt);
         let session = Session::open(&config, &app_data).unwrap();
@@ -1330,11 +1359,13 @@ mod tests {
         let corrupt = b"{ truncated";
         std::fs::write(&journal, corrupt).unwrap();
         let db = rusqlite::Connection::open(source.join(CONTROL[0])).unwrap();
-        db.execute("UPDATE schema_migrations SET checksum='unrecognized'", []).unwrap();
+        db.execute("UPDATE schema_migrations SET checksum='unrecognized'", [])
+            .unwrap();
         drop(db);
 
         let admission = crate::startup_attention::admit_storage(&config, &app_data);
-        let failure = serde_json::to_value(admission.err().expect("the schema is unsupported")).unwrap();
+        let failure =
+            serde_json::to_value(admission.err().expect("the schema is unsupported")).unwrap();
         assert_eq!(failure["stage"], "storage_admission");
         assert_eq!(failure["salvageAvailable"], false);
         assert_eq!(std::fs::read(journal).unwrap(), corrupt);
@@ -1349,10 +1380,14 @@ mod tests {
         reset::create_directory(&parent).unwrap();
         let mut session = Session::open(&config, &app_data).unwrap();
         session.select(parent, false).unwrap();
-        let workspace = session.journal.parent.as_ref().unwrap().path
-            .join(format!("MinutesOn-salvage-{}", session.journal.operation_id));
+        let workspace = session.journal.parent.as_ref().unwrap().path.join(format!(
+            "MinutesOn-salvage-{}",
+            session.journal.operation_id
+        ));
         let selected_workspace = OwnedDirectory::create(workspace.clone()).unwrap();
-        session.update(|journal| journal.workspace = Some(selected_workspace)).unwrap();
+        session
+            .update(|journal| journal.workspace = Some(selected_workspace))
+            .unwrap();
         drop(session);
 
         let original = workspace.with_file_name("retained-workspace");

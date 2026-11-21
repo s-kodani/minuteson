@@ -30,10 +30,10 @@ pub(crate) mod operations;
 pub(crate) mod relocation;
 #[cfg(any(unix, windows))]
 mod removal;
-#[cfg(any(target_os = "macos", windows))]
-pub(crate) mod salvage_source;
 #[cfg(any(unix, windows))]
 mod renewal;
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) mod salvage_source;
 #[cfg(any(unix, windows))]
 pub(in crate::storage) mod startup;
 #[cfg(any(unix, windows))]

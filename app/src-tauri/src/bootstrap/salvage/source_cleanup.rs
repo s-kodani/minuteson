@@ -88,7 +88,9 @@ impl Manifest {
             if parent.observe(leaf)?.as_ref() != Some(&target.proof)
                 || parent.observe(&self.reserved(index))?.is_some()
             {
-                return Err("元の会議データが確認したときと異なるため、削除を始められませんでした".into());
+                return Err(
+                    "元の会議データが確認したときと異なるため、削除を始められませんでした".into(),
+                );
             }
         }
         Ok(())
@@ -114,12 +116,15 @@ impl Manifest {
 
     fn verify_model_boundary(&self, selection: &SelectionRecord) -> Result<(), String> {
         if overlaps(&self.source.path, &selection.models) {
-            return Err("元の保存先と現在のモデルの保存先が重なっているため、削除できません".into());
+            return Err(
+                "元の保存先と現在のモデルの保存先が重なっているため、削除できません".into(),
+            );
         }
         self.folder.verify()?;
         match native_fs::symlink_metadata(&selection.models) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound
-                && selection.models.parent() == Some(self.folder.path.as_path()) =>
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && selection.models.parent() == Some(self.folder.path.as_path()) =>
             {
                 // A missing sibling of the current meeting store cannot hold
                 // model files. Keep the parent bound while checking absence.
@@ -242,14 +247,17 @@ impl Cursor {
         if value.manifest != digest
             || value.next > manifest.targets.len()
             || (value.next == manifest.targets.len() && value.boundary.is_some())
-            || value.retained_audio_files as usize > value.next.saturating_sub(manifest.database_files)
+            || value.retained_audio_files as usize
+                > value.next.saturating_sub(manifest.database_files)
         {
             return Err("元データの削除進捗が対象と一致しません".into());
         }
         if let Some(Boundary::Staged(ref proof)) = value.boundary {
             proof.validate(false)?;
             if !proof.matches_after_rename(&manifest.targets[value.next].proof) {
-                return Err("削除途中のファイルが確認したときと異なるため、削除を続けられません".into());
+                return Err(
+                    "削除途中のファイルが確認したときと異なるため、削除を続けられません".into(),
+                );
             }
         }
         Ok(Some(value))
@@ -413,7 +421,9 @@ impl Bootstrap {
             check_cleanup_cancel(cancelled)?;
             guard()?;
             manifest.verify_controls(cursor.next, cursor.boundary.is_some())?;
-            if cursor.next >= manifest.database_files && !can_remove_audio(&manifest, &cursor, target) {
+            if cursor.next >= manifest.database_files
+                && !can_remove_audio(&manifest, &cursor, target)
+            {
                 cursor.retain_audio(&manifest)?;
             } else {
                 remove_target(&manifest, &mut cursor, target)?;
@@ -427,7 +437,10 @@ impl Bootstrap {
 fn can_remove_audio(manifest: &Manifest, cursor: &Cursor, target: &Target) -> bool {
     let observe = || {
         let (parent, leaf) = target.parent(&manifest.source.path)?;
-        Ok::<_, String>((parent.observe(leaf)?, parent.observe(&manifest.reserved(cursor.next))?))
+        Ok::<_, String>((
+            parent.observe(leaf)?,
+            parent.observe(&manifest.reserved(cursor.next))?,
+        ))
     };
     let Ok((original, reserved)) = observe() else {
         return false;
@@ -474,9 +487,9 @@ fn remove_target(manifest: &Manifest, cursor: &mut Cursor, target: &Target) -> R
                     // when the original name is still vacant.
                     let _ = parent.reserve(&reserved, leaf);
                 }
-                return Err(other
-                    .err()
-                    .unwrap_or_else(|| "削除途中のファイルが変わったため、削除を止めました".into()));
+                return Err(other.err().unwrap_or_else(|| {
+                    "削除途中のファイルが変わったため、削除を止めました".into()
+                }));
             }
         };
         cursor.transition(manifest, |next| {
@@ -681,7 +694,10 @@ mod tests {
             let status = b.delete_salvage_source(&id, &|| false).unwrap();
             assert_eq!(status.state, CleanupState::Completed);
             assert_eq!(status.retained_audio_files, Some(1));
-            assert_eq!(std::fs::read(changed).unwrap(), b"changed since restoration");
+            assert_eq!(
+                std::fs::read(changed).unwrap(),
+                b"changed since restoration"
+            );
             assert!(!unchanged.exists());
             assert!(CONTROL.iter().all(|name| !source.join(name).exists()));
             assert_eq!(b.delete_salvage_source(&id, &|| false).unwrap(), status);

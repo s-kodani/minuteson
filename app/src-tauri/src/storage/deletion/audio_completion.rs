@@ -203,7 +203,9 @@ fn verify_completed_for_meeting(
         super::super::super::cancel(check)?;
         if crate::storage::deletion::audio::restored::hinted(db, id)? {
             if let Some(anchor) = anchor {
-                if crate::storage::deletion::audio::restored::backup_meeting(db, anchor, id, check)? != meeting {
+                if crate::storage::deletion::audio::restored::backup_meeting(db, anchor, id, check)?
+                    != meeting
+                {
                     return Err("復元音声履歴の会議が一致しません".into());
                 }
             } else {
@@ -218,7 +220,9 @@ fn verify_completed_for_meeting(
         verify_available_state(db, &r, check)?;
         if let Some(anchor) = anchor {
             if !absent(db, anchor, &r, check)? {
-                return Err("削除済み音声が再出現しています。復元時に削除済みとして扱いません".into());
+                return Err(
+                    "削除済み音声が再出現しています。復元時に削除済みとして扱いません".into(),
+                );
             }
         }
     }

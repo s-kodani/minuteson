@@ -100,7 +100,10 @@ pub(in crate::storage) fn is_audio_media(media: &str) -> bool {
 // validates typed completion evidence instead of trusting mutable ready flags.
 pub(in crate::storage) fn require_source(db: &Connection, meeting: &str) -> Result<(), String> {
     let recovered = super::super::salvage_schema::meeting(db, meeting)?;
-    if let Some(reason) = recovered.as_ref().and_then(|record| record.audio_unavailable.as_ref()) {
+    if let Some(reason) = recovered
+        .as_ref()
+        .and_then(|record| record.audio_unavailable.as_ref())
+    {
         return Err(reason.clone());
     }
     if super::fence::audio_pending(db, meeting)? {
@@ -115,7 +118,9 @@ pub(in crate::storage) fn require_source(db: &Connection, meeting: &str) -> Resu
 }
 
 pub(in crate::storage) fn source_deleted(db: &Connection, meeting: &str) -> Result<bool, String> {
-    if super::super::salvage_schema::meeting(db, meeting)?.is_some_and(|record| record.audio_deleted) {
+    if super::super::salvage_schema::meeting(db, meeting)?
+        .is_some_and(|record| record.audio_deleted)
+    {
         return Ok(true);
     }
     intent::removal::completion::deleted(db, meeting)

@@ -801,7 +801,10 @@ impl DataController {
         operation_id: &str,
     ) -> Result<mon_contracts::SalvageSourceCleanup, String> {
         let admission = work::Admission::acquire(app)?;
-        if !app.state::<Storage>().has_current_salvage_result(operation_id)? {
+        if !app
+            .state::<Storage>()
+            .has_current_salvage_result(operation_id)?
+        {
             return Err("現在の保存先に対応する復元結果を確認できません".into());
         }
         app.state::<crate::bootstrap::Bootstrap>()
@@ -985,7 +988,9 @@ impl DataController {
             work::ModelTarget::Pending(id) => Some(id.clone()),
             _ => None,
         };
-        let root = app.state::<Storage>().native_models_root()
+        let root = app
+            .state::<Storage>()
+            .native_models_root()
             .map_err(|e| AppError::not_started(DeletionKind::Model, e, operation.clone()))?
             .to_owned();
         let (snapshot, cancel, previous) = app
@@ -1228,9 +1233,15 @@ impl DataController {
         Ok(s.selection.take())
     }
 
-    pub(crate) fn seal_salvage_exit(app: &AppHandle, expected: &Option<String>) -> Result<(), String> {
+    pub(crate) fn seal_salvage_exit(
+        app: &AppHandle,
+        expected: &Option<String>,
+    ) -> Result<(), String> {
         let controller = app.state::<Self>();
-        let mut state = controller.state.lock().map_err(|_| "データ操作ロックを取得できません")?;
+        let mut state = controller
+            .state
+            .lock()
+            .map_err(|_| "データ操作ロックを取得できません")?;
         crate::application_close::require_target(expected, &state.snapshot.token)?;
         if state.snapshot.busy {
             return Err("データ処理が完了してからデータ復元を開始してください".into());

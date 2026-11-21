@@ -191,7 +191,9 @@ impl Storage {
         #[cfg(any(target_os = "macos", windows))]
         if let Some(binding) = &self.restored_models {
             binding.verify_models().map_err(|error| {
-                format!("復元したモデル保存先を確認できません。モデル保存先を戻してください: {error}")
+                format!(
+                    "復元したモデル保存先を確認できません。モデル保存先を戻してください: {error}"
+                )
             })?;
         }
         Ok(())
@@ -616,7 +618,9 @@ impl Storage {
         let inspect_model_files = Some(native_models_root.as_path());
         #[cfg(any(target_os = "macos", windows))]
         let inspect_model_files = inspect_model_files.filter(|_| {
-            restored_models.as_ref().is_none_or(|binding| binding.verify_models().is_ok())
+            restored_models
+                .as_ref()
+                .is_none_or(|binding| binding.verify_models().is_ok())
         });
         #[cfg(any(unix, windows))]
         if let Err(error) =

@@ -293,8 +293,8 @@ fn validate_edit_snapshot(contents: &str) -> Result<(), String> {
     if contents.len() > 64 * 1024 * 1024 {
         return Err("入力の量が多すぎるため、別のファイルに保存できませんでした".into());
     }
-    let snapshot: serde_json::Value =
-        serde_json::from_str(contents).map_err(|_| "ファイルに保存する入力を確認できませんでした")?;
+    let snapshot: serde_json::Value = serde_json::from_str(contents)
+        .map_err(|_| "ファイルに保存する入力を確認できませんでした")?;
     if snapshot["schemaVersion"].as_u64() != Some(1)
         || snapshot["edits"].as_array().is_none_or(Vec::is_empty)
     {
@@ -438,7 +438,10 @@ pub(crate) async fn get_salvage_source_cleanup(
         {
             let app = window.app_handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
-                if !app.state::<crate::storage::Storage>().has_current_salvage_result(&operation_id)? {
+                if !app
+                    .state::<crate::storage::Storage>()
+                    .has_current_salvage_result(&operation_id)?
+                {
                     return Ok(None);
                 }
                 app.state::<crate::bootstrap::Bootstrap>()
@@ -484,7 +487,8 @@ pub(crate) async fn delete_salvage_source(
         }
     }
     .await;
-    result.map_err(|message| mon_contracts::AppError::from_command("delete_salvage_source", message))
+    result
+        .map_err(|message| mon_contracts::AppError::from_command("delete_salvage_source", message))
 }
 
 enum Action {

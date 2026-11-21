@@ -88,7 +88,9 @@ fn record(db: &Connection) -> Result<(i64, String), Box<dyn Error>> {
             }
         })?;
     let mut rows = query.query([])?;
-    let row = rows.next()?.ok_or_else(|| UnsupportedSchema(unsupported.into()))?;
+    let row = rows
+        .next()?
+        .ok_or_else(|| UnsupportedSchema(unsupported.into()))?;
     let record = match (row.get(0), row.get(1)) {
         (Ok(version), Ok(checksum)) => (version, checksum),
         (Err(error), _) | (_, Err(error)) => {
@@ -133,12 +135,19 @@ fn verify_previous(db: &Connection) -> Result<Layout, Box<dyn Error>> {
     let layout = match checksum.as_str() {
         PREVIOUS_CHECKSUM if version == PREVIOUS_VERSION as i64 => Layout::Lf,
         PREVIOUS_CRLF_CHECKSUM if version == PREVIOUS_VERSION as i64 => Layout::Crlf,
-        _ => return Err(UnsupportedSchema("対応するschema39の記録・チェックサムではありません".into()).into()),
+        _ => {
+            return Err(UnsupportedSchema(
+                "対応するschema39の記録・チェックサムではありません".into(),
+            )
+            .into())
+        }
     };
     let expected = Connection::open_in_memory()?;
     expected.execute_batch(&previous_sql_for(layout)?)?;
     if objects(db)? != objects(&expected)? {
-        return Err(UnsupportedSchema("schema39の実際のSQL定義が正規の定義と一致しません".into()).into());
+        return Err(
+            UnsupportedSchema("schema39の実際のSQL定義が正規の定義と一致しません".into()).into(),
+        );
     }
     Ok(layout)
 }

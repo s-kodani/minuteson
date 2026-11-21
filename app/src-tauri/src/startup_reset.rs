@@ -419,11 +419,17 @@ pub(crate) fn start_startup_reset(
     })
 }
 #[cfg(windows)]
-pub(crate) async fn pick_directory(window: &WebviewWindow, title: &str) -> Result<Option<PathBuf>, String> {
+pub(crate) async fn pick_directory(
+    window: &WebviewWindow,
+    title: &str,
+) -> Result<Option<PathBuf>, String> {
     crate::platform_dialog::pick_directory(window, title).await
 }
 #[cfg(target_os = "macos")]
-pub(crate) async fn pick_directory(window: &WebviewWindow, title: &str) -> Result<Option<PathBuf>, String> {
+pub(crate) async fn pick_directory(
+    window: &WebviewWindow,
+    title: &str,
+) -> Result<Option<PathBuf>, String> {
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     let title = title.to_owned();
     window
@@ -502,7 +508,10 @@ mod tests {
         assert!(first.is_some());
         assert!(receipt.busy);
         assert_eq!(receipt.message, "初期化を受け付けました");
-        assert!(serde_json::to_value(&receipt).unwrap().get("restore").is_none());
+        assert!(serde_json::to_value(&receipt)
+            .unwrap()
+            .get("restore")
+            .is_none());
         assert!(state.busy());
         // A lost response is recovered by status. Changing the archive bit in a
         // duplicate must not change the already accepted operation.
