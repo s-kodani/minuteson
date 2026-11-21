@@ -494,7 +494,7 @@ function MainWindow() {
             disabled={navigationLocked || modelCleanupActive || !!savingRecording && recordingActive(savingRecording)} />}
           {writeStateUnverified && dataOperation.writeStateError && <p className="workspace-warning meeting-list-notice" role="status">保存先の書き込み可否を再確認しています。会議を閲覧できます。</p>}
           {selectedNotices?.length ? <Callout className="workspace-warning meeting-diagnostic-notice" title={selectedDiagnosticSummary!.label}>
-            <ul>{[...new Set(selectedNotices.map(item => meetingDiagnosticPresentation(item, { documentEditingBlocked: selectedWriteLocked }).description))].map(message => <li key={message}>{message}</li>)}</ul>
+            {[...new Set(selectedNotices.map(item => meetingDiagnosticPresentation(item, { documentEditingBlocked: selectedWriteLocked }).description))].map(message => <p key={message}>{message}</p>)}
           </Callout> : null}
           {meetings.map(meeting => <ToastNotice key={meeting.id} scope={meeting.id} type="meeting-integrity" level="warning" historyOnly meetingId={meeting.id}
             message={meetingList.byMeeting.has(meeting.id) ? `会議「${meeting.title}」：${meetingDiagnosticSummary(meetingList.byMeeting.get(meeting.id))!.label}。` : ""} />)}

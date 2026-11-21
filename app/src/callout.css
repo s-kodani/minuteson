@@ -4,5 +4,5 @@
 .callout-body { min-width:0; }
 .callout-body > :first-child { margin-block-start:0; }
 .callout-body > :last-child { margin-block-end:0; }
-.callout-body > ul { padding-inline-start:1.5em; }
-.callout-body > ul > li + li { margin-block-start:8px; }
+.callout-body > p { margin-block:0; }
+.callout-body > p + p { margin-block-start:12px; }
