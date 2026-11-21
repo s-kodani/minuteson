@@ -227,12 +227,13 @@ function MainWindow() {
   const baseNavigationLocked=operationNavigationLocked||captureTest.blocked;
   const confirmedWriteBlocked = storageReadOnly || !!dataOperation.deletionListing?.writeBlocked || !!dataOperation.modelDeletionListing?.writeBlocked || !!dataOperation.audioDeletionListing?.writeBlocked;
   const deletionBlocked = confirmedWriteBlocked || writeStateUnverified;
-  const baseWriteLocked = baseNavigationLocked || deletionBlocked || !!dataOperation.snapshot?.restartRequired;
-  const operationWriteLocked=operationNavigationLocked||deletionBlocked||!!dataOperation.snapshot?.restartRequired;
+  const writeProtected = deletionBlocked || !!dataOperation.snapshot?.restartRequired;
+  const baseWriteLocked = baseNavigationLocked || writeProtected;
+  const operationWriteLocked = operationNavigationLocked || writeProtected;
   const startConfirm = useActionConfirmation(baseWriteLocked || closingBusy);
   const closeConfirm = useActionConfirmation(false);
   const navigationLocked = baseNavigationLocked || captureBusy || closingBusy || startConfirm.pending;
-  const writeLocked = baseWriteLocked || captureBusy || closingBusy || startConfirm.pending;
+  const writeLocked = navigationLocked || writeProtected;
   const selectedWriteLocked = writeLocked || selectedProtected;
   const navigationArrow = quietNavigation && !operationNavigationBlocked && dataProtection !== "operation"
     && !captureTest.blocked && !captureBusy && !closingBusy && !startConfirm.pending;
@@ -441,7 +442,7 @@ function MainWindow() {
   const showRestored = async (ids: string[]) => { await navigate(async () => { await refreshMeetings(); await loadOrigins(); setRestoredFilter(ids); setSelectedMeeting(null); setScreen("meetings"); }); };
   return (
     <MeetingPlaybackSurface host={playbackHost} meetingId={selectedMeeting?.id ?? null} title={selectedMeeting?.title}>
-    <MeetingAudioProvider meetingId={selectedMeeting?.id ?? null} sourceType={selectedMeeting?.sourceType} locked={navigationLocked || storageReadOnly} unavailable={selectedAudioUnavailable}
+    <MeetingAudioProvider meetingId={selectedMeeting?.id ?? null} sourceType={selectedMeeting?.sourceType} navigationLocked={navigationLocked} storageReadOnly={storageReadOnly} unavailable={selectedAudioUnavailable}
       audioDeleted={selectedMeeting ? deletion.audioAvailability.rows.get(selectedMeeting.id)?.audioDeleted ?? null : null}
       active={!!selectedMeeting && !["settings", "recording", "jobs", "logs", "voices", "prompts"].includes(screen) && ["recorded", "imported", "archived"].includes(selectedMeeting.lifecycle) && !!selectedMeeting.sourceType}>
     <div className="app-layout" data-navigation-arrow={navigationArrow || undefined} data-write-navigation-arrow={writeNavigationArrow || undefined}>
@@ -504,8 +505,10 @@ function MainWindow() {
           {screen === "settings" && <ThemeSettingsPanel locked={writeLocked} />}
           {(openedSettings || screen === "settings") && <DeferredPanel visible={screen === "settings"}><ModelInspectionPanel cleanup={modelCleanup.active} onProgressOwnerReady={setModelProgressOwnerReady} deletion={modelDeletion} refreshEpoch={modelRefreshEpoch} runtimeUpdateEpoch={modelRuntimeEpoch} visible={screen === "settings"} locked={writeLocked} stopRequested={modelPreparationStopRequested} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} /></DeferredPanel>}
           {screen === "prompts" && <div className="page-heading heading-with-info"><h1>プロンプト</h1><InfoPopover label="プロンプト">議事録の作成・統合に使うプロンプトと共通用語を管理します。</InfoPopover></div>}
-          {(openedPrompts || screen === "prompts") && <DeferredPanel visible={screen === "prompts"}><MinutesPromptSettings visible={screen === "prompts"} locked={writeLocked} /></DeferredPanel>}
-          {screen === "prompts" && <VocabularyEditor locked={writeLocked} />}
+          {(openedPrompts || screen === "prompts") && <DeferredPanel visible={screen === "prompts"}>
+            <MinutesPromptSettings visible={screen === "prompts"} locked={writeLocked} />
+            {screen === "prompts" && <VocabularyEditor locked={writeLocked} />}
+          </DeferredPanel>}
           <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataProtection} onRestored={async () => { await refreshMeetings(); await loadOrigins(); }} onShowMeetings={showRestored} />
           {screen === "settings" && <SettingsFooter />}
           <ModelDeletionDialog operation={dataOperation} control={modelDeletion} />
@@ -559,7 +562,7 @@ function MainWindow() {
                 <div ref={setTranscriptActionsHost} className="transcript-generation-host" />
               </div>
             </div>
-            <DeferredPanel><TranscriptEditor actionsHost={transcriptEditorActionsHost} key={selectedMeeting.id} sourceEpoch={analysisEpoch} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} locked={selectedWriteLocked} navigationLocked={navigationLocked} playbackHost={playbackHost} visible={detailTab === "transcript"} onAnalysisLoaded={(present, readOnly) => { setTranscriptMeeting(present ? selectedMeeting.id : null); setVerifiedTranscript(readOnly ? null : selectedMeeting.id); }} onConsolidated={async()=>{
+            <DeferredPanel><TranscriptEditor actionsHost={transcriptEditorActionsHost} key={selectedMeeting.id} sourceEpoch={analysisEpoch} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} writeProtected={writeProtected || selectedProtected} navigationLocked={navigationLocked} playbackHost={playbackHost} visible={detailTab === "transcript"} onAnalysisLoaded={(present, readOnly) => { setTranscriptMeeting(present ? selectedMeeting.id : null); setVerifiedTranscript(readOnly ? null : selectedMeeting.id); }} onConsolidated={async()=>{
               const [meeting]=await Promise.all([invoke<Meeting|null>("get_meeting",{id:selectedMeeting.id}),refreshMeetings()]);
               setSelectedMeeting(meeting);setAnalysisEpoch(value=>value+1);
             }} /></DeferredPanel>

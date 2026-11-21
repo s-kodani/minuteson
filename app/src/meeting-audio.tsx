@@ -17,10 +17,11 @@ export function useMeetingAudio(meetingId?: string) {
   return audio && (!meetingId || audio.meetingId === meetingId) ? audio : null;
 }
 
-export function MeetingAudioProvider({ meetingId, sourceType, active, locked, audioDeleted, unavailable = false, children }: {
+export function MeetingAudioProvider({ meetingId, sourceType, active, navigationLocked, storageReadOnly, audioDeleted, unavailable = false, children }: {
   meetingId: string | null; sourceType?: "recording" | "audio_import" | null;
-  active: boolean; locked: boolean; audioDeleted: boolean | null; unavailable?: boolean; children: ReactNode;
+  active: boolean; navigationLocked: boolean; storageReadOnly: boolean; audioDeleted: boolean | null; unavailable?: boolean; children: ReactNode;
 }) {
+  const locked = navigationLocked || storageReadOnly;
   const [modes, setModes] = useState<MeetingPlaybackMode[]>([]);
   const [summaryError, setSummaryError] = useState("");
   const [mode, setMode] = useState<MeetingPlaybackMode>("mixed");
@@ -57,7 +58,7 @@ export function MeetingAudioProvider({ meetingId, sourceType, active, locked, au
   };
   const playReference = (reference: MeetingPlaybackStartReference) => available && summary
     ? audio.startMeetingAt(mode, reference, summary.durationUs) : Promise.resolve();
-  return <MeetingAudioContext.Provider value={{ ...audio, meetingId, mode, modes, canPlay:available, canInspectSource, locked, summaryError, durationUs, changeMode, playReference }}>
+  return <MeetingAudioContext.Provider value={{ ...audio, meetingId, mode, modes, canPlay:available && !storageReadOnly, canInspectSource, locked, summaryError, durationUs, changeMode, playReference }}>
     {children}{active && <><IssueNotice scope={meetingId ?? "meeting"} type="meeting-audio-summary" label="保存音声の確認" message={summaryError} />{audio.controls}</>}
   </MeetingAudioContext.Provider>;
 }

@@ -2,11 +2,12 @@ async page => {
   const check = (value, message) => { if (!value) throw Error(message); }, results = [];
   const nav = page.locator('.sidebar');
   await nav.getByRole('button', { name: '設定', exact: true }).click();
+  const advanced = page.getByRole('region', { name: 'ローカルAI詳細設定', exact: true });
+  await advanced.waitFor();
   const headings = await page.locator('main.content h2').evaluateAll(elements => elements.filter(e => e.getClientRects().length).map(e => e.textContent));
   check(JSON.stringify(headings) === JSON.stringify(['表示', 'ローカルAI', 'ローカルAI詳細設定', '導入済みモデル管理', 'データと保存']), `wrong section order: ${headings}`);
   check(await page.getByRole('region', { name: '共通用語', exact: true }).count() === 0, 'common vocabulary remains in settings');
   check(await page.getByText('登録した話者', { exact: true }).count() === 0, 'duplicate speaker settings remain');
-  const advanced = page.getByRole('region', { name: 'ローカルAI詳細設定', exact: true });
   check(JSON.stringify(await advanced.getByRole('heading', { level: 3 }).allTextContents()) === JSON.stringify(['発話検知設定', '話者分離のCPU使用量', '自動の話者統合', '登録した声の自動適用', '未検出発言の話者補完']), 'wrong advanced headings');
   check(await advanced.getByRole('button', { name: 'VAD詳細設定', exact: true }).count() === 0, 'VAD disclosure remains');
   await advanced.getByText('話者分離モデルを選択すると設定できます。', { exact: true }).first().waitFor();

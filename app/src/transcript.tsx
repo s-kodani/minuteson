@@ -33,9 +33,9 @@ export interface Draft {
   id: string; meetingId: string; baseAnalysisId: string; payload: DraftPayload;
   lockVersion: number; contentHash: string; updatedAt: number;
 }
-export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, navigationLocked = false, visible = true, actionsHost, onAnalysisLoaded, onConsolidated }: {
+export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = false, navigationLocked = false, visible = true, actionsHost, onAnalysisLoaded, onConsolidated }: {
   actionsHost?: HTMLElement | null;
-  meetingId: string; sourceEpoch?: number; meetingTitle?: string; locked?: boolean; navigationLocked?: boolean; playbackHost?: HTMLElement | null; visible?: boolean; onAnalysisLoaded?: (present: boolean, readOnly: boolean) => void; onConsolidated?: () => Promise<void>;
+  meetingId: string; sourceEpoch?: number; meetingTitle?: string; writeProtected?: boolean; navigationLocked?: boolean; playbackHost?: HTMLElement | null; visible?: boolean; onAnalysisLoaded?: (present: boolean, readOnly: boolean) => void; onConsolidated?: () => Promise<void>;
 }) {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const analysisRef = useRef(analysis); analysisRef.current = analysis;
@@ -121,7 +121,9 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, n
   const playingIds = usePlaybackHighlights({ meetingId, analysisId: analysis?.id ?? null, rows: shown,
     active: visible && !navigationLocked, trackKinds: tracks.kinds });
   const viewDisabled = navigationLocked || busy;
-  const disabled = locked || loading || busy || readOnly;
+  // The fieldset and live handlers apply temporary locks without updating every row.
+  const rowsEditable = !writeProtected && !loading && !readOnly;
+  const disabled = viewDisabled || !rowsEditable;
   const editable = !disabled && !!analysis;
   // Restore only after React has replaced the editor and unlocked its row.
   // A frame callback can precede that commit (notably in Chromium).
@@ -135,7 +137,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, n
     if (body) { bodyFocus.current = null; body.focus({ preventScroll: true }); }
   });
   const run = async (action: () => Promise<void>) => {
-    if (running.current || locked || !sourceWritable.current) return;
+    if (running.current || navigationLocked || writeProtected || !sourceWritable.current) return;
     running.current = true; setBusy(true); setError("");
     try { await action(); } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally { running.current = false; if (mounted.current) setBusy(false); }
@@ -238,7 +240,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, n
         if (composingInput.current) throw Error("日本語入力を確定してからコピーしてください。");
         if (review) return review.text;
         if (!analysis) throw Error("文字起こしを読み込んでください。");
-        if (readOnly || locked) {
+        if (readOnly || writeProtected) {
           const current = view ?? analysis;
           return transcriptCopyText({ ...current, utterances: current.utterances.map(row => ({ ...row, effectiveText: textRef.current[row.id] ?? row.effectiveText })) });
         }
@@ -440,7 +442,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, n
         {view && filtered.length > 0 ? <TranscriptScrollRegion view={view} rows={shown} filterKey={JSON.stringify([speakerFilter, query])} disabled={viewDisabled}>
           <TranscriptRows rows={shown} texts={texts} playingIds={playingIds} meetingId={meetingId} speakers={speakers}
             colorKeys={view?.speakerColorKeys}
-            canPlay={!!audio?.canPlay && !audio.locked} editable={editable} saveFailed={!!snapshot.error} dirty={snapshot.dirty} actions={rowActions} />
+            canPlay={!!audio?.canPlay} editable={rowsEditable} saveFailed={!!snapshot.error} dirty={snapshot.dirty} actions={rowActions} />
         </TranscriptScrollRegion> : <p className="transcript-empty-results">条件に一致する発言はありません。</p>}
     </TranscriptSplit>}
     <IssueNotice scope={meetingId} type="transcript-consolidation" label="発言の統合" message={consolidationError}/>
