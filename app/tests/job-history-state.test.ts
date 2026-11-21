@@ -5,6 +5,8 @@ import {voiceModelName,voicePersonModels} from "../src/voice-state.ts";
 const row:JobHistoryEntry={id:"job",kind:"transcription",target:"会議",meetingId:"meeting",state:"succeeded",acceptedAt:1000,finishedAt:62000,observedAt:62000,detail:null};
 test("history readbacks validate states, identity and page bounds",()=>{
   const page={items:[row],nextCursor:null,storageError:null};assert.equal(checkedHistoryPage(page),page);
+  assert.equal(checkedHistoryPage({...page,backfillPending:true}).backfillPending,true);
+  assert.throws(()=>checkedHistoryPage({...page,backfillPending:"running"}));
   for(const items of [[row,row],[{...row,state:"imagined"}],[{...row,finishedAt:-1}],[{...row,kind:"unknown"}]])assert.throws(()=>checkedHistoryPage({...page,items}));
   assert.equal(mergeHistory([row],[{...row,target:"更新後"}]).length,1);
 });

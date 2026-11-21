@@ -27,18 +27,23 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
   const s = operation.snapshot, preview = s?.kind === "model_deletion" ? s.modelDeletionPreview : null;
   const receipt = s?.kind === "model_deletion" ? s.modelDeletionReceipt : null;
   const listing = operation.modelDeletionListing;
+  const storageReadOnly = operation.writeState?.readOnly === true;
   const protectedNow = rpcBusy || unknown;
-  const canInspect = isTauri() && operation.modelDeletionSupported && operation.connected && !locked && !rpcBusy && !unknown && !s?.busy;
+  const canInspect = isTauri() && operation.modelDeletionSupported && !!listing && operation.connected && !locked && !rpcBusy && !unknown && !s?.busy;
   // Restart normally forbids all work. A canonical pending deletion alone can
   // use its restricted native resume lane; it never enables ordinary writes.
   const admission = deletionAvailability(operation.availability);
   const sharedAvailable = admission.available || (permitsDeletionRecovery(admission, listing?.restartRequired));
-  const canReviewPending = canInspect && sharedAvailable;
-  const canReviewModel = canReviewPending && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !s?.deletionPreview?.pending && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
-  const reviewUnavailableReason = canReviewModel ? null : deletionReviewReason(operation, {
-    native: isTauri(), supported: operation.modelDeletionSupported, locked, protectedNow, sharedAvailable, availabilityReason: admission.reason,
+  const canReviewPending = canInspect && sharedAvailable && listing?.items.some(item => item.reviewAllowed) === true;
+  const canReviewModel = canInspect && admission.available && !storageReadOnly && !listing?.writeBlocked && !operation.deletionListing?.writeBlocked && !s?.deletionPreview?.pending && !operation.audioDeletionListing?.writeBlocked && !s?.audioDeletionPreview?.pending && !s?.restartRequired && !preview?.pending;
+  const reviewUnavailableReason = canReviewModel ? null : canReviewPending
+    ? "「残りの削除を確認」から未完了のモデル削除を確認してください。"
+    : deletionReviewReason(operation, {
+    native: isTauri(), supported: operation.modelDeletionSupported, locked, protectedNow, sharedAvailable, availabilityReason: admission.reason, listingError: operation.listingErrors.models,
   });
-  const canResolve = canReviewPending && !!preview && !receipt && (!s?.restartRequired || preview.pending);
+  const canResolve = !!preview && !receipt && (preview.pending
+    ? canReviewPending && listing?.items.some(item => item.operationId === preview.operationId && item.reviewAllowed) === true
+    : canReviewModel);
   const protect = async (action: () => Promise<void>) => {
     // Pending receipts already fenced writes. Initial review/publication flush
     // edits before that fence; recovery never attempts to rewrite deleted rows.
@@ -46,7 +51,9 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
     else await latest.current.withSavedEdits(async () => run(action));
   };
   const review = async (id: string, pendingReview: boolean, reviewHash?: string) => {
-    if (!(pendingReview ? canReviewPending : canReviewModel)) return;
+    if (!(pendingReview
+      ? canReviewPending && listing?.items.some(item => item.operationId === id && item.reviewAllowed)
+      : canReviewModel)) return;
     const active = rowMenuReturnTarget(document.activeElement instanceof HTMLElement ? document.activeElement : null);
     await protect(async () => {
       await stopAllPlayback(); opener.current = active; setOpen(false); setToast("");
@@ -98,14 +105,14 @@ export function useModelDeletion({ operation, locked, withSavedEdits, onDeleted 
     if (receipt || ["idle", "cancelled"].includes(s.phase)) setOpen(false);
     else if (s.busy) setOpen(false);
     if (unknown && exchange.reconcile(s, preview?.confirmationId, (now, c) => now.kind === "model_deletion" && now.revision > c.revision && (now.busy || ["failed", "cancelled", "attention"].includes(now.phase) || (c.pending ? now.modelDeletionPreview?.operationId === c.id : now.modelDeletionPreview?.packageId === c.id)))) { setError(""); }
-    if (s.phase === "ready" && preview && !rpcBusy && !locked && !unknown && opened.current !== preview.confirmationId) { opened.current = preview.confirmationId; setOpen(true); }
+    if (s.phase === "ready" && preview && canResolve && opened.current !== preview.confirmationId) { opened.current = preview.confirmationId; setOpen(true); }
     if (receipt && completed.current !== s.token) {
       completed.current = s.token; setToastEvent(s.token ?? ""); setError("");
       setToast(receipt.bodyDeleted ? "モデルをローカルから削除しました。" : "ファイル削除を開始せず保持して中止しました。部分削除の復元ではありません。");
       if (receipt.bodyDeleted) void latest.current.onDeleted(receipt).catch(cause => setError(`削除は完了しています。モデル一覧を再読込してください: ${String(cause)}`));
       void latest.current.operation.refresh().catch(cause => setError(String(cause)));
     }
-  }, [s, rpcBusy, locked, unknown]);
+  }, [s, canResolve, unknown]);
   const canDelete = preview?.scopeMode === "directory" && canResolve && open && s?.phase === "ready" && !!preview.executeAllowed;
   return { reviewModel: (id: string, hash: string) => review(id, false, hash), reviewPending: (id: string) => review(id, true), canReviewModel, canReviewPending, canResolve, reviewUnavailableReason,
     rpcBusy, unknown, protectedNow, open, setOpen, preview, receipt, listing, error, toast, toastEvent, setToast,
@@ -118,7 +125,7 @@ export function ModelDeletionDialog({ operation, control: c }: { operation: Data
   const s = operation.snapshot, p = c.preview, active = s?.kind === "model_deletion";
   return <>
     <ToastNotice scope="model-deletion" type="result" eventId={c.toastEvent} message={c.toast} onClose={() => c.setToast("")} />
-    <IssueNotice scope="model-deletion" type="model-deletion" label="モデル削除" message={c.error || (active ? operation.error || (s.phase === "cancelled" ? "" : s.errorMessage) : "")} />
+    <IssueNotice scope="model-deletion" type="model-deletion" label="モデル削除" message={c.error || (active ? operation.error || (s.phase === "cancelled" ? "" : s.errorMessage) : "") || (operation.listingErrors.models && "削除記録を確認できません。モデル削除の受付を保留し、一覧を再確認しています。")} />
     {p?.scopeMode === "directory" && c.unknown && <div className="analysis-actions"><button type="button" disabled={c.rpcBusy || !!s?.busy} onClick={() => void c.retryUnknown()}>削除要求の結果を確認</button><button type="button" disabled={c.rpcBusy || !s?.token} onClick={() => void c.cancel()}>削除を停止</button></div>}
     <CommonModal portal hideDismissButton ref={c.dialog} open={c.open && p?.scopeMode === "directory"} blocked={c.protectedNow || !!s?.busy} onDismiss={c.dismiss}
       restoreReady={!c.rpcBusy && !s?.busy && operation.connected}

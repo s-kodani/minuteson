@@ -44,6 +44,7 @@ export const dataSaveIPC = async (command, args) => {
     return { schemaVersion: 1, entries: structuredClone(operationEntries) };
   }
   f.calls.push({ command, args: structuredClone(args) });
+  if (["get_storage_write_state", "get_meeting_list_diagnostics"].includes(command)) return dataIdleRead(command);
   if (["register_playback_preparation","cancel_playback_preparation","finish_playback_preparation"].includes(command)) return dataIdleRead(command);
   if (command === "get_ui_preferences") return dataIdleRead(command);
   if (["get_capture_test_snapshot","get_capture_test_recovery"].includes(command)) return dataIdleRead(command);
@@ -133,6 +134,10 @@ export const dataSaveIPC = async (command, args) => {
       return structuredClone(f.snapshot);
     }
     if (f.mode === "forged") return { ...structuredClone(f.snapshot), phase: "completed", retryAllowed: false, revision: f.snapshot.revision + 1 };
+    if (f.mode === "scratchFailure") {
+      await f.changed({ phase: "failed", busy: false, retryAllowed: false, errorMessage: "バックアップに使う一時ファイルの状態を確認できませんでした。元のデータは残っています。" });
+      return structuredClone(f.snapshot);
+    }
     if (f.mode === "attention") { await f.changed({ phase: "attention", attentionRequired: true, retryAllowed: false, errorMessage: "保存後の結果が未確定です" }); return structuredClone(f.snapshot); }
     await f.changed({ phase: "publishing", busy: true, retryAllowed: false });
     const finish = async () => {

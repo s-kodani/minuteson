@@ -1,4 +1,5 @@
 """Exercise cache reuse/publication without downloading or compiling engines."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -85,6 +86,10 @@ class PersistentWorkerBuildTests(unittest.TestCase):
                         path.write_bytes(b'compiler output: ' + target.encode())
             else:
                 Path(arguments[arguments.index('-B') + 1]).mkdir(parents=True, exist_ok=True)
+        elif arguments[0] == '/usr/bin/strip':
+            self.assertEqual(arguments[1], '-x')
+            path = Path(arguments[-1])
+            path.write_bytes(path.read_bytes() + b' stripped')
         elif arguments[0] == '/usr/bin/codesign':
             path = Path(arguments[-1])
             path.write_bytes(path.read_bytes() + b' signed')
@@ -104,11 +109,16 @@ class PersistentWorkerBuildTests(unittest.TestCase):
         self.prepare()
         self.assertEqual(source.stat().st_mtime_ns, 1_000_000_000)
         self.assertEqual(compiled.read_bytes(), unsigned)
-        self.assertFalse(unsigned.endswith(b' signed'))
-        self.assertEqual((package / 'mon-llama-worker').read_bytes(), unsigned + b' signed')
+        packaged = (package / compiled.name).read_bytes()
+        self.assertEqual(packaged, unsigned + b' stripped signed')
+        index = json.loads((package / 'runtime-index.json').read_text())
+        llama = next(item for item in index if item['name'] == compiled.name)
+        self.assertEqual(llama['bytes'], len(packaged))
+        self.assertEqual(llama['sha256'], hashlib.sha256(packaged).hexdigest())
         self.assertEqual(json.loads((package / 'build-info.json').read_text())['buildFingerprint'], fingerprint)
         self.assertEqual(sum('--build' in command for command in self.commands), 4)
         self.assertEqual(sum('-S' in command for command in self.commands), 4)
+        self.assertEqual(sum(command[0] == '/usr/bin/strip' for command in self.commands), 8)
         self.assertEqual(sum(command[0] == '/usr/bin/codesign' for command in self.commands), 8)
         self.assertEqual(len(list((self.cache / 'intermediates').iterdir())), 1)
         self.assertTrue(all(path.is_file() for path in (self.cache / 'downloads').iterdir()))

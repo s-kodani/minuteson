@@ -67,14 +67,14 @@ interface CaptureDependencies {
   setSelectedMeeting: (meeting: CaptureMeeting | null) => void;
   setRenameTitle: (title: string) => void;
   setScreen: (screen: "recording") => void;
-  setMeetings: (meetings: CaptureMeeting[]) => void;
+  refreshMeetings: () => Promise<void>;
 }
 /** Recording/test confirmation, edit/playback barriers and native command
  * acknowledgement have one owner. Live context revalidates delayed consent;
  * uncertain starts are never resent. The view composes presentation only. */
 export function useCaptureActions(dependencies: CaptureDependencies) {
   const { context, controller, captureOwner, closing, activeMicrophoneInput, microphoneSession, microphoneSelection,
-    startConfirm, withSavedEdits, recordingDecision, navigationLocked, setPreparation, setSelectedMeeting, setRenameTitle, setScreen, setMeetings } = dependencies;
+    startConfirm, withSavedEdits, recordingDecision, navigationLocked, setPreparation, setSelectedMeeting, setRenameTitle, setScreen, refreshMeetings } = dependencies;
   const { selectedMeeting, preparation, screen, captureInputs, captureScope, captureTest, state } = context;
   const { starting, captureBusy, setCaptureBusy, setCaptureError, setCaptureTestError, microphoneRequest, setMicrophoneRequest } = controller;
   const root = useRef(context);
@@ -137,7 +137,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
         const accepted=await invoke<CaptureMeeting | null>("get_meeting", { id: expected.id });
         if(!accepted||accepted.id!==expected.id)throw Error("録音の会議保存結果を確認できません。開始は再送していません。");
         setSelectedMeeting(accepted);setRenameTitle(accepted.title);setPreparation(null);setScreen("recording");
-        setMeetings(await invoke<CaptureMeeting[]>("list_meetings"));
+        await refreshMeetings();
       }), onError: cause => {
         if (operationNotStarted(cause, "recording_model_cleanup_not_started")) {
           if (local) setPreparation(current => current?.id === local.id ? { ...current, submitted: false } : current);
@@ -234,7 +234,7 @@ export function useCaptureActions(dependencies: CaptureDependencies) {
       if(root.current.preparation?.id!==expected.id||root.current.screen!=="recording")throw Error("録音準備が変更されています。別の会議には切り替えていません。");
       if(!meeting)throw Error("保存済みの会議は確認できません。開始は再送していません。録音状態を確認し、会議一覧から新しく準備してください。");
       if(meeting.id!==expected.id||meeting.title!==expected.title.trim()||meeting.sourceType==="audio_import"||!["draft","recording","recorded"].includes(meeting.lifecycle)||recordingActive(recording)&&recording.meetingId!==expected.id)throw Error("録音の受付内容が一致しません。別の会議や録音は採用していません。");
-      setSelectedMeeting(meeting);setRenameTitle(meeting.title);setPreparation(null);setMeetings(await invoke<CaptureMeeting[]>("list_meetings"));setCaptureError("");
+      setSelectedMeeting(meeting);setRenameTitle(meeting.title);setPreparation(null);await refreshMeetings();setCaptureError("");
     });
   };
   return { root, startRecording, selectRecordingMicrophone, startCaptureTest, cancelCaptureTest, finishCaptureTest, stopRecording, prepareNewRecording, confirmPreparationResult };

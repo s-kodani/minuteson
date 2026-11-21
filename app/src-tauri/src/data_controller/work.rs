@@ -95,6 +95,7 @@ impl Admission {
         app: &AppHandle,
         operation: Option<&str>,
     ) -> Result<Self, String> {
+        app.state::<Storage>().require_model_storage()?;
         model_deletion::authorize_review(&app.state::<Storage>(), operation)?;
         Self::acquire_worker(app, operation, DeletionLane::Model)
     }
@@ -107,6 +108,7 @@ impl Admission {
         if cancelled() {
             return Err("モデル削除の確認を中止しました".into());
         }
+        app.state::<Storage>().require_model_storage()?;
         model_deletion::authorize_review(&app.state::<Storage>(), operation)?;
         Self::acquire_worker_cancelled(app, operation, DeletionLane::Model, &cancelled)
     }

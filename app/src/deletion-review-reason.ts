@@ -17,11 +17,13 @@ export function permitsDeletionRecovery(value: Pick<DataAvailability, "reasonCod
 
 /** Explain the same gates used by deletion admission; never authorize a write. */
 export function deletionReviewReason(operation: DataOperation, state: {
-  native: boolean; supported: boolean; locked: boolean; protectedNow: boolean; sharedAvailable: boolean; availabilityReason?: string | null;
+  native: boolean; supported: boolean; locked: boolean; protectedNow: boolean; sharedAvailable: boolean; availabilityReason?: string | null; listingError?: string;
 }): string {
   if (!state.native) return "削除はデスクトップアプリで利用できます。";
   if (!operation.connected) return operation.error ? `削除の状態を確認できません：${operation.error}` : "削除の状態を確認しています。";
+  if (operation.writeState?.readOnly) return "保存先が閲覧専用のため、削除できません。";
   if (!state.supported) return "このアプリでは削除機能を利用できません。更新後にお試しください。";
+  if (state.listingError) return `削除の状態を確認できません：${state.listingError}`;
   if (operation.snapshot?.restartRequired) return "保存先を切り替えたため、アプリの再起動後に削除できます。";
   if (operation.deletionListing?.writeBlocked || operation.audioDeletionListing?.writeBlocked || operation.modelDeletionListing?.writeBlocked
     || operation.snapshot?.deletionPreview?.pending || operation.snapshot?.audioDeletionPreview?.pending || operation.snapshot?.modelDeletionPreview?.pending) return "未完了の削除があります。設定画面で確認してください。";

@@ -10,7 +10,7 @@ async (page, capturePath, { approveModelLicense }) => {
     check(await page.evaluate(() => {
       const f = window.modelDownloadFixture;
       return f.active.size === 1 && f.cancelled.size === 0 && !f.calls.some(call => call.command === "cancel_model_inspection");
-    }), "close confirmation cancelled active model preparation");
+    }), "active model preparation was cancelled");
   };
   for (const platform of ["macos", "windows"]) {
     await page.goto(`http://127.0.0.1:1420/tests/operation-progress-browser.html?resident=${platform}`);
@@ -20,6 +20,15 @@ async (page, capturePath, { approveModelLicense }) => {
     await row().getByRole("button", { name: "ダウンロードして使用", exact: true }).click();
     await approveModelLicense();
     await page.waitForFunction(() => window.modelDownloadFixture.active.size === 1);
+
+    await page.evaluate(() => { window.operationProgressFixture.writeStateFailure = true; });
+    const checkingStorage = page.getByText("保存先の書き込み可否を再確認しています。会議を閲覧できます。", { exact: true });
+    await checkingStorage.waitFor();
+    await assertContinues();
+    if (platform === "macos") await page.screenshot({ path: capturePath("write-state-rechecking-model-continues.png"), fullPage: true });
+    await page.evaluate(() => { window.operationProgressFixture.writeStateFailure = false; });
+    await checkingStorage.waitFor({ state: "hidden" });
+    await assertContinues();
 
     await requestClose();
     await background().waitFor();
@@ -58,5 +67,14 @@ async (page, capturePath, { approveModelLicense }) => {
     }), "background continuation stopped, restarted or duplicated model preparation");
     results.push(`${platform}: declining, failing or accepting window close preserves download; background placement and application complete once`);
   }
+  await page.goto("http://127.0.0.1:1420/tests/operation-progress-browser.html?resident=macos&unavailableModels=1");
+  await page.getByRole("button", { name: "既存会議", exact: true }).waitFor();
+  check(await page.getByText(/保存先は閲覧専用です/).count() === 0, "unavailable models disabled the meeting workspace");
+  await page.screenshot({ path: capturePath("workspace-with-unavailable-model-storage.png"), fullPage: true });
+  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByText(/復元したモデル保存先を確認できません/).first().waitFor();
+  await page.clock.runFor(300);
+  await page.screenshot({ path: capturePath("settings-unavailable-model-storage.png"), fullPage: true, animations: "disabled" });
+  results.push("an unavailable model directory is diagnosed in settings while the meeting workspace stays available");
   return { passed: results.length, results };
 }

@@ -73,6 +73,31 @@ impl Fixture {
         self.storage.connection.lock().unwrap().execute("INSERT INTO maintenance_operations VALUES(?1,?2,'delete_meeting','cleanup',NULL,?3,?4,1,'{}',NULL,1,1)", params![operation,self.meeting,scope.encode().unwrap(),scope.hash().unwrap()]).unwrap();
         operation
     }
+
+    #[cfg(any(unix, windows))]
+    fn compound_consent(&self) -> (String, super::completion::Receipt) {
+        use super::{completion, files::Census, intent, removal};
+        use crate::test_support::never_cancelled as check;
+
+        // The minutes fixture records two missing assets. Bind their paths
+        // to the actual meeting before capturing the normal deletion scope.
+        assert_eq!(
+            self.storage.connection.lock().unwrap().execute(
+                "UPDATE file_assets SET relative_path=replace(relative_path,'meetings/test/',?2)
+                 WHERE meeting_id=?1 AND relative_path IN ('meetings/test/audio.caf','meetings/test/manifest.json')",
+                params![self.meeting, format!("meetings/{}/", self.meeting)],
+            ).unwrap(),
+            2
+        );
+        let operation = uuid::Uuid::new_v4().to_string();
+        let scope = Census::capture(&self.storage, &self.meeting, &check).unwrap();
+        let review = removal::Reviewed::confirm(&scope, false).unwrap();
+        let saved = intent::prepare(&self.storage, &operation, &scope, &check).unwrap();
+        let mut files = removal::start(&self.storage, &saved, &review, &check).unwrap();
+        removal::run(&self.storage, &mut files, &check).unwrap();
+        let receipt = completion::start(&self.storage, &files, &check).unwrap();
+        (operation, receipt)
+    }
 }
 fn count(db: &Connection, name: &str) -> i64 {
     db.query_row(&format!("SELECT count(*) FROM {name}"), [], |r| r.get(0))
@@ -517,17 +542,23 @@ fn deletion_database_purge_removes_unique_text_from_database_and_wal_without_rem
 }
 
 #[test]
+#[cfg(any(unix, windows))]
 fn deletion_database_purge_resumes_after_cold_reopen_of_committed_row_phase() {
+    use super::completion;
+    use crate::test_support::never_cancelled as check;
+
     let f = Fixture::new();
-    let scope = f.scope();
-    let operation = f.consent(&scope);
-    erase_confirmed_rows(
-        &f.storage.connection.lock().unwrap(),
-        &operation,
-        &scope,
-        &crate::test_support::never_cancelled,
-    )
-    .unwrap();
+    let (operation, mut receipt) = f.compound_consent();
+    let cancelled = Cell::new(false);
+    assert!(
+        completion::run_observed(&f.storage, &mut receipt, &|| cancelled.get(), &|phase| {
+            if phase == "rowsCommitted" {
+                cancelled.set(true);
+            }
+        },)
+        .is_err()
+    );
+    assert_eq!(receipt.database_phase(), completion::Phase::RowsDeleted);
     let Fixture {
         _root: root,
         storage,
@@ -536,28 +567,13 @@ fn deletion_database_purge_resumes_after_cold_reopen_of_committed_row_phase() {
     } = f;
     drop(storage);
     let storage = Storage::open(root.path().into()).unwrap();
-    let db = storage.connection.lock().unwrap();
-    let _writer = super::fence::write_scope_fixture(&storage, &db, &operation, &scope).unwrap();
-    assert_eq!(operation_state(&db, &operation), "cleanup");
-    assert_eq!(
-        db.query_row(
-            "SELECT count(*) FROM meetings WHERE id=?1",
-            params![meeting],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        0
-    );
-    finish_database_purge(
-        &db,
-        &operation,
-        &scope,
-        &crate::test_support::never_cancelled,
-    )
-    .unwrap();
-    assert_eq!(operation_state(&db, &operation), "completed");
-    drop(_writer);
-    drop(db);
+    assert!(storage.data_write_blocked());
+    assert!(storage.get_meeting(&meeting).unwrap().is_none());
+    let mut resumed = completion::read(&storage, &operation, &check).unwrap();
+    assert_eq!(resumed.database_phase(), completion::Phase::RowsDeleted);
+    assert_eq!(resumed.confirmed().scope(), receipt.confirmed().scope());
+    completion::run(&storage, &mut resumed, &check).unwrap();
+    assert!(resumed.completed());
     assert!(storage.get_meeting(&other).unwrap().is_some());
 }
 
@@ -820,8 +836,8 @@ fn deletion_checkpoint_child_fixture() {
     let base = std::path::PathBuf::from(std::env::var("MON_DELETE_TEST_BASE").unwrap());
     let phase = std::env::var("MON_DELETE_TEST_PHASE").unwrap();
     let f = Fixture::at(tempfile::tempdir_in(&base).unwrap());
-    let scope = f.scope();
-    let operation = f.consent(&scope);
+    let (operation, mut receipt) = f.compound_consent();
+    let scope = receipt.confirmed().scope().clone();
     let wait = || -> ! {
         let receipt = serde_json::to_vec(&(f._root.path(), &operation, &scope, &f.other)).unwrap();
         std::fs::write(base.join("ready.tmp"), receipt).unwrap();
@@ -830,35 +846,27 @@ fn deletion_checkpoint_child_fixture() {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     };
-    let db = f.storage.connection.lock().unwrap();
-    erase_confirmed_rows(&db, &operation, &scope, &|| {
-        if phase == "partial_rows" && count(&db, "working_drafts") == 0 {
-            wait();
-        }
-        false
-    })
+    super::completion::run_observed(
+        &f.storage,
+        &mut receipt,
+        &crate::test_support::never_cancelled,
+        &|point| {
+            if point == phase {
+                wait();
+            }
+        },
+    )
     .unwrap();
-    if phase == "rows_committed" {
-        wait();
-    }
-    let checks = Cell::new(0);
-    finish_database_purge(&db, &operation, &scope, &|| {
-        checks.set(checks.get() + 1);
-        if phase == "vacuum_done" && checks.get() == 4 {
-            wait();
-        }
-        false
-    })
-    .unwrap();
-    assert_eq!(phase, "completed");
-    wait();
+    panic!("deletion checkpoint was not reached: {phase}");
 }
 
 #[test]
 #[cfg(unix)]
 fn deletion_sigkill_during_rows_after_commit_after_vacuum_and_after_completion_recovers_safely() {
+    use super::completion;
+    use crate::test_support::never_cancelled as check;
     use std::os::unix::process::ExitStatusExt;
-    for phase in ["partial_rows", "rows_committed", "vacuum_done", "completed"] {
+    for phase in ["rowsErased", "rowsCommitted", "vacuumed", "completed"] {
         let base = tempfile::tempdir().unwrap();
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -894,55 +902,28 @@ fn deletion_sigkill_during_rows_after_commit_after_vacuum_and_after_completion_r
             .unwrap()
             .starts_with(base.path().canonicalize().unwrap()));
         let storage = Storage::open(path).unwrap();
-        let db = storage.connection.lock().unwrap();
-        let _writer = if storage.deletion_fence.pending() {
-            Some(super::fence::write_scope_fixture(&storage, &db, &operation, &scope).unwrap())
-        } else {
-            None
-        };
-        assert!(db
+        let mut receipt = completion::read(&storage, &operation, &check).unwrap();
+        assert_eq!(receipt.confirmed().scope(), &scope);
+        assert_eq!(
+            receipt.database_phase(),
+            match phase {
+                "rowsErased" => completion::Phase::RowsPending,
+                "completed" => completion::Phase::Finished,
+                _ => completion::Phase::RowsDeleted,
+            }
+        );
+        assert_eq!(
+            storage.get_meeting(&scope.meeting_id).unwrap().is_some(),
+            phase == "rowsErased"
+        );
+        assert!(storage
+            .connection
+            .lock()
+            .unwrap()
             .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
             .unwrap());
-        if phase == "partial_rows" {
-            assert_eq!(
-                Scope::capture(
-                    &db,
-                    &scope.meeting_id,
-                    &operation,
-                    &crate::test_support::never_cancelled
-                )
-                .unwrap(),
-                scope
-            );
-            erase_confirmed_rows(
-                &db,
-                &operation,
-                &scope,
-                &crate::test_support::never_cancelled,
-            )
-            .unwrap();
-        } else {
-            assert_eq!(count(&db, "meetings"), 1);
-            assert_eq!(
-                operation_state(&db, &operation),
-                if phase == "completed" {
-                    "completed"
-                } else {
-                    "cleanup"
-                }
-            );
-        }
-        finish_database_purge(
-            &db,
-            &operation,
-            &scope,
-            &crate::test_support::never_cancelled,
-        )
-        .unwrap();
-        assert_eq!(operation_state(&db, &operation), "completed");
-        assert_eq!(count(&db, "meetings"), 1);
-        drop(_writer);
-        drop(db);
+        completion::run(&storage, &mut receipt, &check).unwrap();
+        assert!(receipt.completed());
         assert!(storage.get_meeting(&other).unwrap().is_some());
         assert!(storage.get_meeting(&scope.meeting_id).unwrap().is_none());
     }

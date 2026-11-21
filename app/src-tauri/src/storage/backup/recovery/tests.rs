@@ -134,7 +134,9 @@ fn recovery_old_ownership_schema_is_rejected_without_adopting_or_losing_areas() 
         .unwrap();
     drop(db);
     let before = std::fs::read(&journal).unwrap();
-    assert!(Storage::open(root.path().into()).is_err());
+    let reopened = Storage::open(root.path().into()).unwrap();
+    assert!(!reopened.common_write_hold());
+    assert!(reopened.backup_stage().is_err());
     assert_eq!(std::fs::read(&journal).unwrap(), before);
     assert_eq!(std::fs::read(path.join("unknown")).unwrap(), b"unknown");
     let db = Connection::open(&journal).unwrap();
@@ -165,7 +167,9 @@ fn recovery_missing_keep_table_is_not_mistaken_for_legacy_schema_or_used_to_dele
         .unwrap()
         .execute_batch("DROP TABLE recovery_decisions;")
         .unwrap();
-    assert!(Storage::open(root.path().into()).is_err());
+    let reopened = Storage::open(root.path().into()).unwrap();
+    assert!(!reopened.common_write_hold());
+    assert!(reopened.backup_stage().is_err());
     assert!(path.join("unknown").exists());
 }
 

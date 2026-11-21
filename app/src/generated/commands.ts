@@ -14,6 +14,18 @@ export interface CommandArguments {
   "get_startup_reset_state": Record<string, never>;
   "quit_blocked_startup": Record<string, never>;
   "retry_startup": Record<string, never>;
+  "get_salvage_state": Record<string, never>;
+  "recheck_salvage_environment": Record<string, never>;
+  "open_salvage": Record<string, never>;
+  "export_salvage_edits": { "contents": string };
+  "choose_salvage_folder": { "source": boolean };
+  "inspect_salvage": Record<string, never>;
+  "commit_salvage": { "operationId": string };
+  "cancel_salvage_work": Record<string, never>;
+  "leave_salvage": Record<string, never>;
+  "get_salvage_result": Record<string, never>;
+  "get_salvage_source_cleanup": { "operationId": string };
+  "delete_salvage_source": { "operationId": string };
   "get_residency_state": Record<string, never>;
   "hide_main_to_background": Record<string, never>;
   "get_official_model_options": Record<string, never>;
@@ -90,6 +102,8 @@ export interface CommandArguments {
   "get_recorder_operation_notices": Record<string, never>;
   "publish_recorder_operation_notice": { "source": unknown; "expectedRevision": number; "message"?: (string) | null };
   "dismiss_recorder_operation_notice": { "source": unknown; "expectedRevision": number; "eventId": string };
+  "get_meeting_list_diagnostics": Record<string, never>;
+  "get_storage_write_state": Record<string, never>;
   "list_meetings": Record<string, never>;
   "get_meeting": { "id": string };
   "rename_meeting": { "id": string; "title": string; "expectedLockVersion": number };
@@ -112,7 +126,7 @@ export interface CommandArguments {
   "prepare_draft_utterance_playback": { "request": unknown; "preparationId": string };
   "read_playback_chunk": { "token": string; "offsetFrames": number };
   "close_playback": { "token": string };
-  "finish_main_close": { "quit": boolean; "update"?: (boolean) | null; "expected"?: (unknown) | null };
+  "finish_main_close": { "quit": boolean; "update"?: (boolean) | null; "expected"?: (unknown) | null; "salvage"?: (boolean) | null };
   "get_analysis_flow": { "meetingId": string };
   "get_transcription_regeneration_target": { "meetingId": string };
   "regenerate_transcription": { "request": unknown };
@@ -123,6 +137,7 @@ export interface CommandArguments {
   "continue_analysis_flow": { "meetingId": string; "expectedLockVersion": number };
   "start_markdown_minutes_generation": { "request": unknown; "expected"?: (unknown) | null };
   "get_minutes_markdown": { "meetingId": string };
+  "get_meeting_body_for_review": { "meetingId": string; "part": unknown };
   "save_minutes_markdown": { "request": unknown };
   "export_plain_minutes_markdown": { "request": unknown };
   "get_plain_minutes_export_status": { "request": unknown };
@@ -360,6 +375,149 @@ export const commandContracts = {
     "response": {
       "type": "Result<(),mon_contracts::AppError>",
       "ok": "()",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_salvage_state": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<Status,mon_contracts::AppError>",
+      "ok": "Status",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "recheck_salvage_environment": {
+    "async": true,
+    "arguments": [],
+    "response": {
+      "type": "Result<Vec<String>,mon_contracts::AppError>",
+      "ok": "Vec<String>",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "open_salvage": {
+    "async": true,
+    "arguments": [],
+    "response": {
+      "type": "Result<Status,mon_contracts::AppError>",
+      "ok": "Status",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "export_salvage_edits": {
+    "async": true,
+    "arguments": [
+      {
+        "name": "contents",
+        "wireName": "contents",
+        "type": "String",
+        "optional": false
+      }
+    ],
+    "response": {
+      "type": "Result<bool,mon_contracts::AppError>",
+      "ok": "bool",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "choose_salvage_folder": {
+    "async": true,
+    "arguments": [
+      {
+        "name": "source",
+        "wireName": "source",
+        "type": "bool",
+        "optional": false
+      }
+    ],
+    "response": {
+      "type": "Result<Status,mon_contracts::AppError>",
+      "ok": "Status",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "inspect_salvage": {
+    "async": true,
+    "arguments": [],
+    "response": {
+      "type": "Result<Status,mon_contracts::AppError>",
+      "ok": "Status",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "commit_salvage": {
+    "async": true,
+    "arguments": [
+      {
+        "name": "operation_id",
+        "wireName": "operationId",
+        "type": "String",
+        "optional": false
+      }
+    ],
+    "response": {
+      "type": "Result<Status,mon_contracts::AppError>",
+      "ok": "Status",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "cancel_salvage_work": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<(),mon_contracts::AppError>",
+      "ok": "()",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "leave_salvage": {
+    "async": true,
+    "arguments": [],
+    "response": {
+      "type": "Result<(),mon_contracts::AppError>",
+      "ok": "()",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_salvage_result": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<serde_json::Value,mon_contracts::AppError>",
+      "ok": "serde_json::Value",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_salvage_source_cleanup": {
+    "async": true,
+    "arguments": [
+      {
+        "name": "operation_id",
+        "wireName": "operationId",
+        "type": "String",
+        "optional": false
+      }
+    ],
+    "response": {
+      "type": "Result<Option<mon_contracts::SalvageSourceCleanup>,mon_contracts::AppError>",
+      "ok": "Option<mon_contracts::SalvageSourceCleanup>",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "delete_salvage_source": {
+    "async": true,
+    "arguments": [
+      {
+        "name": "operation_id",
+        "wireName": "operationId",
+        "type": "String",
+        "optional": false
+      }
+    ],
+    "response": {
+      "type": "Result<mon_contracts::SalvageSourceCleanup,mon_contracts::AppError>",
+      "ok": "mon_contracts::SalvageSourceCleanup",
       "error": "mon_contracts::AppError"
     }
   },
@@ -1740,6 +1898,24 @@ export const commandContracts = {
       "error": "mon_contracts::AppError"
     }
   },
+  "get_meeting_list_diagnostics": {
+    "async": true,
+    "arguments": [],
+    "response": {
+      "type": "Result<storage::startup_diagnostics::MeetingListDiagnostics,mon_contracts::AppError>",
+      "ok": "storage::startup_diagnostics::MeetingListDiagnostics",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_storage_write_state": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<storage::startup_diagnostics::StorageWriteState,mon_contracts::AppError>",
+      "ok": "storage::startup_diagnostics::StorageWriteState",
+      "error": "mon_contracts::AppError"
+    }
+  },
   "list_meetings": {
     "async": true,
     "arguments": [],
@@ -2181,6 +2357,12 @@ export const commandContracts = {
         "wireName": "expected",
         "type": "Option<application_close::CloseExpectations>",
         "optional": true
+      },
+      {
+        "name": "salvage",
+        "wireName": "salvage",
+        "type": "Option<bool>",
+        "optional": true
       }
     ],
     "response": {
@@ -2362,6 +2544,28 @@ export const commandContracts = {
     "response": {
       "type": "Result<Option<storage::minutes_markdown::MarkdownDocument>,mon_contracts::AppError>",
       "ok": "Option<storage::minutes_markdown::MarkdownDocument>",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "get_meeting_body_for_review": {
+    "async": true,
+    "arguments": [
+      {
+        "name": "meeting_id",
+        "wireName": "meetingId",
+        "type": "String",
+        "optional": false
+      },
+      {
+        "name": "part",
+        "wireName": "part",
+        "type": "mon_contracts::MeetingBodyPart",
+        "optional": false
+      }
+    ],
+    "response": {
+      "type": "Result<Option<mon_contracts::MeetingBodyReview>,mon_contracts::AppError>",
+      "ok": "Option<mon_contracts::MeetingBodyReview>",
       "error": "mon_contracts::AppError"
     }
   },

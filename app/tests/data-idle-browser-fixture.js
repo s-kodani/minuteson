@@ -1,5 +1,7 @@
 // Baseline for older main-window browser fixtures. Not production code.
 export function dataIdleRead(command) {
+  if (command === "get_storage_write_state") return { readOnly: false, reasons: [], salvageAvailable: false };
+  if (command === "get_meeting_list_diagnostics") return { items: [] };
   if (command === "list_data_jobs") return [];
   if (command === "get_ready_analysis_flows") return [];
   if (command === "get_model_download_catalog") return { supported: false, entries: [], unknownEntries: 0 };

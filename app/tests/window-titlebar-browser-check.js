@@ -74,7 +74,7 @@ async (page, capturePath = name => name) => {
   results.push("minimum window size, player, scrolling, modal, notifications and forced colors fit correctly");
   for(const phase of ["starting","blocked"]) {
     await boot(`phase=${phase}`); await chrome().waitFor();
-    await page.getByRole("main",{name:phase==="starting"?"起動確認":"起動診断",exact:true}).waitFor();
+    await page.getByRole("main",{name:phase==="starting"?"起動確認":"起動時の案内",exact:true}).waitFor();
     check(await settings.count()===0,"startup mounted theme/storage provider before admission");
     await chrome().getByRole("button",{name:"ウィンドウを閉じる",exact:true}).click();
     check(await callCount("plugin:window|close")===1,`close unavailable during ${phase}`);

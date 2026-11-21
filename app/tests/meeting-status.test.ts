@@ -40,9 +40,9 @@ test("failed recording drafts remain distinct from untouched drafts and saved au
 
 test("recording labels stay independent of live deletion admission and restart eligibility", () => {
   const source=readFileSync(new URL("../src/main.tsx",import.meta.url),"utf8");
-  assert.ok(source.includes("meetingStatusLabel(meeting, state, recovery.snapshot)"));
+  assert.ok(source.includes("meetingStatusLabel(meeting, state, recovery.snapshot, meetingList.byMeeting.get(meeting.id))"));
   const menu=readFileSync(new URL("../src/meeting-deletion-menu.tsx",import.meta.url),"utf8");
-  assert.ok(source.includes("<MeetingDeletionMenu recoveryRunning="));
+  assert.ok(source.includes("<MeetingDeletionMenu recoveryPhase="));
   assert.ok(menu.includes('!deletion.canReviewMeetingId(meeting.id)'));
   assert.ok(!menu.includes('meeting.lifecycle === "recording"'));
   assert.ok(source.includes('selectedMeeting?.lifecycle==="draft"&&selectedMeeting.sourceType==null'));

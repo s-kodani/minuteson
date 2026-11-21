@@ -3,7 +3,8 @@ import { checkedStartupReport } from "./startup-attention-state.ts";
 
 export interface StorageView {
   meetingRoot: string; activeMeetingRoot: string; restartRequired: boolean;
-  modelsRoot: string; bootstrapPath: string; revision: number; origin: "default" | "relocated" | "recovered";
+  modelsRoot: string; bootstrapPath: string; revision: number; origin: "default" | "relocated" | "recovered" | "salvaged";
+  salvageAvailable?: boolean;
   recovery?: import("./startup-attention-state").StartupRecovery | null;
   pendingOperationId: string | null; pendingTarget: string | null;
   keptMoves: { operationId: string; source: string; destination: string; decisionPending: boolean }[];
@@ -13,7 +14,8 @@ export function assertStorageView(s: StorageView): void {
   const path = (p: unknown) => nativeAbsolutePath(p);
   if (!s || ![s.meetingRoot, s.activeMeetingRoot, s.modelsRoot, s.bootstrapPath].every(path)
     || typeof s.restartRequired !== "boolean" || !Number.isSafeInteger(s.revision) || s.revision < 0
-    || !["default", "relocated", "recovered"].includes(s.origin)
+    || !["default", "relocated", "recovered", "salvaged"].includes(s.origin)
+    || (s.salvageAvailable !== undefined && typeof s.salvageAvailable !== "boolean")
     || (s.origin === "recovered" && s.recovery == null)
     || (s.meetingRoot !== s.activeMeetingRoot && !s.restartRequired)
     || (s.pendingOperationId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(s.pendingOperationId))

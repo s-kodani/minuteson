@@ -129,7 +129,7 @@ fn first_placement_schema39_validation_keeps_original_census_and_bytes() {
                 })
                 .unwrap();
         let mut db = Connection::open(&database).unwrap();
-        db.execute_batch(&format!("PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON; DROP TRIGGER audio_import_ready_assets; {}",&sql[start..end])).unwrap();
+        db.execute_batch(&format!("PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON; DROP TABLE IF EXISTS salvage_meetings; DROP TABLE IF EXISTS salvage_receipt; DROP TRIGGER audio_import_ready_assets; {}",&sql[start..end])).unwrap();
         db.execute(
             "UPDATE schema_migrations SET version=39,checksum=?1",
             [digest(sql.as_bytes())],

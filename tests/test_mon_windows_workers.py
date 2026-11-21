@@ -76,7 +76,8 @@ class WorkerExtractionTests(unittest.TestCase):
                        'ModelsDiscoverDetails/ModelsDiscoverDetailsDownloadOptions/'
                        'ModelsDiscoverDetailsDownloadOptionsDraftDownloadButton.svelte')
             files = {'LICENSE': b'license', 'src/llama.cpp': b'native source',
-                     'tools/cli/cli.cpp': b'cli source', ui_path: b'unused web UI'}
+                     'tools/cli/cli.cpp': b'cli source', ui_path: b'old unused web UI',
+                     ui_path.removeprefix('tools/'): b'current unused web UI'}
             with tarfile.open(archive, 'w') as output:
                 for name, data in files.items():
                     member = tarfile.TarInfo('llama-fixed-commit/' + name)
@@ -88,6 +89,7 @@ class WorkerExtractionTests(unittest.TestCase):
             for name in ('LICENSE', 'src/llama.cpp', 'tools/cli/cli.cpp'):
                 self.assertEqual((tree / name).read_bytes(), files[name])
             self.assertFalse((tree / 'tools/ui').exists())
+            self.assertFalse((tree / 'ui').exists())
             self.assertTrue((target / '.complete').is_file())
 
 

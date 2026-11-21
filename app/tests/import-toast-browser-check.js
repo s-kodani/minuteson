@@ -48,7 +48,9 @@ async page => {
     "dismissal cleared canonical failure, restored a removed inline banner or admitted import");
   results.push("modal failure preserves cause and input; closing shows important toast, whose dismissal retains issue without commands");
 
-  await boot(); await open(); await modal.getByRole("button", { name: "閉じる", exact: true }).click();
+  await boot(); await open();
+  await modal.getByRole("textbox", { name: "会議名", exact: true }).fill("編集した会議名");
+  await modal.getByRole("button", { name: "閉じる", exact: true }).click();
   await page.getByRole("dialog", { name: "取り込み確認内容の破棄を確認", exact: true }).getByRole("button", { name: "確認内容を破棄して閉じる", exact: true }).click(); await modal.waitFor({ state: "hidden" });
   await cancelledNotice.waitFor();
   check(await host.locator(".toast-success").count() === 0 && await host.getByRole("alert").count() === 0 && await calls("cancel_audio_import") === 1 && await calls("start_audio_import") === 0, "cancel was labeled saved, failed or executed another action");

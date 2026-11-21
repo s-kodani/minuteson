@@ -316,10 +316,26 @@ fn file_removal_cancel_at_each_durable_boundary_cold_reopens_and_finishes_remain
         let external = f.external.clone();
         drop(f.storage);
         let storage = Storage::open(root).unwrap();
+        let target = storage.get_meeting(&f.meeting).unwrap().unwrap();
+        let other = storage.get_meeting(&f.other).unwrap().unwrap();
+        let assert_target_protected = || {
+            assert!(
+                storage
+                    .rename_meeting(&target.id, "TARGET RENAME", target.lock_version)
+                    .is_err(),
+                "{phase}"
+            );
+            assert!(storage.require_global_data_writable().is_err(), "{phase}");
+        };
+        assert_target_protected();
         let mut saved = read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
         run(&storage, &mut saved, &crate::test_support::never_cancelled).unwrap();
         assert!(saved.removed());
-        assert!(storage.data_write_blocked());
+        assert_target_protected();
+        assert!(!storage.data_write_blocked(), "{phase}");
+        storage
+            .rename_meeting(&other.id, "UNRELATED RENAME", other.lock_version)
+            .unwrap();
         assert_eq!(std::fs::read(other_file).unwrap(), b"KEEP OTHER AUDIO");
         assert_eq!(std::fs::read(external).unwrap(), b"KEEP EXTERNAL EXPORT");
     }
@@ -767,15 +783,32 @@ fn file_removal_sigkill_at_eight_boundaries_reopens_and_finishes_without_touchin
             .unwrap()
             .starts_with(base.path().canonicalize().unwrap()));
         let storage = Storage::open(root).unwrap();
-        assert!(storage.data_write_blocked());
+        let target = storage.get_meeting(&meeting).unwrap().unwrap();
+        let other = storage.get_meeting(&other).unwrap().unwrap();
+        assert!(!storage.data_write_blocked(), "{phase}");
+        assert!(storage.require_global_data_writable().is_err(), "{phase}");
+        assert!(
+            storage
+                .rename_meeting(&target.id, "TARGET RENAME", target.lock_version)
+                .is_err(),
+            "{phase}"
+        );
         let mut r = read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
         run(&storage, &mut r, &crate::test_support::never_cancelled).unwrap();
         assert!(r.removed());
         assert!(!storage.root().join(format!("meetings/{meeting}")).exists());
         assert!(storage.get_meeting(&meeting).unwrap().is_some());
-        assert!(storage.get_meeting(&other).unwrap().is_some());
+        storage
+            .rename_meeting(&other.id, "UNRELATED RENAME", other.lock_version)
+            .unwrap();
         assert_eq!(std::fs::read(other_file).unwrap(), b"KEEP OTHER AUDIO");
         assert_eq!(std::fs::read(external).unwrap(), b"KEEP EXTERNAL EXPORT");
-        assert!(storage.data_write_blocked());
+        assert!(storage.require_global_data_writable().is_err(), "{phase}");
+        assert!(
+            storage
+                .rename_meeting(&target.id, "TARGET RENAME", target.lock_version)
+                .is_err(),
+            "{phase}"
+        );
     }
 }

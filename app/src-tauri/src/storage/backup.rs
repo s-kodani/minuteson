@@ -11,7 +11,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 
 pub(crate) mod archive;
-mod contents;
+pub(in crate::storage) mod contents;
 mod deleted_audio;
 pub(in crate::storage) mod ledger;
 pub(crate) mod operations;
@@ -21,8 +21,6 @@ pub(crate) mod recovery;
 pub(crate) mod relocation;
 pub(in crate::storage) mod restored_audio;
 pub(in crate::storage) mod scratch;
-#[cfg(any(target_os = "macos", windows))]
-pub(crate) mod startup;
 
 #[cfg(test)]
 pub(in crate::storage) fn published_restore_for_rebinding_test(
@@ -70,10 +68,40 @@ pub(in crate::storage) fn published_restore_for_rebinding_test(
             .collect(),
     )
 }
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
+fn delete_meeting_audio_for_test(storage: &Storage, meeting: &str) -> String {
+    use crate::{
+        analysis_worker::AnalysisController, storage::deletion::audio,
+        test_support::never_cancelled,
+    };
+
+    let lease = AnalysisController::default()
+        .begin_data_maintenance(false, false, &never_cancelled)
+        .unwrap();
+    let op = Uuid::new_v4().to_string();
+    let census = audio::Census::capture(storage, meeting, &never_cancelled).unwrap();
+    audio::intent::prepare(
+        storage,
+        &op,
+        &census,
+        audio::intent::Policy {
+            include_unregistered_audio: true,
+            retain_unclassified: true,
+        },
+        &lease,
+        &never_cancelled,
+    )
+    .unwrap();
+    audio::intent::removal::start(storage, &op, &lease, &never_cancelled).unwrap();
+    audio::intent::removal::run(storage, &op, &lease, &never_cancelled).unwrap();
+    audio::intent::removal::completion::finish(storage, &op, &lease, &never_cancelled).unwrap();
+    op
+}
+
+#[cfg(all(test, any(unix, windows)))]
 pub(crate) fn deleted_current_meeting_for_test(storage: &Storage, operation: &str) -> String {
     let meeting = archive::tests::meeting(storage, operation);
-    archive::deleted_audio_tests::deleted(storage, &meeting);
+    delete_meeting_audio_for_test(storage, &meeting);
     meeting
 }
 
@@ -87,7 +115,7 @@ const CAPACITY_RESERVE: u64 = 16 * 1024 * 1024;
 pub(in crate::storage) fn recover_restore_operations(
     root: &Path,
     db: &Connection,
-    registry: Option<&scratch::Registry>,
+    registry: Result<Option<&scratch::Registry>, &str>,
 ) -> Result<(), String> {
     publication::journal::recover_with_policy(root, db, registry)
 }
@@ -316,7 +344,7 @@ impl Storage {
         crate::operation_observation::stage("checking_source", None, "bytes");
         drop(db);
         let (database_size, database_hash) = digest_file(&database, cancelled)?;
-        let snapshot = Snapshot {
+        Ok(Snapshot {
             stage,
             database,
             database_hash,
@@ -326,9 +354,7 @@ impl Storage {
             deleted_audio,
             contents,
             _maintenance: maintenance,
-        };
-        snapshot.verify(cancelled)?;
-        Ok(snapshot)
+        })
     }
 }
 
@@ -392,7 +418,7 @@ fn snapshot_database(
 }
 
 impl Snapshot<'_> {
-    pub(super) fn verify(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
+    fn verify_control(&self, cancelled: &impl Fn() -> bool) -> Result<(), String> {
         if digest_file(&self.database, cancelled)?
             != (self.database_size, self.database_hash.clone())
         {
@@ -402,18 +428,7 @@ impl Snapshot<'_> {
             self._maintenance.storage,
             &read_only(&self.database)?,
             cancelled,
-        )?;
-        for staged in &self.assets {
-            if staged.asset.state == "missing" {
-                // Only validated exclusion metadata is staged; no dummy body.
-                continue;
-            }
-            let (size, hash) = digest_file(&staged.path, cancelled)?;
-            if size != staged.asset.size_bytes as u64 || hash != staged.asset.content_hash {
-                return Err("一時バックアップの管理ファイルが変更されています".into());
-            }
-        }
-        Ok(())
+        )
     }
 }
 

@@ -7,7 +7,7 @@ export function deletionDirectoryLabel(directory: string): string {
   return directory;
 }
 
-export function DirectoryDeletionConfirmation({ kind, name, directory, titleId, heading, blocked, canDelete, onCancel, onDelete }: {
+export function DirectoryDeletionConfirmation({ kind, name, directory, titleId, heading, blocked, canDelete, reason, onCancel, onDelete }: {
   kind: "meeting" | "model";
   name: string;
   directory: string;
@@ -15,6 +15,7 @@ export function DirectoryDeletionConfirmation({ kind, name, directory, titleId, 
   heading: RefObject<HTMLHeadingElement | null>;
   blocked: boolean;
   canDelete: boolean;
+  reason?: string | null;
   onCancel: () => void;
   onDelete: () => void;
 }) {
@@ -23,6 +24,7 @@ export function DirectoryDeletionConfirmation({ kind, name, directory, titleId, 
     <p>{kind === "meeting" ? `「${name}」の音声・文字起こし・議事録などを完全に削除しますか？` : `「${name}」のローカルコピーを完全に削除しますか？`}</p>
     {kind === "meeting" && <p>ボイス登録用に保存した音声と声の特徴量は残ります。</p>}
     <div><span>削除対象フォルダー</span><p className="data-path" style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{deletionDirectoryLabel(directory)}</p></div>
+    {reason && <p role="status">{reason}</p>}
     <div className="analysis-actions">
       <button type="button" className="secondary" data-dialog-cancel disabled={blocked} onClick={onCancel}>キャンセル</button>
       <button type="button" className="stop-button" disabled={blocked || !canDelete} onClick={onDelete}>削除</button>

@@ -8,10 +8,13 @@ export function validateDownloadSource(value: unknown): value is Contract.Downlo
 export function validateEngine(value: unknown): value is Contract.Engine;
 export function validateJobKind(value: unknown): value is Contract.JobKind;
 export function validateJobState(value: unknown): value is Contract.JobState;
+export function validateMeetingBodyPart(value: unknown): value is Contract.MeetingBodyPart;
+export function validateMeetingBodyReview(value: unknown): value is Contract.MeetingBodyReview;
 export function validatePackageFile(value: unknown): value is Contract.PackageFile;
 export function validatePackageManifest(value: unknown): value is Contract.PackageManifest;
 export function validatePauseReason(value: unknown): value is Contract.PauseReason;
 export function validateRecipe(value: unknown): value is Contract.Recipe;
 export function validateRole(value: unknown): value is Contract.Role;
+export function validateSalvageSourceCleanup(value: unknown): value is Contract.SalvageSourceCleanup;
 export function validateTarget(value: unknown): value is Contract.Target;
 export function validateWindowEnvironment(value: unknown): value is Contract.WindowEnvironment;

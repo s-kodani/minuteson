@@ -2,6 +2,8 @@ use crate::native_fs::Metadata;
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
+use std::sync::Mutex;
 use std::time::SystemTime;
 
 pub(crate) mod flac;
@@ -70,10 +72,78 @@ pub struct VerifiedAudio {
     flac: Option<flac::FlacAudio>,
 }
 
+// Keep only the last WAV's proof. No descriptor, samples or durable state are
+// retained. A new file identity or change timestamp requires a new full hash.
+#[derive(Default)]
+pub(crate) struct PlaybackWavCache(Mutex<Option<(String, String)>>);
+
+impl PlaybackWavCache {
+    pub(crate) fn open(
+        &self,
+        path: &Path,
+        size: u64,
+        hash: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<VerifiedAudio, String> {
+        let mut file = File::open(path).map_err(|e| e.to_string())?;
+        let before = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
+        if !before.is_file() || before.len() != size {
+            return Err("音声ファイルのサイズが保存時と一致しません".into());
+        }
+        let identity = reuse::stamp(&before);
+        let hit = self.0.lock().is_ok_and(|proof| {
+            proof
+                .as_ref()
+                .is_some_and(|(verified_hash, stamp)| verified_hash == hash && *stamp == identity)
+        });
+        let audio = if hit {
+            if cancelled() {
+                return Err("音声ファイルの照合を中断しました".into());
+            }
+            let format = wav_format(&mut file, size)?;
+            VerifiedAudio {
+                file,
+                size,
+                identity,
+                modified: before.modified().map_err(|e| e.to_string())?,
+                format,
+                flac: None,
+            }
+        } else {
+            let mut audio = VerifiedAudio::open_cancellable(file, size, hash, cancelled)?;
+            audio.require_wav()?;
+            audio
+        };
+        let current = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if !current.is_file() || reuse::stamp(&current) != audio.identity {
+            return Err("再生準備中に音声ファイルが変更されました".into());
+        }
+        audio.check_unchanged()?;
+        if !hit {
+            if let Ok(mut proof) = self.0.lock() {
+                *proof = Some((hash.to_owned(), audio.identity.clone()));
+            }
+        }
+        Ok(audio)
+    }
+}
+
+fn wav_format(file: &mut File, size: u64) -> Result<PcmFormat, String> {
+    let layout = wave::inspect(file, size)?;
+    Ok(PcmFormat {
+        sample_rate: 16000,
+        channels: 1,
+        frames: layout.frames,
+        data_offset: layout.data_offset,
+        bytes_per_frame: 2,
+        float: false,
+        little_endian: true,
+    })
+}
+
 impl VerifiedAudio {
-    // Interactive playback of a ready managed FLAC: open its header and read
-    // only requested packets. Ingestion, AI and publication still use the full
-    // SHA256 + PCM/MD5 validation below. CAF retains that existing path too.
+    // Exercise header-only access for the legacy FLAC reader.
+    #[cfg(test)]
     pub(crate) fn open_saved_cancellable(
         mut file: File,
         expected_size: u64,
@@ -155,19 +225,7 @@ impl VerifiedAudio {
             let (format, audio) = flac::FlacAudio::open(&mut file, expected_size, cancelled)?;
             (format, Some(audio))
         } else if &magic == b"RIFF" || &magic == b"RF64" {
-            let layout = wave::inspect(&mut file, expected_size)?;
-            (
-                PcmFormat {
-                    sample_rate: 16000,
-                    channels: 1,
-                    frames: layout.frames,
-                    data_offset: layout.data_offset,
-                    bytes_per_frame: 2,
-                    float: false,
-                    little_endian: true,
-                },
-                None,
-            )
+            (wav_format(&mut file, expected_size)?, None)
         } else {
             (read_caf_format(&mut file, expected_size)?, None)
         };

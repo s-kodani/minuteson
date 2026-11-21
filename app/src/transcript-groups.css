@@ -17,3 +17,8 @@
 .transcript-generation-host { justify-content:flex-end; }
 .transcript-generation-host > .analysis-actions { margin:0; }
 .transcript-copy-status { font-size:12px; overflow-wrap:anywhere; }
+.transcript-review-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: inherit;
+}

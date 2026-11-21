@@ -83,29 +83,38 @@ fn restore(app: &tauri::AppHandle) {
 pub(crate) fn retry_startup(window: WebviewWindow) -> Result<(), mon_contracts::AppError> {
     let result: Result<(), String> = (|| {
         crate::startup_reset::check_idle(window.app_handle())?;
+        crate::startup_salvage::require_idle(window.app_handle())?;
         window
             .state::<crate::startup_attention::Startup>()
             .admit_command(window.label(), "retry_startup")?;
-        #[cfg(windows)]
-        {
-            // The relay waits for this process to exit before starting its successor,
-            // so the successor cannot be mistaken for a duplicate of this instance.
-            windows::schedule_restart()?;
-            window
-                .state::<crate::ExitGuard>()
-                .0
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            window.app_handle().exit(0);
-            return Ok(());
-        }
-        // Tauri's synchronous restart may skip RunEvent::Exit on the main thread.
-        // Release the macOS rendezvous before starting the replacement process.
-        #[cfg(target_os = "macos")]
-        tauri_plugin_single_instance::destroy(window.app_handle());
-        #[cfg(not(windows))]
-        window.app_handle().restart();
+        prepare_restart()?;
+        restart(window.app_handle());
+        Ok(())
     })();
     result.map_err(|message| mon_contracts::AppError::from_command("retry_startup", message))
+}
+
+pub(crate) fn prepare_restart() -> Result<(), String> {
+    // On Windows the relay waits for this process to exit before starting its successor.
+    #[cfg(windows)]
+    windows::schedule_restart()?;
+    Ok(())
+}
+
+pub(crate) fn restart(app: &tauri::AppHandle) {
+    app.state::<crate::ExitGuard>()
+        .0
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    #[cfg(windows)]
+    app.exit(0);
+    // Release the rendezvous before requesting the normal exit lifecycle.
+    #[cfg(target_os = "macos")]
+    {
+        tauri_plugin_single_instance::destroy(app);
+        app.request_restart();
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    app.request_restart();
 }
 
 #[cfg(test)]

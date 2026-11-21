@@ -229,11 +229,12 @@ fn interrupted_scoped_deletion_keeps_its_fence_and_can_resume() {
 }
 
 #[test]
-fn cold_restart_keeps_legacy_global_recovery_for_a_scoped_intent() {
+fn cold_restart_preserves_only_the_pending_meeting_deletion_scope() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("data");
     let storage = Storage::open(path.clone()).unwrap();
     let target = storage.create_meeting("再起動して保持").unwrap().id;
+    let other = storage.create_meeting("別の会議").unwrap();
     let controller = AnalysisController::default();
     let lease = controller
         .begin_meeting_deletion(&storage, &target)
@@ -259,12 +260,14 @@ fn cold_restart_keeps_legacy_global_recovery_for_a_scoped_intent() {
     drop(lease);
     drop(storage);
     let reopened = Storage::open(path.clone()).unwrap();
-    assert!(reopened.data_write_blocked());
-    assert!(controller
-        .begin_meeting_deletion(&reopened, &target)
-        .is_err());
+    assert!(!reopened.data_write_blocked());
+    assert!(reopened.require_global_data_writable().is_err());
+    assert!(reopened.begin_meeting_work(&target, "job", None).is_err());
+    reopened
+        .rename_meeting(&other.id, "別の会議は編集可能", other.lock_version)
+        .unwrap();
     let lease = controller
-        .begin_deletion_maintenance(&reopened, &p.operation_id, false, false, &|| false)
+        .begin_meeting_deletion(&reopened, &target)
         .unwrap();
     let mut pending = Prepared::pending(&reopened, &p.operation_id, &|| false).unwrap();
     let next = pending.preview();
@@ -274,7 +277,10 @@ fn cold_restart_keeps_legacy_global_recovery_for_a_scoped_intent() {
             .unwrap()
             .retained
     );
-    assert!(reopened.restart_required());
+    reopened.release_meeting_deletion(&target).unwrap();
+    assert!(!reopened.restart_required());
+    assert!(reopened.require_global_data_writable().is_ok());
+    assert!(reopened.begin_meeting_work(&target, "job", None).is_ok());
     drop(lease);
     drop(pending);
     drop(reopened);

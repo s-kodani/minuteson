@@ -213,6 +213,7 @@ impl FlacAudio {
 
     // Normal file playback: header-only open, sequential packet decoding and
     // the demuxer's byte search for seeks. No whole-file hash, scan or decode.
+    #[cfg(test)]
     pub(super) fn open_saved(
         file: &mut File,
         size: u64,

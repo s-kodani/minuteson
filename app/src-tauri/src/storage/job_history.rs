@@ -44,15 +44,7 @@ impl Storage {
             .map_err(|e| e.to_string());
         rows
     }
-    #[cfg(test)]
     pub(crate) fn history_source_records(&self, cutoff: i64) -> Result<Vec<Entry>, String> {
-        self.history_source_records_including_recordings(cutoff, true)
-    }
-    pub(crate) fn history_source_records_including_recordings(
-        &self,
-        cutoff: i64,
-        recordings: bool,
-    ) -> Result<Vec<Entry>, String> {
         let db = self
             .connection
             .lock()
@@ -89,12 +81,12 @@ impl Storage {
                     .map_err(|e| e.to_string())?,
             );
         }
-        if recordings {
-            let mut q=db.prepare("SELECT r.id,r.meeting_id,m.title,r.state,r.ended_at_utc_ms,r.updated_at FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.updated_at>=?1 AND r.state IN ('saved','failed','interrupted','stopping') AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=r.meeting_id AND p.domain='meetings')").map_err(|e|e.to_string())?;
+        {
+            let mut q=db.prepare("SELECT r.id,r.meeting_id,m.title,r.state,r.updated_at FROM recording_sessions r JOIN meetings m ON m.id=r.meeting_id WHERE r.updated_at>=?1 AND r.state IN ('saved','failed','interrupted','stopping') AND NOT EXISTS(SELECT 1 FROM restore_provenance p WHERE p.meeting_id=r.meeting_id AND p.domain='meetings')").map_err(|e|e.to_string())?;
             let rows = q
                 .query_map([cutoff], |r| {
                     let state: String = r.get(3)?;
-                    let updated: i64 = r.get(5)?;
+                    let updated: i64 = r.get(4)?;
                     let outcome = match state.as_str() {
                         "failed" => "failed",
                         "stopping" => "running",
@@ -217,40 +209,84 @@ impl Storage {
                     .map_err(|e| e.to_string())?,
             );
         }
-        drop(db);
-        // Saving the session row precedes canonical publication/cleanup. Match
-        // the finalizer's durable evidence, with no source DB lock during hashes.
-        for entry in records
-            .iter_mut()
-            .filter(|entry| entry.kind == "recording_save")
-        {
+        Ok(records)
+    }
+
+    // This receipt only reuses an observation made for the history. Playback,
+    // recovery and publication still verify their own source bytes.
+    fn recording_history_source(
+        &self,
+        session: &str,
+        meeting: &str,
+    ) -> Result<Option<String>, String> {
+        if !self.recording_save_committed(session, meeting)? {
+            return Ok(None);
+        }
+        let plan = self.canonical_audio_plan(meeting)?;
+        let track = &plan.tracks[0];
+        let path = self.meeting_mix_path(meeting, track)?;
+        if path.canonicalize().map_err(|e| e.to_string())? != path {
+            return Err("共通WAVの保存先が変更されています".into());
+        }
+        let metadata = crate::native_fs::metadata(&path).map_err(|e| e.to_string())?;
+        if !metadata.is_file() || u64::try_from(track.chunks[0].size).ok() != Some(metadata.len()) {
+            return Err("共通WAVのサイズが保存時と一致しません".into());
+        }
+        let source = serde_json::to_vec(&(
+            "recording-history-verification-v1",
+            session,
+            meeting,
+            plan,
+            crate::audio::reuse::stamp(&metadata),
+        ))
+        .map_err(|e| e.to_string())?;
+        Ok(Some(format!("{:x}", Sha256::digest(source))))
+    }
+
+    pub(crate) fn verify_recording_history_source(
+        &self,
+        entry: &mut Entry,
+        previous: Option<&str>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Option<String> {
+        let result = (|| -> Result<Option<String>, String> {
             let session = entry
                 .id
                 .strip_prefix("recording_save:")
                 .ok_or("録音履歴IDが不正です")?;
-            match self.recording_save_complete(
-                session,
-                entry
-                    .meeting_id
-                    .as_deref()
-                    .ok_or("録音履歴の会議が不明です")?,
-                &|| false,
-            ) {
-                Ok(true) => {
-                    entry.state = "succeeded".into();
-                    entry.finished_at = Some(entry.observed_at);
+            let meeting = entry
+                .meeting_id
+                .as_deref()
+                .ok_or("録音履歴の会議が不明です")?;
+            let Some(source) = self.recording_history_source(session, meeting)? else {
+                return Ok(None);
+            };
+            if previous != Some(source.as_str()) {
+                if !self.recording_save_complete(session, meeting, cancelled)? {
+                    return Ok(None);
                 }
-                Ok(false) => {}
-                Err(error) => {
-                    entry.state = "interrupted".into();
-                    entry.finished_at = None;
-                    entry.detail = Some(format!(
-                        "録音の保存完了を確認できません。元の記録を保持しています: {error}"
-                    ));
+                if self.recording_history_source(session, meeting)?.as_ref() != Some(&source) {
+                    return Err("照合中に共通WAVの保存記録またはファイルが変更されました".into());
                 }
             }
+            Ok(Some(source))
+        })();
+        match result {
+            Ok(Some(source)) => {
+                entry.state = "succeeded".into();
+                entry.finished_at = Some(entry.observed_at);
+                Some(source)
+            }
+            Ok(None) => None,
+            Err(error) => {
+                entry.state = "interrupted".into();
+                entry.finished_at = None;
+                entry.detail = Some(format!(
+                    "録音の保存完了を確認できません。元の記録を保持しています: {error}"
+                ));
+                None
+            }
         }
-        Ok(records)
     }
 }
 
@@ -290,14 +326,19 @@ mod tests {
         assert!(store
             .recording_save_complete(&session, &meeting, &|| false)
             .unwrap());
-        let rows = store.history_source_records(0).unwrap();
-        assert_eq!(
-            rows.iter()
+        let candidate = || {
+            store
+                .history_source_records(0)
+                .unwrap()
+                .into_iter()
                 .find(|e| e.id == format!("recording_save:{session}"))
                 .unwrap()
-                .state,
-            "succeeded"
-        );
+        };
+        let mut verified = candidate();
+        let proof = store
+            .verify_recording_history_source(&mut verified, None, &|| false)
+            .unwrap();
+        assert_eq!(verified.state, "succeeded");
         store
             .connection
             .lock()
@@ -307,11 +348,10 @@ mod tests {
                 [&meeting],
             )
             .unwrap();
-        let rows = store.history_source_records(0).unwrap();
-        let pending = rows
-            .iter()
-            .find(|e| e.id == format!("recording_save:{session}"))
-            .unwrap();
+        let mut pending = candidate();
+        assert!(store
+            .verify_recording_history_source(&mut pending, Some(&proof), &|| false)
+            .is_none());
         assert_eq!(pending.state, "interrupted");
         assert!(pending.finished_at.is_none());
         assert!(!store
@@ -329,19 +369,76 @@ mod tests {
         let plan = store.canonical_audio_plan(&meeting).unwrap();
         let path = store.meeting_mix_path(&meeting, &plan.tracks[0]).unwrap();
         std::fs::write(path, b"invalid canonical wav").unwrap();
-        let rows = store.history_source_records(0).unwrap();
-        let unverified = rows
-            .iter()
-            .find(|e| e.id == format!("recording_save:{session}"))
-            .unwrap();
+        let mut unverified = candidate();
+        assert!(store
+            .verify_recording_history_source(&mut unverified, Some(&proof), &|| false)
+            .is_none());
         assert_eq!(unverified.state, "interrupted");
         assert!(unverified
             .detail
             .as_ref()
             .is_some_and(|detail| detail.contains("保存完了を確認できません")));
-        // Page refreshes do not hash every existing meeting repeatedly.
+    }
+
+    #[test]
+    fn recording_history_reuses_unchanged_wav_after_reopen_and_detects_modified_bytes() {
+        use std::cell::Cell;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Storage::open(dir.path().into()).unwrap();
+        let (meeting, session, _, _) = super::super::recordings::tests::saved_probe_fixture(&store);
+        store.finalize_recording(&session).unwrap();
+        drop(store);
+        let candidate = |store: &Storage| {
+            store
+                .history_source_records(0)
+                .unwrap()
+                .into_iter()
+                .find(|e| e.id == format!("recording_save:{session}"))
+                .unwrap()
+        };
+        let store = Storage::open(dir.path().into()).unwrap();
+        let plan = store.canonical_audio_plan(&meeting).unwrap();
+        let size = plan.tracks[0].chunks[0].size;
+        let legacy_checks = Cell::new(0);
         assert!(store
-            .history_source_records_including_recordings(0, false)
-            .is_ok());
+            .recording_save_complete(&session, &meeting, &|| {
+                legacy_checks.set(legacy_checks.get() + 1);
+                false
+            })
+            .unwrap());
+        assert!(legacy_checks.get() > 0);
+        let proof = store
+            .verify_recording_history_source(&mut candidate(&store), None, &|| false)
+            .unwrap();
+        drop(store);
+        let store = Storage::open(dir.path().into()).unwrap();
+        let mut reused = candidate(&store);
+        assert_eq!(
+            store.verify_recording_history_source(&mut reused, Some(&proof), &|| {
+                panic!("unchanged audio must not enter canonical byte verification")
+            }),
+            Some(proof.clone())
+        );
+        assert_eq!(reused.state, "succeeded");
+        println!("Unchanged restart: previous WAV SHA-256 input {size} bytes, durable history receipt 0 WAV bytes");
+
+        let path = store.meeting_mix_path(&meeting, &plan.tracks[0]).unwrap();
+        let mut bytes = std::fs::read(&path).unwrap();
+        let last = bytes.last_mut().unwrap();
+        *last ^= 1;
+        std::fs::write(path, bytes).unwrap();
+        let mut changed = candidate(&store);
+        let checks = Cell::new(0);
+        assert!(store
+            .verify_recording_history_source(&mut changed, Some(&proof), &|| {
+                checks.set(checks.get() + 1);
+                false
+            })
+            .is_none());
+        assert!(
+            checks.get() > 0,
+            "same-size modified WAV must require a fresh digest"
+        );
+        assert_eq!(changed.state, "interrupted");
     }
 }

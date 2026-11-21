@@ -74,11 +74,11 @@ fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn capacity(parent: &Path) -> Result<u64, String> {
+pub(super) fn capacity(parent: &Path) -> Result<u64, String> {
     crate::windows_files::available(parent)
 }
 #[cfg(unix)]
-fn capacity(parent: &Path) -> Result<u64, String> {
+pub(super) fn capacity(parent: &Path) -> Result<u64, String> {
     let path = std::ffi::CString::new(parent.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {

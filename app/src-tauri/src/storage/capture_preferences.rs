@@ -10,7 +10,7 @@ struct Preference {
     microphone_uid: String,
 }
 
-fn load(db: &Connection) -> Result<(Option<String>, i64), String> {
+pub(super) fn load(db: &Connection) -> Result<(Option<String>, i64), String> {
     let row: Option<(Option<String>, String, i64)> = db.query_row(
         "SELECT CASE WHEN length(CAST(value_json AS BLOB))<=4096 THEN value_json END,content_hash,lock_version FROM app_settings WHERE key=?1",
         [KEY], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),

@@ -288,6 +288,7 @@ impl Storage {
             return Err("取り込み保存の検証を停止しました".into());
         }
         let before = self.audio_import(id)?;
+        let _owner = self.begin_meeting_work(&before.meeting_id, "import", None)?;
         if before.state == "ready" {
             self.publish_import_wav(&before.meeting_id, cancelled)?;
             return Ok(before);
@@ -521,37 +522,77 @@ impl Storage {
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;
-            let mut q=db.prepare("SELECT i.id FROM audio_imports i JOIN audio_import_commits p ON p.import_id=i.id WHERE (i.state='failed' AND i.error_code='interrupted') OR (i.state='converting' AND i.error_code='finalize_pending') ORDER BY i.created_at").map_err(|e|e.to_string())?;
+            let unreserved = super::meeting_access::unreserved_sql(&db, "i.meeting_id")?;
+            let mut q = db.prepare(&format!(
+                "SELECT i.id,i.meeting_id FROM audio_imports i JOIN audio_import_commits p ON p.import_id=i.id
+                 WHERE ((i.state='failed' AND i.error_code='interrupted') OR (i.state='converting' AND i.error_code='finalize_pending')){unreserved} ORDER BY i.created_at"
+            )).map_err(|e|e.to_string())?;
             let ids = q
-                .query_map([], |r| r.get::<_, String>(0))
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
                 .map_err(|e| e.to_string())?;
-            ids.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?
+            ids.filter_map(|row| match row {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    self.startup_diagnostic(None, "audio_import_row", &error.to_string());
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
         };
         let mut recovered = Vec::new();
-        for id in ids {
+        for (id, meeting) in ids {
             if cancelled() {
                 return Err("取り込み回復の検証を停止しました".into());
             }
-            let snapshot = self.audio_import(&id)?;
-            let base = self.audio_import_directory(&snapshot)?;
-            if base.join("manifest.json").exists() {
-                // Complete but invalid evidence is retained for inspection.
-                match crate::audio_finalization::complete(
-                    &|| cancelled() || self.data_write_blocked(),
-                    || self.finalize_audio_import_cancellable(&id, cancelled),
-                ) {
-                    Ok(saved) => recovered.push(saved),
-                    Err(error) => {
-                        if cancelled() {
-                            return Err(error);
-                        }
-                        self.fail_audio_import(&id, "interrupted", &error)?;
+            let result = (|| {
+                let _owner = self.begin_meeting_work(&meeting, "import", None)?;
+                {
+                    let db = self
+                        .connection
+                        .lock()
+                        .map_err(|_| "DBロックを取得できません")?;
+                    if super::deletion::fence::audio_pending(&db, &meeting)?
+                        || super::deletion::audio::source_deleted(&db, &meeting)?
+                        || super::salvage_schema::meeting(&db, &meeting)?
+                            .is_some_and(|record| record.audio_unavailable.is_some())
+                    {
+                        return Ok(None);
                     }
                 }
-            } else {
-                self.fail_audio_import(&id,"interrupted","前回の取り込みは音声確定前に中断しました。元ファイルから再度取り込んでください")?;
-                self.cleanup_audio_import(&id)?;
+                let snapshot = self.audio_import(&id)?;
+                let base = self.audio_import_directory(&snapshot)?;
+                if base
+                    .join("manifest.json")
+                    .try_exists()
+                    .map_err(|error| error.to_string())?
+                {
+                    match crate::audio_finalization::complete(
+                        &|| cancelled() || self.data_write_blocked(),
+                        || self.finalize_audio_import_cancellable(&id, cancelled),
+                    ) {
+                        Ok(saved) => Ok(Some(saved)),
+                        Err(error) => {
+                            if !cancelled() {
+                                self.fail_audio_import(&id, "interrupted", &error)?;
+                            }
+                            Err(error)
+                        }
+                    }
+                } else {
+                    let error = "前回の取り込みは音声確定前に中断しました。元ファイルから再度取り込んでください";
+                    self.fail_audio_import(&id, "interrupted", error)?;
+                    self.cleanup_audio_import(&id)?;
+                    Err(error.into())
+                }
+            })();
+            match result {
+                Ok(Some(import)) => recovered.push(import),
+                Ok(None) => {}
+                Err(error) if cancelled() => return Err(error),
+                Err(error) => {
+                    self.startup_diagnostic(Some(&meeting), "audio_recovery", &error);
+                    crate::internal_logs::report_error("audio_recovery", &error);
+                }
             }
         }
         Ok(recovered)

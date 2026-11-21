@@ -432,7 +432,9 @@ fn scratch_empty_unproven_journal_is_not_initialized_or_used_to_adopt_named_tree
         .join(".mon-stage-00000000-0000-0000-0000-000000000000");
     std::fs::create_dir(&tree).unwrap();
     std::fs::write(tree.join("unknown"), b"unknown bootstrap gap").unwrap();
-    assert!(Storage::open(root.path().into()).is_err());
+    let reopened = Storage::open(root.path().into()).unwrap();
+    assert!(!reopened.common_write_hold());
+    assert!(reopened.backup_stage().is_err());
     assert_eq!(journal.metadata().unwrap().len(), 0);
     assert_eq!(
         std::fs::read(tree.join("unknown")).unwrap(),

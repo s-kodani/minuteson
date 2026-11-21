@@ -135,7 +135,7 @@ pub(super) fn validate_splits(
     payload: &mut TranscriptDraftPayload,
     speakers: &HashSet<String>,
     utterances: &mut HashSet<String>,
-) -> Result<(), String> {
+) -> Result<(), super::drafts::DraftValidation> {
     let edits: HashMap<_, _> = payload
         .utterances
         .iter()
@@ -153,7 +153,7 @@ pub(super) fn validate_splits(
         let (start,end,text):(i64,i64,String)=db.query_row(
             "SELECT start_us,end_us,effective_text FROM utterances WHERE id=?1 AND analysis_revision_id=?2",
             params![split.source_utterance_id,base],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-        ).map_err(|e|e.to_string())?;
+        )?;
         if split.source_effective_text
             != edits
                 .get(split.source_utterance_id.as_str())
@@ -184,7 +184,7 @@ pub(super) fn validate_splits(
                     "分割先のID・時刻・本文が不正です。元区間を隙間なく覆ってください".into(),
                 );
             }
-            let collision:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM utterances WHERE analysis_revision_id=?1 AND lineage_id=?2)",params![base,part.id],|r|r.get(0)).map_err(|e|e.to_string())?;
+            let collision:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM utterances WHERE analysis_revision_id=?1 AND lineage_id=?2)",params![base,part.id],|r|r.get(0))?;
             if collision {
                 return Err("分割先の由来IDが既存発言と重複しています".into());
             }

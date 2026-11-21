@@ -1,5 +1,16 @@
 //! Meeting deletion is staged: consent, fixed file removal, then row removal.
 //! User-facing deletion requires shared admission and explicit scope review.
+
+#[cfg(any(unix, windows))]
+pub(super) fn history_database_identity(
+    storage: &super::Storage,
+) -> Result<mon_native::identity::Identity, String> {
+    storage
+        .managed_anchor
+        .identity()
+        .map(|(_, database)| database)
+}
+
 #[cfg(any(unix, windows))]
 pub(crate) mod audio;
 #[cfg(any(unix, windows))]
@@ -32,6 +43,8 @@ pub(crate) mod relocation;
 mod removal;
 #[cfg(any(unix, windows))]
 mod renewal;
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) mod salvage_source;
 #[cfg(any(unix, windows))]
 pub(in crate::storage) mod startup;
 #[cfg(any(unix, windows))]

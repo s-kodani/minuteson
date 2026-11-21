@@ -68,6 +68,33 @@ async (page, baseUrl="http://127.0.0.1:1420")=>{
   await page.getByText("録音・音声保存が完了すると削除できます。",{exact:true}).waitFor();
   results.push("AI, model preparation, recording and exclusive blockers retain their actual reasons");
   await boot();
+  await page.evaluate(()=>{window.modelAdmissionFixture.pendingModel=true;});
+  const pending=page.getByRole("button",{name:"残りの削除を確認",exact:true});
+  await pending.waitFor();
+  if(!await button().isDisabled()||!await pending.isEnabled())throw Error("the read-only fence also blocked the model's own confirmed recovery lane");
+  const originalViewport=page.viewportSize();
+  for(const width of [originalViewport.width,640]){
+    await page.setViewportSize({...originalViewport,width});
+    const layout=await pending.evaluate(button=>{
+      const explanation=button.closest(".model-deletion-pending").querySelector("p").getBoundingClientRect();
+      const action=button.getBoundingClientRect();
+      return { gap:action.top-explanation.bottom, inset:Math.abs(action.left-explanation.left) };
+    });
+    if(layout.gap<8||layout.inset>1)throw Error(`pending model description and action are crowded or misaligned at ${width}px`);
+  }
+  await page.setViewportSize(originalViewport);
+  await pending.click();
+  await page.waitForFunction(()=>window.modelAdmissionFixture.calls.some(call=>call.command==="review_pending_model_deletion"&&call.args.operationId==="22222222-2222-4222-8222-222222222223"));
+  await page.evaluate(()=>window.modelAdmissionFixture.finishReview());
+  const recovery=page.getByRole("dialog",{name:"モデルを削除",exact:true});
+  await recovery.getByRole("button",{name:"削除",exact:true}).waitFor();
+  if(!await recovery.getByRole("button",{name:"削除",exact:true}).isEnabled())throw Error("verified pending confirmation could not proceed");
+  await recovery.getByRole("button",{name:"キャンセル",exact:true}).click();
+  await page.evaluate(()=>{window.modelAdmissionFixture.reviewAllowed=false;});
+  await page.getByText(/別の未完了保守操作を先に確認してください/).waitFor();
+  if(await pending.count())throw Error("an unrelated protection still offered the model review");
+  results.push("only the verified pending model deletion remains reviewable while ordinary writes are held");
+  await boot();
   await page.evaluate(async()=>{
     const f=window.modelAdmissionFixture;
     f.otherProgress=[{id:"analysis",kind:"transcription",state:"running",target:"別会議",label:"文字起こし中",completed:null,total:null},{id:"recovery",kind:"recording_save",state:"running",target:"回復する会議",label:"録音を保存中",completed:null,total:null}];

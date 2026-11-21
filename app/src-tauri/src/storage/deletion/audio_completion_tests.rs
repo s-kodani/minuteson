@@ -5,6 +5,7 @@ use crate::{
     analysis_worker::AnalysisController,
     storage::{
         deletion::audio::{
+            self,
             intent::{prepare, Policy},
             tests::Fixture,
         },
@@ -623,7 +624,7 @@ fn old_queued_audio_job_cannot_acquire_but_fixed_input_stays_readable() {
     assert_eq!(f.storage.list_jobs(&f.meeting).unwrap()[0].state, "queued");
 }
 #[test]
-fn deleted_queued_audio_never_starves_other_meeting_and_corrupt_history_is_not_skipped() {
+fn deleted_or_corrupt_audio_job_stays_queued_without_starving_other_meetings() {
     for corrupt in [false, true] {
         let f = Fixture::new();
         let old = f
@@ -639,11 +640,6 @@ fn deleted_queued_audio_never_starves_other_meeting_and_corrupt_history_is_not_s
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-        let other = f.storage.create_meeting("OTHER").unwrap();
-        let next = f
-            .storage
-            .enqueue_job(audio_job(&other.id, "new-queued"))
-            .unwrap();
         if corrupt {
             f.storage
                 .connection
@@ -655,10 +651,15 @@ fn deleted_queued_audio_never_starves_other_meeting_and_corrupt_history_is_not_s
                 )
                 .unwrap();
             assert!(f.storage.acquire_next_job().is_err());
-            assert_eq!(f.storage.get_job(&next.id).unwrap().state, "queued");
         } else {
-            assert_eq!(f.storage.acquire_next_job().unwrap().unwrap().id, next.id);
+            assert!(f.storage.acquire_next_job().unwrap().is_none());
         }
+        let other = f.storage.create_meeting("OTHER").unwrap();
+        let next = f
+            .storage
+            .enqueue_job(audio_job(&other.id, "new-queued"))
+            .unwrap();
+        assert_eq!(f.storage.acquire_next_job().unwrap().unwrap().id, next.id);
         assert_eq!(f.storage.get_job(&old.id).unwrap().state, "queued");
     }
 }
@@ -822,13 +823,21 @@ fn failed_audio_retry_refuses_even_fixed_cached_input_and_preserves_original() {
     assert_eq!(f.storage.list_jobs(&f.meeting).unwrap(), vec![source]);
 }
 #[test]
-fn cold_pending_completion_requires_restart_then_clean_startup_accepts_typed_audio_receipt() {
+fn cold_pending_completion_preserves_scoped_access_and_typed_audio_receipt_on_reopen() {
     let mut f = Fixture::new();
     let lease = owner();
     let op = removed(&f, &lease);
     drop(lease);
     reopen(&mut f);
-    assert!(f.storage.data_write_blocked());
+    assert!(!f.storage.data_write_blocked());
+    assert!(f.storage.require_global_data_writable().is_err());
+    assert!(
+        audio::require_source(&f.storage.connection.lock().unwrap(), &f.meeting)
+            .is_err_and(|error| error.contains("削除の確認・処理中"))
+    );
+    f.storage
+        .create_meeting("WHILE AUDIO DELETION IS PENDING")
+        .unwrap();
     let lease = resume(&f, &op);
     assert!(finish(
         &f.storage,
@@ -838,12 +847,14 @@ fn cold_pending_completion_requires_restart_then_clean_startup_accepts_typed_aud
     )
     .unwrap()
     .completed());
-    assert!(f.storage.data_write_blocked());
-    assert!(f.storage.create_meeting("WAIT RESTART").is_err());
+    assert!(!f.storage.restart_required());
+    f.storage.require_global_data_writable().unwrap();
+    assert!(deleted(&f.storage.connection.lock().unwrap(), &f.meeting).unwrap());
     drop(lease);
     reopen(&mut f);
     assert!(!f.storage.data_write_blocked());
     assert_eq!(hint(&f, &op), None);
+    assert!(deleted(&f.storage.connection.lock().unwrap(), &f.meeting).unwrap());
     f.storage.create_meeting("AFTER RESTART").unwrap();
 }
 #[test]

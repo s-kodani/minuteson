@@ -218,7 +218,9 @@ fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
             readonly_schema39(layout)?
         }
     };
-    let actual = schema(db)?;
+    crate::storage::salvage_schema::verify(db).map_err(|error| error.to_string())?;
+    let mut actual = schema(db)?;
+    actual.retain(|(_, name, _, _)| !crate::storage::salvage_schema::owns_object(name));
     if actual != expected.objects {
         return Err("削除対象DBの構造・保護制約が既知の形式と一致しません".into());
     }
@@ -458,6 +460,11 @@ fn closed_scope(db: &Connection, meeting: &str, check: &impl Fn() -> bool) -> Re
                 continue;
             };
             if child == "maintenance_operations" && parent == "meetings" && action == "SET NULL" {
+                continue;
+            }
+            // Derived diagnosis is bound to the exact meeting by the verified
+            // extension schema. It has no native deletion authority.
+            if child == "salvage_meetings" && parent == "meetings" && action == "CASCADE" {
                 continue;
             }
             let own = TARGETS

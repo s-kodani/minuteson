@@ -25,6 +25,8 @@ test("deletion requires checksum-selected SQL objects and fences prior39 admissi
 test("missing deletion journals cannot be bypassed by legacy audio admission", () => {
   const code = source("audio_completion.rs");
   assert.doesNotMatch(code, /legacy_without_journal/);
-  assert.match(code, /if !has_table \{\s*return Err\("現行DBの音声削除台帳が欠落/);
+  assert.match(code, /if !has_table \{\s*return if require_ledger \{\s*Err\("現行DBの音声削除台帳が欠落/);
+  assert.match(code, /fn deleted\(db: &Connection, meeting: &str\)[\s\S]*?completed_for_meeting\(db, meeting, true\)\?/);
+  assert.match(code, /fn salvage_deleted\([\s\S]*?if ids\.is_empty\(\) \{\s*return Ok\(false\);\s*\}[\s\S]*?verify_completed_for_meeting\(db, meeting, &ids, Some\(&anchor\), check\)\?/);
   for (const file of ["intent.rs", "audio_intent.rs", "completion.rs", "audio_removal.rs", "removal.rs"]) assert.doesNotMatch(source(file), /historical_completed_fixture|historical_progress_fixture|historical_manifest_fixture/);
 });

@@ -24,6 +24,10 @@ import { backgroundReadFailure } from "./background-read-failure";
 import { assertCloseImport } from "./application-close";
 
 type Book={payload:VocabularyEntry[];lockVersion:number};
+const defaultTitle = (source: ImportSnapshot) => source.fileName?.replace(/\.[^.]+$/u, "") ?? "";
+function editedInput(source: ImportSnapshot | null, input: { title: string; terms: VocabularyEntry[]; numSpeakers: number | null }) {
+  return source?.phase === "ready" && (input.title !== defaultTitle(source) || input.terms.length > 0 || input.numSpeakers !== null);
+}
 export function AudioImportPanel({locked,recordingActive,visible,overlayHost,modelCleanupActive=false,showNewRecording=true,withSavedEdits,onSaved,onNewRecording}: {
   locked:boolean;recordingActive:boolean;visible:boolean;showNewRecording?:boolean;modelCleanupActive?:boolean;
   overlayHost:HTMLElement|null;
@@ -43,6 +47,7 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,mod
   const scope=useSettingsModalScope();
   const ownDialog=useRef<HTMLDialogElement>(null),dialog=scope?.dialog??ownDialog,opener=useRef<HTMLElement|null>(null);
   const snapshotRef=useRef(snapshot),selectRef=useRef<(path:string|null)=>Promise<void>>(async()=>{});
+  const inputSource = useRef({ token: null as string | null, ready: false });
   const delivered=useRef<string|null>(null),mounted=useRef(true), selecting=useRef(false);
   const [openFailed,setOpenFailed]=useState(false);
   const lastProgress = importProgress(snapshot);
@@ -54,6 +59,14 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,mod
     const value=acceptImport(snapshotRef.current,next);
     if (value !== next) return;
     snapshotRef.current=value; setSnapshot(value);
+    const source = inputSource.current;
+    const newInspection = value.phase === "inspecting" && source.token !== value.token;
+    const newSelection = value.phase === "ready" && (source.token !== value.token || !source.ready);
+    if (newInspection || newSelection) {
+      inputSource.current = { token: value.token, ready: newSelection };
+      setTitle(newSelection ? defaultTitle(value) : "");
+      setTerms([]); setPage(0); setNumSpeakers(null); setVocabularyOpen(false);
+    }
     readFailure.recovered(); setReadStatus("");
   };
   const reportFailure=(cause:unknown)=>{ setError(String(cause)); return true; };
@@ -118,27 +131,30 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,mod
     if (modelCleanupActive) return;
     if(selecting.current||busy||snapshotRef.current?.busy||locked||recordingActive||snapshotRef.current?.recordingBlocked){setError("録音・取り込み・保存中は音声を選べません。");return;}
     const sourceOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const expectedInput = JSON.stringify(inputRef.current), expectedToken = snapshotRef.current?.token;
+    const previous = snapshotRef.current;
+    const expectedInput = JSON.stringify(inputRef.current), expectedToken = previous?.token;
     selecting.current=true;
     const change = async (propagateFailure = false) => {
       const action = async()=>{
         if (!open) opener.current=sourceOpener;
-        setError("");setOpenFailed(false);setVocabularyOpen(false);setOpen(true);setBusy(true);setCommon(null);setTerms([]);setPage(0);setTitle("");setNumSpeakers(null);
-        try{const value=await invoke<ImportSnapshot>("select_audio_import",{path});accept(value);await loadCommon();if(value.phase==="idle")setOpen(false);}
+        setError("");setOpenFailed(false);setVocabularyOpen(false);setOpen(true);setBusy(true);
+        try {
+          const value = await invoke<ImportSnapshot>("select_audio_import", { path });
+          accept(value);
+          const current = snapshotRef.current;
+          if (current?.phase === "idle") setOpen(false);
+          else if (current?.token !== expectedToken || !common) { setCommon(null); await loadCommon(); }
+        }
         catch(cause){if (propagateFailure) throw cause; reportFailure(cause);}finally{setBusy(false);}
       };
       if (propagateFailure) await withConfirmedEdits(withSavedEdits, action); else await withSavedEdits(action);
     };
     try {
-      if (open && (terms.length || title || numSpeakers!==null)) await confirm({ opener: sourceOpener, title: "取り込み入力の破棄と選び直しを確認", target: snapshotRef.current?.fileName ?? title, confirmLabel: "入力を破棄して音声を選び直す", message: "会議名・話者数・用語入力を破棄して音声を選び直します。この入力は復元できません。元ファイルと保存済み会議は変更しません。", validate: () => JSON.stringify(inputRef.current) === expectedInput && snapshotRef.current?.token === expectedToken && !snapshotRef.current?.busy && !snapshotRef.current?.recordingBlocked, action: () => change(true), onError: reportFailure });
+      if (open && editedInput(previous, inputRef.current)) await confirm({ opener: sourceOpener, title: "音声の選び直しを確認", target: previous?.fileName ?? title, confirmLabel: path ? "音声を変更する" : "ファイル選択へ進む", message: path ? "ドロップした音声に変更すると、現在の会議名・話者数・用語の入力を破棄します。" : "音声を選び直すと、現在の会議名・話者数・用語の入力を破棄します。ファイル選択をキャンセルすると、現在の音声と入力を保持します。", validate: () => JSON.stringify(inputRef.current) === expectedInput && snapshotRef.current?.token === expectedToken && !snapshotRef.current?.busy && !snapshotRef.current?.recordingBlocked, action: () => change(true), onError: reportFailure });
       else await change();
     } catch (cause) { if (mounted.current && !(cause instanceof SavedEditsCancelled)) setError(String(cause)); } finally { selecting.current=false; }
   };
   selectRef.current=select;
-  const priorToken=useRef<string|null>(null);
-  useEffect(()=>{
-    if(snapshot?.phase==="ready"&&snapshot.token!==priorToken.current){priorToken.current=snapshot.token;setTitle(snapshot.fileName?.replace(/\.[^.]+$/u,"")??"");}
-  },[snapshot]);
   const cancelNative=async(s:ImportSnapshot)=>{
     setBusy(true);setError("");
     try{accept(await invoke<ImportSnapshot>("cancel_audio_import",{token:s.token}));}finally{setBusy(false);}
@@ -152,7 +168,7 @@ export function AudioImportPanel({locked,recordingActive,visible,overlayHost,mod
     if(snapshotRef.current?.busy||busy){setError("取り込みの取消・保存が完了してから閉じてください。");return;}
     const s = snapshotRef.current, expected = JSON.stringify(inputRef.current);
     const dismiss = async () => { if (s?.token && s.phase === "ready") await cancelNative(s); setOpen(false); };
-    if ((terms.length || title || numSpeakers!==null) && s?.phase === "ready") await confirm({ title: "取り込み確認内容の破棄を確認", target: s.fileName ?? title, confirmLabel: "確認内容を破棄して閉じる", message: "会議名・用語などの確認内容を破棄して閉じます。この入力は復元できません。元ファイルは変更しません。", validate: () => JSON.stringify(inputRef.current) === expected && snapshotRef.current?.token === s.token && !snapshotRef.current?.busy && snapshotRef.current?.phase === "ready", action: dismiss, onError: reportFailure });
+    if (s && editedInput(s, inputRef.current)) await confirm({ title: "取り込み確認内容の破棄を確認", target: s.fileName ?? title, confirmLabel: "確認内容を破棄して閉じる", message: "会議名・用語などの確認内容を破棄して閉じます。この入力は復元できません。元ファイルは変更しません。", validate: () => JSON.stringify(inputRef.current) === expected && snapshotRef.current?.token === s.token && !snapshotRef.current?.busy && snapshotRef.current?.phase === "ready", action: dismiss, onError: reportFailure });
     else try { await dismiss(); } catch (cause) { reportFailure(cause); }
   };
   const start=async()=>{

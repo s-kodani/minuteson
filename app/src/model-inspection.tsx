@@ -9,10 +9,10 @@ import { checkedVadOptions, defaultVadOptions, type VadOptions } from "./vad-sta
 import type { AnalysisPreferences, EnginePreferences } from "./analysis-state";
 import { invoke, isTauri } from "./ipc.ts";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ModelCleanupJob } from "./model-cleanup";
 import { usePublishProgress } from "./operation-progress";
-import { acceptTransferProgress, modelProgress, type TransferProgress } from "./operation-progress-state";
+import { acceptTransferProgress, modelCleanupProgress, modelProgress, type TransferProgress } from "./operation-progress-state";
 import { ModelIssue } from "./model-issue";
 import { modelPreparationError } from "./model-preparation-error";
 import { assertCompatibilitySummary, assertPlacementReceipt, placementLabel, type ModelPlacementEntry, type ModelPlacementReceipt, type ModelCompatibilitySummary } from "./model-inspection-state";
@@ -49,7 +49,7 @@ function modelOptionLabel(choice: ModelChoice): string {
     ? `【おすすめ】${choice.label}`
     : choice.label;
 }
-export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, runtimeUpdateEpoch = 0, visible = true, stopRequested, deletion, cleanup }: { cleanup?: ModelCleanupJob | null; locked: boolean; recordingActive: boolean; refreshEpoch?: number; runtimeUpdateEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl }) {
+export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, runtimeUpdateEpoch = 0, visible = true, stopRequested, deletion, cleanup, onProgressOwnerReady }: { cleanup?: ModelCleanupJob | null; locked: boolean; recordingActive: boolean; refreshEpoch?: number; runtimeUpdateEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl; onProgressOwnerReady?: (ready: true) => void }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const runtimeRequestHandled = useRef(0);
   useEffect(() => {
@@ -106,11 +106,9 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
   if (cleanup?.id === historyOperation.current) lastCleanup.current = cleanup;
   const finishing = localProgress && lastCleanup.current?.id === historyOperation.current ? lastCleanup.current : null;
   const cleanupJob = cleanup ?? finishing;
-  const cleanupProgress = cleanupJob ? {
-    ...modelProgress(cleanupJob.target, "cleanup", null, "running",
-      localProgress?.id === `model:${cleanupJob.id}` ? startedAt.current : cleanupJob.startedAtMs),
-    id: `model:${cleanupJob.id}`,
-  } : null;
+  const cleanupProgress = cleanupJob ? modelCleanupProgress(cleanupJob,
+    localProgress?.id === `model:${cleanupJob.id}` ? startedAt.current : cleanupJob.startedAtMs) : null;
+  useLayoutEffect(() => { onProgressOwnerReady?.(true); }, [onProgressOwnerReady]);
   usePublishProgress("model", [
     cleanupProgress,
     localProgress?.id === cleanupProgress?.id ? null : localProgress,

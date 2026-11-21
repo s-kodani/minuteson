@@ -106,22 +106,28 @@ pub(super) fn read_analysis_content(
     content_hash: &str,
 ) -> Result<AnalysisView, String> {
     let mut view = read_stored_analysis_content(connection, meeting_id, id, content_hash)?;
+    if let Some(track) = canonical_playback_track(connection, meeting_id)? {
+        for utterance in &mut view.utterances {
+            utterance.track_id = track.clone();
+        }
+    }
+    Ok(view)
+}
+
+fn canonical_playback_track(
+    connection: &Connection,
+    meeting_id: &str,
+) -> Result<Option<String>, String> {
     // Playback uses the current source; immutable snapshots retain their original
     // track IDs so retiring audio cannot change a saved working-content hash.
-    let canonical: Option<String> = connection
+    connection
         .query_row(
             "SELECT track_id FROM meeting_audio_commits WHERE meeting_id=?1",
             [meeting_id],
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| e.to_string())?;
-    if let Some(track) = canonical {
-        for utterance in &mut view.utterances {
-            utterance.track_id = track.clone();
-        }
-    }
-    Ok(view)
+        .map_err(|e| e.to_string())
 }
 
 pub(super) fn read_stored_analysis_content(
@@ -276,14 +282,14 @@ pub(super) fn read_stored_analysis_content(
 
 impl Storage {
     pub fn load_current_analysis(&self, meeting_id: &str) -> Result<Option<AnalysisView>, String> {
-        self.load_analysis_view(meeting_id, None, |_, view| Ok(view))
+        self.load_analysis_view(meeting_id, None, false, |_, view| Ok(view))
     }
 
     pub(crate) fn load_current_analysis_presentation(
         &self,
         meeting_id: &str,
     ) -> Result<Option<AnalysisPresentation>, String> {
-        self.load_analysis_view(meeting_id, None, |db, analysis| {
+        self.load_analysis_view(meeting_id, None, true, |db, analysis| {
             let speaker_color_keys =
                 super::minutes_input::lineage_map(db, "speakers", &analysis.id)?;
             Ok(AnalysisPresentation {
@@ -298,13 +304,14 @@ impl Storage {
         meeting_id: &str,
         revision_id: &str,
     ) -> Result<Option<AnalysisView>, String> {
-        self.load_analysis_view(meeting_id, Some(revision_id), |_, view| Ok(view))
+        self.load_analysis_view(meeting_id, Some(revision_id), false, |_, view| Ok(view))
     }
 
     fn load_analysis_view<T>(
         &self,
         meeting_id: &str,
         revision_id: Option<&str>,
+        display_without_playback: bool,
         present: impl FnOnce(&Connection, AnalysisView) -> Result<T, String>,
     ) -> Result<Option<T>, String> {
         let mut connection = self
@@ -319,12 +326,30 @@ impl Storage {
             params![meeting_id, revision_id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(|e| e.to_string())?;
         let Some((id, content_hash)) = head else {
+            if revision_id.is_none() && transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1 AND current_analysis_id IS NOT NULL)",
+                [meeting_id], |row| row.get::<_, bool>(0),
+            ).map_err(|error| error.to_string())? {
+                return Err("文字起こしの現在版を確認できません".into());
+            }
             return Ok(None);
         };
         if super::revisions::analysis_content_hash(&transaction, &id)? != content_hash {
             return Err("解析版の内容が変更されています".into());
         }
-        let analysis = read_analysis_content(&transaction, meeting_id, &id, &content_hash)?;
+        let analysis = if display_without_playback {
+            // A damaged audio commit cannot invalidate confirmed transcript text.
+            let mut analysis =
+                read_stored_analysis_content(&transaction, meeting_id, &id, &content_hash)?;
+            if let Ok(Some(track)) = canonical_playback_track(&transaction, meeting_id) {
+                for utterance in &mut analysis.utterances {
+                    utterance.track_id = track.clone();
+                }
+            }
+            analysis
+        } else {
+            read_analysis_content(&transaction, meeting_id, &id, &content_hash)?
+        };
         present(&transaction, analysis).map(Some)
     }
 

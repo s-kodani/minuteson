@@ -62,10 +62,14 @@ impl Recovery {
         }
         Ok(path)
     }
+    pub(super) fn needs_review(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     pub(super) fn view(&self, config: &Path) -> RecoveryView {
         RecoveryView {
             kind: self.kind.clone(),
-            review_required: !self.pending.is_empty(),
+            review_required: self.needs_review(),
             reasons: self.pending.clone(),
             record_path: self.workspace(config).join("previous-bootstrap.json"),
         }
@@ -224,7 +228,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 impl Bootstrap {
-    pub(super) fn recover_selection(&self) -> Result<(), String> {
+    pub(super) fn recover_selection(&self) -> Result<(), StartupStorageError> {
         let mut state = self
             .state
             .lock()
@@ -234,7 +238,7 @@ impl Bootstrap {
             return Ok(());
         };
         let previous = &loaded.record;
-        let actual = Root::inspect(&previous.current.path)?;
+        let actual = Self::inspect_startup_root(&previous.current.path, Some(loaded))?;
         let mut workspace_copied = false;
         if actual == previous.current {
             let changed = if let Some(recovery) = &previous.recovery {
@@ -250,10 +254,10 @@ impl Bootstrap {
                         &actual.path,
                         &workspace.join("scratch"),
                         &workspace,
-                    )?
+                    )
                 }
             } else {
-                Storage::ancillary_binding_changed(&actual.path, &actual.path, &self.config)?
+                Storage::ancillary_binding_changed(&actual.path, &actual.path, &self.config)
             };
             if !changed {
                 return Ok(());
@@ -310,6 +314,7 @@ impl Bootstrap {
             pending_move: None,
             activation: None,
             recovery: Some(recovery),
+            salvage: previous.salvage.clone(),
         };
         write_new(
             &workspace.join("recovery.json"),
@@ -385,8 +390,11 @@ impl Bootstrap {
         }
     }
 
-    pub(super) fn open_recovered_storage(&self, recovery: &Recovery) -> Result<Storage, String> {
-        let admission = {
+    pub(super) fn open_recovered_storage(
+        &self,
+        recovery: &Recovery,
+    ) -> Result<Storage, StartupStorageError> {
+        let (admission, restored_models) = {
             let state = self
                 .state
                 .lock()
@@ -406,7 +414,7 @@ impl Bootstrap {
             if previous.record.current.path != record.current.path {
                 return Err("復旧前後の保存先が一致しません".into());
             }
-            Admission {
+            let admission = Admission {
                 root: record.current.clone(),
                 previous: previous.record.current,
                 workspace,
@@ -415,11 +423,17 @@ impl Bootstrap {
                     .recovered_this_launch
                     .load(std::sync::atomic::Ordering::Acquire)
                     .then(|| recovery.source_observation.clone()),
-            }
+            };
+            (admission, record.salvage.clone())
         };
         admission.verify()?;
-        let storage =
-            Storage::open_recovered(self.root().to_owned(), self.models_root.clone(), &admission)?;
+        let storage = Storage::open_recovered(
+            self.root().to_owned(),
+            self.models_root.clone(),
+            &admission,
+            restored_models,
+        )
+        .map_err(StartupStorageError::from_database)?;
         admission.verify()?;
         Ok(storage)
     }

@@ -33,6 +33,7 @@ impl AnalysisController {
                 ..Default::default()
             },
             || {
+                app.state::<Storage>().require_model_storage()?;
                 app.state::<Storage>().require_global_data_writable()?;
                 let _wake = WakeWorker(app);
                 let controller = app.state::<Self>();
@@ -64,6 +65,7 @@ impl AnalysisController {
                         );
                     }
                 })?;
+                app.state::<Storage>().require_model_storage()?;
                 work(&lease)
             },
         )

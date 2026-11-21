@@ -11,6 +11,7 @@ use uuid::Uuid;
 mod analysis;
 pub(crate) mod analysis_flows;
 mod analysis_ui;
+mod body_review;
 // Backup snapshot/archive core; additive restore and controller integration follow.
 mod audio_publication;
 #[allow(dead_code)]
@@ -60,8 +61,12 @@ pub(crate) mod read_cache;
 mod recording_preparation;
 pub(crate) mod recordings;
 mod revisions;
+#[cfg(any(unix, windows))]
+pub(crate) mod salvage;
+mod salvage_schema;
 pub(crate) mod speaker_assignment_update;
 pub(crate) mod speaker_completion;
+pub(crate) mod startup_diagnostics;
 pub(crate) mod transcript_consolidation;
 mod transcription;
 pub(crate) mod voice_preferences;
@@ -142,16 +147,23 @@ pub struct Storage {
     execution_progress: Mutex<std::collections::HashMap<String, jobs::ExecutionProgress>>,
     post_analysis_drain: Mutex<()>,
     voice_audio_lock: Mutex<()>,
+    playback_wav: crate::audio::PlaybackWavCache,
     maintenance: std::sync::atomic::AtomicBool,
     // Process-local, irreversible. Bootstrap decides which root to open next.
     retired: std::sync::atomic::AtomicBool,
     scratch: Option<std::sync::Arc<backup::scratch::Registry>>,
+    scratch_startup_error: Option<String>,
     deletion_fence: deletion::fence::Fence,
     recovery_hold: bool,
+    startup_write_holds: Vec<String>,
+    startup_shared_database_corrupt: bool,
+    startup_diagnostics: startup_diagnostics::Diagnostics,
     #[cfg(any(unix, windows))]
     managed_anchor: deletion::fs::RootAnchor,
     #[cfg(any(unix, windows))]
     native_models_root: PathBuf,
+    #[cfg(any(target_os = "macos", windows))]
+    restored_models: Option<crate::bootstrap::salvage::SelectionRecord>,
     #[cfg(any(target_os = "macos", windows))]
     flac_history: Option<std::sync::Arc<recordings::flac::relocation::Aliases>>,
     #[cfg(any(target_os = "macos", windows))]
@@ -171,13 +183,39 @@ impl Storage {
     }
 
     #[cfg(any(unix, windows))]
-    pub(crate) fn native_models_root(&self) -> &Path {
-        &self.native_models_root
+    pub(crate) fn native_models_root(&self) -> Result<&Path, String> {
+        self.require_model_storage()?;
+        Ok(&self.native_models_root)
+    }
+
+    pub(crate) fn require_model_storage(&self) -> Result<(), String> {
+        #[cfg(any(target_os = "macos", windows))]
+        if let Some(binding) = &self.restored_models {
+            binding.verify_models().map_err(|error| {
+                format!(
+                    "復元したモデル保存先を確認できません。モデル保存先を戻してください: {error}"
+                )
+            })?;
+        }
+        Ok(())
     }
 
     #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn verify_bootstrap_database(&self) -> Result<(), String> {
         self.managed_anchor.verify_sqlite_header()
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    pub(crate) fn keep_sqlite_controls_on_close(&self, keep: bool) -> Result<(), String> {
+        self.connection
+            .lock()
+            .map_err(|_| "会議DBのロックを取得できません")?
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                keep,
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn restart_required(&self) -> bool {
@@ -190,8 +228,14 @@ impl Storage {
         self.deletion_fence.resume_restart_required()
     }
 
-    pub(crate) fn data_write_blocked(&self) -> bool {
+    pub(crate) fn common_write_hold(&self) -> bool {
         self.recovery_hold
+            || !self.startup_write_holds.is_empty()
+            || self.deletion_fence.unknown_startup_scope()
+    }
+
+    pub(crate) fn data_write_blocked(&self) -> bool {
+        self.common_write_hold()
             || self.retired.load(std::sync::atomic::Ordering::Acquire)
             || self.deletion_fence.blocked()
     }
@@ -199,6 +243,10 @@ impl Storage {
     pub(crate) fn require_data_writable(&self) -> Result<(), String> {
         if self.recovery_hold {
             Err("保存先を復旧しました。中断操作の再確認が必要なため閲覧のみ利用できます。元の記録とファイルを保持しています".into())
+        } else if let Some(message) = self.startup_write_holds.first() {
+            Err(message.clone())
+        } else if self.deletion_fence.unknown_startup_scope() {
+            Err("対象を確認できない削除記録があります。元のデータを保持し、保存先の書込みを停止しました".into())
         } else if self.deletion_fence.pending() && self.deletion_fence.blocked() {
             Err("未完了の会議削除／音声削除／モデル削除があります。確認対象を保持するため書込みと処理開始を停止しています".into())
         } else if self.deletion_fence.restart_required() {
@@ -248,7 +296,7 @@ impl Storage {
         models: PathBuf,
         guard: std::sync::Arc<crate::bootstrap::reset::RootLease>,
     ) -> Result<Self, Box<dyn Error>> {
-        Self::open_inner(root, Some(models), None, None, None, Some(guard))
+        Self::open_inner(root, Some(models), None, None, None, Some(guard), None)
     }
     // macOS production always supplies its separate native model location.
     #[cfg(any(test, not(target_os = "macos")))]
@@ -257,6 +305,8 @@ impl Storage {
         {
             Self::open_inner(
                 root,
+                None,
+                #[cfg(any(target_os = "macos", windows))]
                 None,
                 #[cfg(any(target_os = "macos", windows))]
                 None,
@@ -290,13 +340,33 @@ impl Storage {
             None,
             #[cfg(any(target_os = "macos", windows))]
             None,
+            #[cfg(any(target_os = "macos", windows))]
+            None,
+        )
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    pub(crate) fn open_with_model_binding(
+        root: PathBuf,
+        binding: crate::bootstrap::salvage::SelectionRecord,
+    ) -> Result<Self, Box<dyn Error>> {
+        let models_root = binding.models_root().to_owned();
+        Self::open_inner(
+            root,
+            Some(models_root),
+            None,
+            None,
+            None,
+            None,
+            Some(binding),
         )
     }
 
     #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn open_with_history(
         admission: &crate::bootstrap::placement::NativeHistoryAdmission<'_, '_>,
-    ) -> Result<Self, String> {
+        restored_models: Option<crate::bootstrap::salvage::SelectionRecord>,
+    ) -> Result<Self, Box<dyn Error>> {
         admission.verify()?;
         let flac_history = recordings::flac::relocation::admitted_history(admission)?;
         let history = deletion::relocation::receiver::admitted_history(admission)?;
@@ -309,8 +379,8 @@ impl Storage {
             None,
             #[cfg(any(target_os = "macos", windows))]
             None,
-        )
-        .map_err(|e| e.to_string())?;
+            restored_models,
+        )?;
         storage.wav_history = wav_history;
         admission.verify()?;
         Ok(storage)
@@ -321,9 +391,27 @@ impl Storage {
         root: PathBuf,
         models: PathBuf,
         admission: &crate::bootstrap::recovery::Admission,
-    ) -> Result<Self, String> {
-        Self::open_inner(root, Some(models), None, None, Some(admission), None)
-            .map_err(|e| e.to_string())
+        restored_models: Option<crate::bootstrap::salvage::SelectionRecord>,
+    ) -> Result<Self, Box<dyn Error>> {
+        Self::open_inner(
+            root,
+            Some(models),
+            None,
+            None,
+            Some(admission),
+            None,
+            restored_models,
+        )
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    pub(crate) fn is_salvage_blocker(error: &(dyn Error + 'static)) -> bool {
+        use rusqlite::ErrorCode::{DatabaseCorrupt, NotADatabase};
+        error.is::<schema_40::UnsupportedSchema>()
+            || error
+                .downcast_ref::<rusqlite::Error>()
+                .and_then(rusqlite::Error::sqlite_error_code)
+                .is_some_and(|code| matches!(code, DatabaseCorrupt | NotADatabase))
     }
 
     #[cfg(any(target_os = "macos", windows))]
@@ -333,20 +421,25 @@ impl Storage {
     }
 
     #[cfg(any(target_os = "macos", windows))]
-    pub(crate) fn ancillary_binding_changed(
-        root: &Path,
-        journal: &Path,
-        cache: &Path,
-    ) -> Result<bool, String> {
-        if backup::scratch::Registry::binding_changed(root, journal)? {
-            return Ok(true);
-        }
+    pub(crate) fn ancillary_binding_changed(root: &Path, journal: &Path, cache: &Path) -> bool {
+        // This caller has already matched the selected root and DB identities.
+        // An I/O failure here does not prove displacement. Normal admission
+        // independently opens each ancillary resource with its original proof.
+        let scratch = backup::scratch::Registry::binding_changed(root, journal);
         let cache = cache.join(".mon-read-cache");
-        match std::fs::symlink_metadata(&cache) {
+        let cache = match crate::native_fs::symlink_metadata(&cache) {
             Ok(_) => backup::scratch::Registry::binding_changed(&cache, &cache),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(e.to_string()),
+        };
+        let mut changed = false;
+        for (resource, result) in [("scratch", scratch), ("read_cache", cache)] {
+            match result {
+                Ok(value) => changed |= value,
+                Err(error) => crate::internal_logs::report_error(resource, &error),
+            }
         }
+        changed
     }
 
     #[cfg(any(target_os = "macos", windows))]
@@ -419,6 +512,9 @@ impl Storage {
         >,
         #[cfg(any(target_os = "macos", windows))] reset_guard: Option<
             std::sync::Arc<crate::bootstrap::reset::RootLease>,
+        >,
+        #[cfg(any(target_os = "macos", windows))] restored_models: Option<
+            crate::bootstrap::salvage::SelectionRecord,
         >,
     ) -> Result<Self, Box<dyn Error>> {
         std::fs::create_dir_all(&root)?;
@@ -516,63 +612,94 @@ impl Storage {
         let native_models_root = models_root.unwrap_or_else(|| root.join("models"));
         initialize_database_with_guidance(&mut connection, true)
             .map_err(|e| format!("会議DBの初期化に失敗しました: {e:?}"))?;
+        let mut startup_write_holds = Vec::new();
+        let mut startup_shared_database_corrupt = false;
+        let startup_diagnostics = startup_diagnostics::Diagnostics::default();
         #[cfg(any(unix, windows))]
-        deletion::startup::inspect(&connection, &managed_anchor, &native_models_root)?;
-        let pending_deletion = deletion::fence::has_pending(&connection)?;
+        let inspect_model_files = Some(native_models_root.as_path());
+        #[cfg(any(target_os = "macos", windows))]
+        let inspect_model_files = inspect_model_files.filter(|_| {
+            restored_models
+                .as_ref()
+                .is_none_or(|binding| binding.verify_models().is_ok())
+        });
+        #[cfg(any(unix, windows))]
+        if let Err(error) =
+            deletion::startup::inspect(&connection, &managed_anchor, inspect_model_files)
+        {
+            startup_write_holds.push(format!(
+                "削除記録の属先を確認できません。元のデータを保持しています: {error}"
+            ));
+        }
         let deletion_fence = deletion::fence::Fence::open(&connection)?;
-        let scratch;
-        if !pending_deletion && !recovery_hold {
-            connection.execute(
-            "UPDATE processing_jobs SET state = 'interrupted', updated_at = ?1 WHERE state IN ('running', 'pausing')",
-            params![now_ms()?],
-        )?;
-            connection.execute(
-            "UPDATE recording_sessions SET state = 'interrupted', updated_at = ?1 WHERE state IN ('preparing', 'recording', 'stopping')",
-            params![now_ms()?],
-        )?;
-            connection.execute("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'",params![now_ms()?])?;
-            connection.execute("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting')",params![now_ms()?])?;
+        let mut scratch = None;
+        let mut scratch_startup_error = None;
+        if !deletion_fence.blocked()
+            && !recovery_hold
+            && startup_write_holds.is_empty()
+            && !resetting
+        {
             #[cfg(any(unix, windows))]
             {
                 #[cfg(any(target_os = "macos", windows))]
-                let registry = if resetting {
-                    None
-                } else {
-                    Some(match recovery {
-                        Some(admission) => {
-                            backup::scratch::Registry::open_at(&root, &admission.scratch_root())?
-                        }
-                        None => backup::scratch::Registry::open(&root)?,
-                    })
+                let registry = match recovery {
+                    Some(admission) => {
+                        backup::scratch::Registry::open_at(&root, &admission.scratch_root())
+                    }
+                    None => backup::scratch::Registry::open(&root),
                 };
                 #[cfg(not(any(target_os = "macos", windows)))]
-                let registry = backup::scratch::Registry::open(&root)
-                    .map_err(|e| format!("一時領域の初期化に失敗しました: {e}"))?;
-                #[cfg(any(target_os = "macos", windows))]
-                {
-                    scratch = registry;
-                }
-                #[cfg(not(any(target_os = "macos", windows)))]
-                {
-                    scratch = Some(registry);
+                let registry = backup::scratch::Registry::open(&root);
+                match registry {
+                    Ok(registry) => {
+                        if let Err(error) = registry.require_no_attention() {
+                            startup_diagnostics.record(None, "scratch_attention", &error);
+                        }
+                        scratch = Some(registry);
+                    }
+                    Err(error) => {
+                        crate::internal_logs::report_error("backup_scratch", &error);
+                        scratch_startup_error = Some("バックアップに使う一時ファイルの状態を確認できませんでした。元のデータは残っています。".into());
+                    }
                 }
             }
-            #[cfg(not(any(unix, windows)))]
-            {
-                scratch = None;
+            let registry = match scratch_startup_error.as_deref() {
+                Some(error) => Err(error),
+                None => Ok(scratch.as_deref()),
+            };
+            if let Err(error) = backup::recover_restore_operations(&root, &connection, registry) {
+                crate::internal_logs::report_error("backup_restore_recovery", &error);
+                startup_write_holds.push("前回のバックアップからの復元が完了したか確認できません。会議の閲覧は続けられます。".into());
             }
-            backup::recover_restore_operations(&root, &connection, scratch.as_deref())?;
-            connection.execute("UPDATE model_compatibility_checks SET state='interrupted',error_message='前回の互換性確認は未完了です。明示的に再確認してください',finished_at=max(created_at,?1) WHERE state='preparing'", params![now_ms()?])?;
-            // A copy or compatibility check is never resumed or executed on startup.
-            // Retain intent/fingerprints and partial files for explicit inspection.
-            connection.execute("UPDATE model_files SET state='unavailable' WHERE state='preparing' AND package_id IN (SELECT id FROM model_packages WHERE source_type IN ('manual_import','download') AND state='preparing')", [])?;
-            connection.execute("UPDATE model_packages SET state='unavailable' WHERE source_type IN ('manual_import','download') AND state='preparing'", [])?;
-        } else {
-            scratch = None;
+        }
+        if !deletion_fence.blocked() && !recovery_hold && startup_write_holds.is_empty() {
+            // Establish operation scopes before any mutable recovery. Stale
+            // states belonging to a protected meeting are left as evidence.
+            let unreserved = meeting_access::unreserved_sql(&connection, "meeting_id")?;
+            let updates = (|| -> Result<(), String> {
+                let tx = connection
+                    .unchecked_transaction()
+                    .map_err(|error| error.to_string())?;
+                if let Err(error) = normalize_startup_states(&tx, &unreserved, None) {
+                    startup_shared_database_corrupt = error
+                        .downcast_ref::<rusqlite::Error>()
+                        .is_some_and(startup_diagnostics::structural_database_error);
+                    return Err(error.to_string());
+                }
+                let now = now_ms()?;
+                tx.execute("UPDATE model_compatibility_checks SET state='interrupted',error_message='前回の互換性確認は未完了です。明示的に再確認してください',finished_at=max(created_at,?1) WHERE state='preparing'", params![now]).map_err(|error| error.to_string())?;
+                // Never resume execution from an old placement/check record.
+                tx.execute("UPDATE model_files SET state='unavailable' WHERE state='preparing' AND package_id IN (SELECT id FROM model_packages WHERE source_type IN ('manual_import','download') AND state='preparing')", []).map_err(|error| error.to_string())?;
+                tx.execute("UPDATE model_packages SET state='unavailable' WHERE source_type IN ('manual_import','download') AND state='preparing'", []).map_err(|error| error.to_string())?;
+                tx.commit().map_err(|error| error.to_string())
+            })();
+            if let Err(error) = updates {
+                startup_write_holds.push(format!("中断した処理の状態を確認できません: {error}"));
+            }
         }
         #[cfg(any(unix, windows))]
         managed_anchor.seal_controls()?;
-        if recovery_hold {
+        if recovery_hold || !startup_write_holds.is_empty() {
             connection.authorizer(Some(deletion::fence::readonly))?;
         }
         Ok(Self {
@@ -584,15 +711,22 @@ impl Storage {
             execution_progress: Mutex::default(),
             post_analysis_drain: Mutex::default(),
             voice_audio_lock: Mutex::default(),
+            playback_wav: Default::default(),
             maintenance: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),
             scratch,
+            scratch_startup_error,
             deletion_fence,
             recovery_hold,
+            startup_write_holds,
+            startup_shared_database_corrupt,
+            startup_diagnostics,
             #[cfg(any(unix, windows))]
             managed_anchor,
             #[cfg(any(unix, windows))]
             native_models_root,
+            #[cfg(any(target_os = "macos", windows))]
+            restored_models,
             #[cfg(any(target_os = "macos", windows))]
             _reset_guard: reset_guard,
             #[cfg(any(target_os = "macos", windows))]
@@ -610,6 +744,12 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         self.require_data_writable()?;
+        if let Some(error) = &self.scratch_startup_error {
+            return Err(error.clone());
+        }
+        if meeting_access::any_reserved(&_db)? || deletion::fence::has_pending(&_db)? {
+            return Err("削除の確認を完了してから一時保存領域を使用してください".into());
+        }
         if self.retired.load(std::sync::atomic::Ordering::Acquire) {
             return Err("旧保存先の書込みは停止済みです。再起動してください".into());
         }
@@ -634,10 +774,12 @@ impl Storage {
             updated_at: now,
             lock_version: 0,
         };
-        self.connection
+        let db = self
+            .connection
             .lock()
-            .map_err(|_| "DBロックを取得できません".to_string())?
-            .execute(
+            .map_err(|_| "DBロックを取得できません".to_string())?;
+        self.require_data_writable()?;
+        db.execute(
                 "INSERT INTO meetings (id, title, lifecycle, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![meeting.id, meeting.title, meeting.lifecycle, now, now],
             )
@@ -646,28 +788,7 @@ impl Storage {
     }
 
     pub fn list_meetings(&self) -> Result<Vec<Meeting>, String> {
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| "DBロックを取得できません".to_string())?;
-        let mut statement = connection
-            .prepare("SELECT id, title, lifecycle, created_at, updated_at, lock_version, source_type FROM meetings ORDER BY updated_at DESC, id DESC")
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok(Meeting {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    lifecycle: row.get(2)?,
-                    created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
-                    lock_version: row.get(5)?,
-                    source_type: row.get(6)?,
-                })
-            })
-            .map_err(|error| error.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())
+        Ok(self.meeting_list()?.0)
     }
 
     // Separate read view: do not change Meeting's portable serialization and
@@ -693,15 +814,7 @@ impl Storage {
                 "SELECT id, title, lifecycle, created_at, updated_at, lock_version, source_type FROM meetings WHERE id = ?1",
                 params![id],
                 |row| {
-                    Ok(Meeting {
-                        id: row.get(0)?,
-                        title: row.get(1)?,
-                        lifecycle: row.get(2)?,
-                        created_at: row.get(3)?,
-                        updated_at: row.get(4)?,
-                        lock_version: row.get(5)?,
-                        source_type: row.get(6)?,
-                    })
+                    startup_diagnostics::meeting_row(row).map(|(meeting, _)| meeting)
                 },
             )
             .optional()
@@ -726,6 +839,10 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません".to_string())?;
+        self.require_data_writable()?;
+        if meeting_access::reserved(&connection, id)? {
+            return Err("この会議は削除の確認・処理中です".into());
+        }
         let changed = connection
             .execute(
                 "UPDATE meetings SET title = ?1, updated_at = ?2, lock_version = lock_version + 1 WHERE id = ?3 AND lock_version = ?4",
@@ -884,6 +1001,47 @@ impl Storage {
     }
 }
 
+fn normalize_startup_states(
+    db: &Connection,
+    selector: &str,
+    meeting: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
+    let now = now_ms()?;
+    let jobs = jobs::unreserved_audio_job_sql(db, "processing_jobs")?;
+    let recordings = deletion::fence::audio_unreserved(db, "recording_sessions.meeting_id")?;
+    let imports = deletion::fence::audio_unreserved(db, "audio_imports.meeting_id")?;
+    for sql in [
+        format!("UPDATE processing_jobs SET state='interrupted',updated_at=?1 WHERE state IN ('running','pausing'){selector}{jobs}"),
+        format!("UPDATE recording_sessions SET state='interrupted',updated_at=?1 WHERE state IN ('preparing','recording','stopping'){selector} AND {recordings}"),
+        format!("UPDATE export_records SET state='interrupted',error_message='前回の書き出し結果が未確定です。外部ファイルを確認してください',updated_at=?1 WHERE state='writing'{selector}"),
+        format!("UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1 WHERE state IN ('copying','converting'){selector} AND {imports}"),
+    ] {
+        let result = if let Some(meeting) = meeting {
+            db.execute(&sql, params![now, meeting])
+        } else {
+            db.execute(&sql, params![now])
+        };
+        result?;
+    }
+    Ok(())
+}
+
+fn normalize_startup_audio_states(db: &Connection, meeting: &str) -> Result<(), String> {
+    let now = now_ms()?;
+    let audio_kinds = jobs::audio_job_kinds();
+    for sql in [
+        format!("UPDATE processing_jobs SET state='interrupted',updated_at=?1
+                 WHERE meeting_id=?2 AND state IN ('running','pausing') AND kind IN ({audio_kinds})"),
+        "UPDATE recording_sessions SET state='interrupted',updated_at=?1
+         WHERE meeting_id=?2 AND state IN ('preparing','recording','stopping')".into(),
+        "UPDATE audio_imports SET state='failed',error_code='interrupted',updated_at=?1
+         WHERE meeting_id=?2 AND state IN ('copying','converting')".into(),
+    ] {
+        db.execute(&sql, params![now, meeting]).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn check_database_without_wal(root: &Path, database: &Path) -> Result<(), Box<dyn Error>> {
     use rusqlite::OpenFlags;
 
@@ -964,7 +1122,8 @@ fn initialize_database_with_guidance(
     guidance: bool,
 ) -> Result<(), Box<dyn Error>> {
     if !empty_or_current_database(connection)? {
-        return schema_40::migrate(connection);
+        schema_40::migrate(connection)?;
+        return salvage_schema::migrate(connection);
     }
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -972,6 +1131,7 @@ fn initialize_database_with_guidance(
         return Ok(());
     }
     transaction.execute_batch(canonical_schema_sql())?;
+    salvage_schema::install(&transaction)?;
     if guidance {
         model_download_guidance::seed(&transaction)?;
     }

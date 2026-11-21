@@ -146,8 +146,8 @@ button:disabled { opacity:.5; }
 @media(max-width:600px) {
   .transcript-options-display,.transcript-options-bulk-controls { grid-template-columns:minmax(0,1fr); }
 }
-.utterance-row { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:12px; }
-.utterance-row>.utterance-meta { grid-column:1; grid-row:1; min-width:0; min-height:32px; margin-bottom:8px; }
+.utterance-row { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:12px; row-gap:8px; }
+.utterance-row>.utterance-meta { grid-column:1; grid-row:1; min-width:0; min-height:32px; margin:0; }
 .utterance-row>:not(.utterance-meta):not(.utterance-edit-tools) { grid-column:1 / -1; min-width:0; }
 .utterance-edit-tools.options-modal { position:static; grid-column:2; grid-row:1; align-self:start; margin:0; }
 .utterance-edit-tools>.options-modal-trigger { min-width:32px; min-height:32px; font-size:20px; padding:0 6px; border:0; background:transparent; }
@@ -191,12 +191,13 @@ button:disabled { opacity:.5; }
 .speaker-filter[aria-pressed=true] { background:var(--selection); box-shadow:none; color:var(--primary-strong); }
 .utterance-row { padding:18px 8px; border:0; border-bottom:1px solid var(--border); border-radius:0; }
 .utterance-list { gap:0; }
-.transcript-feedback { flex:none; display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 32px; }
+.transcript-feedback { flex:none; display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px var(--tab-content-padding-inline,32px); }
 .transcript-feedback[hidden] { display:none; }
 .transcript-feedback>.action-error { flex:1; min-width:0; margin:0!important; font-size:12px; overflow-wrap:anywhere; }
 .meeting-detail-content .transcript-feedback>.issue-status { margin:0; max-height:none; flex:0 1 auto; }
 .transcript-feedback .info-trigger { min-height:24px; height:24px; width:24px; padding:2px; }
-.utterance-text { margin:8px 0; line-height:1.9; }
+.utterance-text { margin:0; line-height:1.9; }
+.utterance-text-edit { display:grid; gap:8px; }
 .info-popover,dialog { border-radius:var(--floating-radius); background-clip:padding-box; isolation:isolate; box-shadow:var(--floating-shadow); }
 .common-modal { border-radius:var(--floating-radius); }
 /* Detached drawers must round all four corners, including the screen-facing edge. */
@@ -270,7 +271,10 @@ button:disabled { opacity:.5; }
 .meeting-detail-content .workspace-panel-side-content>.speaker-panel-body { padding-inline:var(--tab-content-padding-inline); }
 .workspace-panel-drawer-host > .speaker-panel-body { background:var(--surface); }
 .transcript-main { position:relative; padding:24px var(--tab-content-padding-inline); gap:12px; }
-.transcript-main .transcript-search { padding:0 0 12px; border:0; }
+.transcript-main .transcript-search { padding:0; border:0; }
+.transcript-main .recognition-review { display:grid; gap:8px; }
+.transcript-main .recognition-review > :is(p, ul),
+.transcript-empty-results { margin-block:0; }
 .transcript-workspace-tools { position:static; }
 .meeting-workspace-tools { position:static; }
 .meeting-workspace-tools>summary,.transcript-workspace-tools>summary { list-style:none; min-height:30px; padding:4px 10px!important; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
@@ -286,6 +290,8 @@ button:disabled { opacity:.5; }
 :root[data-theme=dark] .speaker-avatar { background:var(--speaker-dark-bg); color:var(--speaker-dark-fg); }
 @media(min-width:761px) {
   .meeting-detail-content .transcript-split { grid-template-columns:var(--speaker-panel-width,216px) 1px minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
+  .transcript-feedback + .transcript-split > .transcript-main,
+  .transcript-feedback + .transcript-split .workspace-panel-side-content > .speaker-panel-body { padding-block-start:4px; }
 }
 .transcript-divider { position:relative; min-height:0; background:var(--border); cursor:col-resize; touch-action:none; outline:none; z-index:1; }
 .transcript-divider::before { content:""; position:absolute; inset:0 -5px; }
@@ -351,9 +357,19 @@ button:disabled { opacity:.5; }
 .transcript-options-buttons,.transcript-options-recovery { align-items:stretch; }
 .info-trigger,.info-close { min-height:32px; }
 
-/* Empty/loading states live outside the padded transcript split. */
-.transcript-state { margin:0; padding:24px 0; color:var(--muted); overflow-wrap:anywhere; }
-.meeting-detail-content .transcript-state { flex:none; padding:24px var(--tab-content-padding-inline); }
+/* The heading adds 8px before the first message, and the reload row adds 8px on either side. */
+.transcript-state { margin:0; color:var(--muted); overflow-wrap:anywhere; }
+.meeting-detail-content .transcript-state { flex:none; padding:4px var(--tab-content-padding-inline); }
+.meeting-detail-content .transcript-review-text { flex:1; min-height:0; overflow:auto; padding-block-end:16px; }
+.meeting-detail-content .meeting-document-notice {
+  flex:none;
+  margin:0;
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.7;
+  text-align:left;
+  overflow-wrap:anywhere;
+}
 .preview-utterance-meta { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; min-width:0; }
 .preview-utterance-meta>small { min-width:0; margin:0; overflow-wrap:anywhere; }
 .utterance-play-icon { display:inline-flex; align-items:center; justify-content:center; flex:none; width:32px; height:32px; min-height:32px; padding:0; line-height:1; }
@@ -575,6 +591,10 @@ button:disabled { opacity:.5; }
 .meeting-audio-settings-fields>label { min-width:0; margin:0; gap:8px; }
 .meeting-list-notice { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; min-width:0; }
 .meeting-list-notice>button { flex:none; max-width:100%; }
+.meeting-detail-content > .workspace-warning { flex:none; margin-inline:var(--tab-content-padding-inline); }
+.content.meeting-detail-content:has(> .storage-recovery-notice) { --tab-header-padding-top:0px; }
+.meeting-detail-content > .storage-recovery-notice { padding-block:8px; }
+.meeting-detail-content > .storage-recovery-notice > p { margin-block:0; }
 .common-modal .card-head>:is(h2,h3,h4) { min-width:0; margin:0; }
 @media(max-width:760px) {
   .content.meeting-detail-content { --tab-header-padding-top:12px; --tab-content-padding-inline:16px; }
@@ -586,8 +606,9 @@ button:disabled { opacity:.5; }
   .meeting-playback-dock>.meeting-playback-content { flex-basis:100%; }
   .meeting-playback-dock .audio-controls { flex-wrap:wrap; }
   .meeting-playback-dock .meeting-audio-actions { flex-wrap:wrap; max-width:100%; }
-  .meeting-detail-content .transcript-state { padding-block:20px; }
-  .transcript-feedback { padding-inline:16px; }
+  .meeting-detail-content p.transcript-state { padding-block:0; }
+  .meeting-detail-content .transcript-review-text { padding-block-start:0; }
+  .meeting-detail-content .transcript-feedback + .transcript-split > .workspace-panel-shell { padding-block-start:0; }
   .common-modal.analysis-dialog { width:calc(100vw - 32px); }
   .common-modal.analysis-dialog .preview-columns { grid-template-columns:minmax(0,1fr); }
   .main-column:has(.meeting-detail-status)>.topbar { padding:10px 16px; gap:6px; min-height:56px; }
@@ -708,7 +729,7 @@ button:disabled { opacity:.5; }
 @media(max-width:700px) { .installed-model { flex-direction:column; align-items:flex-start; gap:8px; } }
 .model-details .options-dialog { max-width:680px; }
 .model-details dd { overflow-wrap:anywhere; }
-.model-deletion-pending { border-top:1px solid var(--border); padding-top:16px; }
+.model-deletion-pending { display:grid; justify-items:start; gap:8px; border-top:1px solid var(--border); padding-top:16px; }
 @media(max-width:700px) { .model-inventory-actions { width:100%; } }
 
 /* Compact help headings replace inline explanatory paragraphs. */

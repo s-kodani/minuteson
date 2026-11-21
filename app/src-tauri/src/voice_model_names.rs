@@ -8,6 +8,10 @@ use std::sync::OnceLock;
 #[serde(rename_all = "camelCase")]
 struct Definition {
     speaker_embedding_name: Option<String>,
+    // Display-only identities for voices registered before a catalog update.
+    // They never authorize a download, weight reuse, or cross-model matching.
+    #[serde(default)]
+    previous_speaker_embedding_hashes: Vec<String>,
     files: Vec<File>,
 }
 #[derive(Deserialize)]
@@ -22,10 +26,12 @@ fn catalog() -> Result<BTreeMap<String, String>, String> {
             .map_err(|e| e.to_string())?;
     let mut names = BTreeMap::new();
     for definition in definitions {
-        for file in definition
+        for hash in definition
             .files
             .into_iter()
             .filter(|f| f.role == "speaker_embedding")
+            .map(|f| f.expected_hash)
+            .chain(definition.previous_speaker_embedding_hashes)
         {
             let name = definition
                 .speaker_embedding_name
@@ -33,7 +39,7 @@ fn catalog() -> Result<BTreeMap<String, String>, String> {
                 .filter(|name| !name.trim().is_empty())
                 .ok_or("話者識別モデルの表示名がありません")?;
             if names
-                .insert(file.expected_hash, name.to_owned())
+                .insert(hash, name.to_owned())
                 .is_some_and(|old| old != name)
             {
                 return Err("同じ話者識別モデルの表示名が一致しません".into());
@@ -52,9 +58,14 @@ mod tests {
     #[test]
     fn fixed_embedding_names_survive_package_removal_and_segmentation_variants() {
         let names = super::catalog().unwrap();
-        assert_eq!(names.len(), 2);
+        assert_eq!(names.len(), 3);
         assert_eq!(
             super::name("1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b")
+                .as_deref(),
+            Some("3D-Speaker ERes2Net base")
+        );
+        assert_eq!(
+            super::name("f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498")
                 .as_deref(),
             Some("3D-Speaker ERes2Net base")
         );

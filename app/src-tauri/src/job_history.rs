@@ -6,13 +6,17 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{mpsc, Arc, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex, OnceLock,
+    },
     time::Duration,
 };
 use tauri::{Emitter, Manager, WebviewWindow};
 mod migration;
 
 pub(crate) const RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+const BACKFILL_BATCH_SIZE: usize = 32;
 pub(crate) const KINDS: &[&str] = &[
     "recording_save",
     "model",
@@ -118,6 +122,8 @@ pub(crate) struct Query {
     pub state: Option<String>,
     pub cursor: Option<Cursor>,
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub refresh_sources: bool,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -131,10 +137,14 @@ pub(crate) struct Page {
     pub items: Vec<Entry>,
     pub next_cursor: Option<Cursor>,
     pub storage_error: Option<String>,
+    pub backfill_pending: bool,
 }
+type BackfillRows = Vec<(Entry, Option<String>)>;
+type RecordingProofs = BTreeMap<String, String>;
 enum Message {
     Record(Entry),
-    Backfill(Vec<Entry>, Option<mpsc::SyncSender<Result<(), String>>>),
+    Backfill(BackfillRows, mpsc::SyncSender<Result<(), String>>),
+    RecordingProofs(mpsc::SyncSender<Result<RecordingProofs, String>>),
     RemoveMeeting(String),
     Flush(mpsc::SyncSender<Result<(), String>>),
     Query(
@@ -142,14 +152,21 @@ enum Message {
         BTreeMap<String, String>,
         mpsc::SyncSender<Result<Page, String>>,
     ),
-    Clear(mpsc::SyncSender<Result<(), String>>),
+    Clear(Option<String>, mpsc::SyncSender<Result<bool, String>>),
+}
+enum BackfillStatus {
+    NotStarted,
+    Running,
+    Complete,
+    Failed(String),
 }
 #[derive(Clone)]
 struct Service {
     tx: mpsc::SyncSender<Message>,
     error: Arc<Mutex<Option<String>>>,
     last: Arc<Mutex<BTreeMap<String, Entry>>>,
-    recordings_backfilled: Arc<Mutex<bool>>,
+    backfill: Arc<Mutex<BackfillStatus>>,
+    stopping: Arc<AtomicBool>,
 }
 static GLOBAL: OnceLock<Service> = OnceLock::new();
 
@@ -187,6 +204,13 @@ fn open(root: &Path) -> Result<Connection, String> {
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;")
         .map_err(|e| e.to_string())?;
     migration::initialize(&db, version)?;
+    // Additive, so older releases can continue to read the version 2 history.
+    // Receipts carry no titles, paths or authority for opening/using audio.
+    db.execute_batch("PRAGMA foreign_keys=ON;
+        CREATE TABLE IF NOT EXISTS recording_verifications(id TEXT PRIMARY KEY NOT NULL REFERENCES history(id) ON DELETE CASCADE, proof TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS history_reset(singleton INTEGER PRIMARY KEY CHECK (singleton=1), source_key TEXT NOT NULL);
+        DELETE FROM recording_verifications WHERE id NOT IN (SELECT id FROM history);")
+        .map_err(|e| e.to_string())?;
     db.execute_batch("UPDATE history SET state='interrupted',finished_at=NULL,active=0,detail='前回の処理結果が未確定です。現在の状態を確認してください。' WHERE active=1;")
         .map_err(|e| e.to_string())?;
     Ok(db)
@@ -262,6 +286,64 @@ fn read(r: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
         detail: r.get(8)?,
         related_meeting_ids: Vec::new(),
     })
+}
+
+fn recording_proofs(db: &Connection) -> Result<RecordingProofs, String> {
+    let mut q = db.prepare("SELECT v.id,v.proof FROM recording_verifications v JOIN history h ON h.id=v.id WHERE h.kind='recording_save' AND h.state='succeeded'")
+        .map_err(|e| e.to_string())?;
+    let rows = q
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+fn import_rows(db: &Connection, rows: BackfillRows, time: i64) -> Result<(), String> {
+    let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
+    for (entry, proof) in rows {
+        let is_recording = entry.kind == "recording_save";
+        let id = is_recording.then(|| entry.id.clone());
+        let meeting = is_recording.then(|| entry.meeting_id.clone()).flatten();
+        upsert(&tx, entry, time)?;
+        if let Some(id) = id {
+            if let Some(proof) = proof {
+                tx.execute("INSERT INTO recording_verifications(id,proof)
+                    SELECT id,?2 FROM history WHERE id=?1 AND meeting_id=?3 AND kind='recording_save' AND state='succeeded'
+                    ON CONFLICT(id) DO UPDATE SET proof=excluded.proof WHERE proof!=excluded.proof", params![id,proof,meeting])
+                    .map_err(|e| e.to_string())?;
+            } else {
+                tx.execute("DELETE FROM recording_verifications WHERE id=?1", [&id])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
+fn clear_history(db: &Connection, source_key: Option<&str>) -> Result<bool, String> {
+    let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
+    if let Some(key) = source_key {
+        let marked: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM history_reset WHERE singleton=1 AND source_key=?1)",
+                [key],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if marked {
+            return Ok(false);
+        }
+        tx.execute("INSERT OR REPLACE INTO history_reset VALUES(1,?1)", [key])
+            .map_err(|e| e.to_string())?;
+    } else {
+        tx.execute("DELETE FROM history_reset", [])
+            .map_err(|e| e.to_string())?;
+    }
+    tx.execute_batch("DELETE FROM history; DELETE FROM removed_meetings;")
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .map_err(|e| e.to_string())?;
+    Ok(true)
 }
 fn prune(db: &Connection, time: i64) -> Result<(), String> {
     db.execute(
@@ -344,6 +426,7 @@ fn query(
         items,
         next_cursor,
         storage_error: None,
+        backfill_pending: false,
     })
 }
 impl Service {
@@ -351,6 +434,8 @@ impl Service {
         let (tx, rx) = mpsc::sync_channel(4096);
         let error = Arc::new(Mutex::new(None));
         let worker_error = error.clone();
+        let backfill = Arc::new(Mutex::new(BackfillStatus::NotStarted));
+        let worker_backfill = backfill.clone();
         std::thread::spawn(move || {
             let mut database = open(&root);
             let mut last_prune = 0;
@@ -374,19 +459,18 @@ impl Service {
                 }
                 match message {
                     Some(Message::Backfill(entries, reply)) => {
-                        let result = database.as_ref().map_err(Clone::clone).and_then(|db| {
-                            let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
-                            for entry in entries {
-                                upsert(&tx, entry, time)?;
-                            }
-                            tx.commit().map_err(|e| e.to_string())
-                        });
-                        if let Err(error) = &result {
-                            *worker_error.lock().unwrap() = Some(error.clone());
-                        }
-                        if let Some(reply) = reply {
-                            let _ = reply.send(result);
-                        }
+                        let result = database
+                            .as_ref()
+                            .map_err(Clone::clone)
+                            .and_then(|db| import_rows(db, entries, time));
+                        let _ = reply.send(result);
+                    }
+                    Some(Message::RecordingProofs(reply)) => {
+                        let result = database
+                            .as_ref()
+                            .map_err(Clone::clone)
+                            .and_then(recording_proofs);
+                        let _ = reply.send(result);
                     }
                     Some(Message::Flush(reply)) => {
                         let result = database.as_ref().map(|_| ()).map_err(Clone::clone);
@@ -431,13 +515,27 @@ impl Service {
                             .and_then(|db| query(db, q, &meetings, time))
                             .map(|mut page| {
                                 page.storage_error = worker_error.lock().unwrap().clone();
+                                match &*worker_backfill.lock().unwrap() {
+                                    BackfillStatus::NotStarted | BackfillStatus::Running => {
+                                        page.backfill_pending = true
+                                    }
+                                    BackfillStatus::Failed(error)
+                                        if page.storage_error.is_none() =>
+                                    {
+                                        page.storage_error = Some(error.clone())
+                                    }
+                                    _ => {}
+                                }
                                 page
                             });
                         let _ = reply.send(result);
                     }
-                    Some(Message::Clear(reply)) => {
-                        let result=database.as_ref().map_err(Clone::clone).and_then(|db|db.execute_batch("DELETE FROM history; DELETE FROM removed_meetings; PRAGMA wal_checkpoint(TRUNCATE);").map_err(|e|e.to_string()));
-                        if result.is_ok() {
+                    Some(Message::Clear(key, reply)) => {
+                        let result = database
+                            .as_ref()
+                            .map_err(Clone::clone)
+                            .and_then(|db| clear_history(db, key.as_deref()));
+                        if matches!(result.as_ref(), Ok(true)) {
                             *worker_error.lock().unwrap() = None;
                         }
                         let _ = reply.send(result);
@@ -450,7 +548,8 @@ impl Service {
             tx,
             error,
             last: Arc::new(Mutex::new(BTreeMap::new())),
-            recordings_backfilled: Arc::new(Mutex::new(false)),
+            backfill,
+            stopping: Arc::new(AtomicBool::new(false)),
         }
     }
     fn record(&self, entry: Entry) {
@@ -491,6 +590,80 @@ impl Service {
         rx.recv_timeout(Duration::from_secs(10))
             .map_err(|_| "履歴の取得がタイムアウトしました")?
     }
+
+    fn backfill(&self, storage: &crate::storage::Storage) -> Result<(), String> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.tx
+            .try_send(Message::RecordingProofs(reply))
+            .map_err(|_| "録音履歴の確認結果を取得できません")?;
+        let mut proofs = response
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "録音履歴の確認結果の取得がタイムアウトしました")??;
+        let cancelled = || self.stopping.load(Ordering::Acquire) || storage.restart_required();
+        let mut rows = Vec::with_capacity(BACKFILL_BATCH_SIZE);
+        let mut entries = storage
+            .history_source_records(now() - RETENTION_MS)?
+            .into_iter()
+            .peekable();
+        while let Some(mut entry) = entries.next() {
+            if cancelled() {
+                break;
+            }
+            let proof = if entry.kind == "recording_save" {
+                let previous = proofs.remove(&entry.id);
+                storage.verify_recording_history_source(&mut entry, previous.as_deref(), &cancelled)
+            } else {
+                None
+            };
+            if cancelled() {
+                break;
+            }
+            rows.push((entry, proof));
+            if rows.len() == BACKFILL_BATCH_SIZE || entries.peek().is_none() {
+                let (reply, response) = mpsc::sync_channel(1);
+                let batch = std::mem::replace(&mut rows, Vec::with_capacity(BACKFILL_BATCH_SIZE));
+                self.tx
+                    .try_send(Message::Backfill(batch, reply))
+                    .map_err(|_| "過去のジョブ履歴を取り込めません。履歴を再読込してください。")?;
+                response
+                    .recv_timeout(Duration::from_secs(10))
+                    .map_err(|_| {
+                        "過去のジョブ履歴の保存完了を確認できません。履歴を再読込してください。"
+                    })??;
+            }
+        }
+        Ok(())
+    }
+
+    fn start_backfill(&self, app: &tauri::AppHandle, refresh: bool) {
+        let mut status = self.backfill.lock().unwrap();
+        if self.stopping.load(Ordering::Acquire)
+            || matches!(*status, BackfillStatus::Running)
+            || !refresh && !matches!(*status, BackfillStatus::NotStarted)
+        {
+            return;
+        }
+        *status = BackfillStatus::Running;
+        drop(status);
+        let service = self.clone();
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let result = app
+                .try_state::<crate::storage::Storage>()
+                .ok_or_else(|| "履歴の元になる会議データを読み込めません".to_owned())
+                .and_then(|storage| service.backfill(&storage));
+            if let Err(error) = &result {
+                crate::internal_logs::report_error("job_history", error);
+            }
+            *service.backfill.lock().unwrap() = match result {
+                Ok(()) => BackfillStatus::Complete,
+                Err(error) => BackfillStatus::Failed(error),
+            };
+            if !service.stopping.load(Ordering::Acquire) {
+                let _ = app.emit_to("main", "job-history-changed", ());
+            }
+        });
+    }
 }
 pub(crate) fn initialize(app: &tauri::AppHandle, root: PathBuf) {
     GLOBAL.get_or_init(|| Service::start(root, Some(app.clone())));
@@ -513,23 +686,36 @@ pub(crate) fn remove_meeting(id: &str) {
     }
 }
 pub(crate) fn clear() -> Result<(), String> {
+    clear_for(None)
+}
+fn clear_for(key: Option<String>) -> Result<(), String> {
     let Some(service) = GLOBAL.get() else {
         return Ok(());
     };
     let (tx, rx) = mpsc::sync_channel(1);
     service
         .tx
-        .try_send(Message::Clear(tx))
+        .try_send(Message::Clear(key, tx))
         .map_err(|_| "ジョブ履歴を初期化できません")?;
-    rx.recv_timeout(Duration::from_secs(10))
-        .map_err(|_| "ジョブ履歴の初期化がタイムアウトしました")??;
-    service.last.lock().unwrap().clear();
+    if rx
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| "ジョブ履歴の初期化がタイムアウトしました")??
+    {
+        service.last.lock().unwrap().clear();
+    }
+    Ok(())
+}
+pub(crate) fn clear_for_new_workspace(storage: &crate::storage::Storage) -> Result<(), String> {
+    if let Some(key) = storage.pending_history_reset_key()? {
+        clear_for(Some(key))?;
+    }
     Ok(())
 }
 pub(crate) fn flush() -> Result<(), String> {
     let Some(service) = GLOBAL.get() else {
         return Ok(());
     };
+    service.stopping.store(true, Ordering::Release);
     let (tx, rx) = mpsc::sync_channel(1);
     service
         .tx
@@ -554,26 +740,10 @@ pub(crate) fn analysis(job: &crate::storage::JobSnapshot) {
     entry.detail = job.error_code.clone();
     record(entry);
 }
-pub(crate) fn backfill(storage: &crate::storage::Storage) -> Result<(), String> {
+pub(crate) fn start_backfill(app: &tauri::AppHandle) {
     if let Some(service) = GLOBAL.get() {
-        // Full canonical-byte verification belongs to the first backfill, not
-        // every history page. New saves publish their verified lifecycle live.
-        let mut recordings = service
-            .recordings_backfilled
-            .lock()
-            .map_err(|_| "録音履歴の確認状態を取得できません")?;
-        let entries = storage
-            .history_source_records_including_recordings(now() - RETENTION_MS, !*recordings)?;
-        let (tx, rx) = mpsc::sync_channel(1);
-        service
-            .tx
-            .try_send(Message::Backfill(entries, Some(tx)))
-            .map_err(|_| "過去のジョブ履歴を取り込めません。再度取得してください")?;
-        rx.recv_timeout(Duration::from_secs(10))
-            .map_err(|_| "過去のジョブ履歴の保存完了を確認できません。再度取得してください")??;
-        *recordings = true;
+        service.start_backfill(app, false);
     }
-    Ok(())
 }
 
 fn model_failure<T: Serialize>(result: &Result<T, String>) -> Option<(&'static str, String)> {
@@ -635,11 +805,9 @@ pub(crate) async fn list_job_history(
         let app = crate::minutes_app(&window)?;
         tauri::async_runtime::spawn_blocking(move || {
             let storage = app.state::<crate::storage::Storage>();
-            backfill(&storage)?;
-            let mut page = GLOBAL
-                .get()
-                .ok_or("ジョブ履歴の保存先が未準備です")?
-                .query(query, storage.history_meetings()?)?;
+            let service = GLOBAL.get().ok_or("ジョブ履歴の保存先が未準備です")?;
+            service.start_backfill(&app, query.refresh_sources);
+            let mut page = service.query(query, storage.history_meetings()?)?;
             for entry in &mut page.items {
                 if let Some(batch) = entry.id.strip_prefix("restore:") {
                     entry.related_meeting_ids = storage.history_restored_meetings(batch)?;

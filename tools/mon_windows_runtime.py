@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / '.cache/windows-runtime'
 PACKAGE = CACHE / 'package'
 URI = 'mon-bundled://windows-runtime-v1/runtime.tar'
-LLAMA_11960 = ('https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-win-cpu-x64.zip', 24407745, '73f962f82850d244db47eaacb9d913637027b82399124324298576d58c5f4287')
+LLAMA_12556 = ('https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-win-cpu-x64.zip', 24876692, '98882a3ca45688ffa585c3adba49213ca90c5b2dbbf1bc2af41ac437a0987d17')
 SHERPA = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-no-tts.tar.bz2',23271851,'4b0a94f7b5c606b1b64a19a831c2127559e4b3d34e195465ebc7be73d9ed4783')
 LLAMA_NATIVE_FILES = {'llama-completion.exe','llama-completion-impl.dll','llama-common.dll','llama.dll','ggml.dll','ggml-base.dll','libomp.dll','ggml-cpu-x64.dll','ggml-cpu-haswell.dll','ggml-cpu-skylakex.dll','ggml-cpu-zen4.dll','ggml-cpu-sapphirerapids.dll','vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll'}
 VC_RUNTIME_FILES = ('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
@@ -37,7 +37,7 @@ def write_native_notices(redist_files, redist_source=None):
     """Bind the OpenMP notice to known upstream bytes; retain CRT conditions."""
     directory = ROOT / 'third-party/runtime-notices'
     manifest = json.loads((directory / 'index.json').read_text(encoding='utf8'))
-    if manifest['schemaVersion'] != 1 or manifest['llamaArchiveSha256'] != LLAMA_11960[2]:
+    if manifest['schemaVersion'] != 1 or manifest['llamaArchiveSha256'] != LLAMA_12556[2]:
         raise ValueError('native license provenance does not match the pinned llama archive')
     libomp = PACKAGE / 'llama/libomp.dll'
     if not libomp.is_file() or digest(libomp) != manifest['libomp']['sha256']:
@@ -56,7 +56,7 @@ def write_native_notices(redist_files, redist_source=None):
     provenance = {
         'schemaVersion': 1, 'licenseReview': 'not_verified', 'distributionReady': False,
         'libomp': manifest['libomp'],
-        'llamaArchiveSha256': LLAMA_11960[2],
+        'llamaArchiveSha256': LLAMA_12556[2],
         'visualCpp': {
             'source': redist_source or 'Visual Studio 2022 VC/Redist/MSVC/<version>/x64/Microsoft.VC143.CRT',
             'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in redist_files.items()},
@@ -175,7 +175,7 @@ def upstream_engines():
         raise ValueError('runtime subtree must not be a link')
     if destination.exists():
         shutil.rmtree(destination)
-    with zipfile.ZipFile(acquire(*LLAMA_11960)) as archive:
+    with zipfile.ZipFile(acquire(*LLAMA_12556)) as archive:
         for name in archive.namelist():
             leaf = Path(name).name
             if leaf in LLAMA_NATIVE_FILES or leaf == 'LICENSE':
@@ -187,7 +187,7 @@ def upstream_engines():
             if member.isfile() and (leaf=='sherpa-onnx-offline-speaker-diarization.exe' or leaf.lower().endswith('.dll')):
                 dump(archive.extractfile(member).read(),PACKAGE/'sherpa'/leaf)
     # The CPU package is verified as an entire upstream release. Preserve the
-    # full DLL dispatch set rather than depending on the build host's PATH.
+    # reviewed DLL dispatch set and its generic CPU fallback rather than depending on the build host's PATH.
     print('Windows runtime files:',[str(p.relative_to(PACKAGE)) for p in PACKAGE.rglob('*') if p.is_file()],flush=True)
 
 def catalog(redist_files=None, *, redist_source=None):

@@ -164,6 +164,39 @@ fn canonical_meeting_and_interval_playback_publish_16khz_pcm() {
 }
 
 #[test]
+fn canonical_playback_reuses_unchanged_wav_and_hashes_same_size_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let storage = Storage::open(temp.path().into()).unwrap();
+    let (meeting, _, _) = fixture(&storage);
+    let track = &storage.canonical_audio_plan(&meeting).unwrap().tracks[0];
+    let path = storage.meeting_mix_path(&meeting, track).unwrap();
+    let request = MeetingPlaybackRequest {
+        meeting_id: meeting,
+        mode: MeetingPlaybackMode::Mixed,
+        start_reference: None,
+    };
+    let checks = std::cell::Cell::new(0);
+    let prepare = || {
+        checks.set(0);
+        storage.prepare_meeting_audio_cancellable(&request, &|| {
+            checks.set(checks.get() + 1);
+            false
+        })
+    };
+    assert!(prepare().is_ok());
+    let cold_checks = checks.get();
+    assert!(prepare().is_ok());
+    // The hash loop checks once per buffer and again at EOF.
+    assert_eq!(cold_checks - checks.get(), 2);
+
+    let mut bytes = std::fs::read(&path).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    std::fs::write(&path, bytes).unwrap();
+    let error = prepare().err().unwrap();
+    assert!(error.contains("ハッシュ"));
+}
+
+#[test]
 fn cancellation_and_revoked_utterance_never_publish_audio() {
     for revoke in [false, true] {
         let temp = tempfile::tempdir().unwrap();

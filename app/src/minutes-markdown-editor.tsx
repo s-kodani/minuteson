@@ -10,9 +10,9 @@ import { writeTranscriptClipboard } from "./transcript-copy";
 
 /** Plain human editing. The parent owns generation/admission and navigation;
  * this view never generates, autosaves, constructs items or keeps old bodies. */
-export function MinutesMarkdownEditor({ meetingId, controller, durationUs, onPlay, locked = false, visible = true, actionsHost = null, inputRef }: {
+export function MinutesMarkdownEditor({ meetingId, controller, durationUs, onPlay, locked = false, navigationLocked = locked, visible = true, actionsHost = null, inputRef }: {
   meetingId:string; controller:MarkdownSaveController; durationUs:number|null;
-  onPlay?:(interval:MarkdownAudioInterval)=>void; locked?:boolean; visible?:boolean;
+  onPlay?:(interval:MarkdownAudioInterval)=>void; locked?:boolean; navigationLocked?:boolean; visible?:boolean;
   actionsHost?:HTMLElement|null;
   inputRef?:RefObject<HTMLTextAreaElement|null>;
 }) {
@@ -40,7 +40,7 @@ export function MinutesMarkdownEditor({ meetingId, controller, durationUs, onPla
     } catch { /* Controller keeps the exact input, pending operation and error. */ }
   };
   const copy = async () => {
-    if (locked || copying.current || !controller.snapshot().text.trim()) return;
+    if (navigationLocked || copying.current || !controller.snapshot().text.trim()) return;
     copying.current = true; setCopyBusy(true);
     try {
       await writeTranscriptClipboard(async () => {
@@ -58,8 +58,8 @@ export function MinutesMarkdownEditor({ meetingId, controller, durationUs, onPla
   const actions = <div className="plain-minutes-actions">
       <span role="status">{state.saving?"保存中":state.dirty?"未保存":state.document?"保存済み":"議事録はまだありません"}</span>
       {editing&&<button type="button" className="small-secondary" disabled={locked||state.saving||!state.dirty} onClick={()=>void save()}>{state.error?"保存を再試行":"保存"}</button>}
-      <IconButton label="議事録をコピー" icon="copy" disabled={locked || copyBusy || !state.text.trim()} onClick={() => void copy()} />
-      <IconButton label={editing?"議事録のプレビューを表示":"議事録を編集"} icon={editing?"preview":"edit"} disabled={locked} onClick={()=>setEditing(value=>!value)} />
+      <IconButton label="議事録をコピー" icon="copy" disabled={navigationLocked || copyBusy || !state.text.trim()} onClick={() => void copy()} />
+      <IconButton label={editing?"議事録のプレビューを表示":"議事録を編集"} icon={editing?"preview":"edit"} disabled={navigationLocked || (locked && !editing)} onClick={()=>setEditing(value=>!value)} />
     </div>;
   return <div className="plain-minutes-editor">
     {actionsHost ? createPortal(actions, actionsHost) : actions}
@@ -68,7 +68,7 @@ export function MinutesMarkdownEditor({ meetingId, controller, durationUs, onPla
       {/* Keep one textarea mounted: native IME, undo/redo and selection are not
           replaced with a rich editor or reconstructed from rendered HTML. */}
       <textarea ref={textarea} hidden={!editing} aria-label="議事録のMarkdown本文" spellCheck={false}
-        value={state.text} disabled={locked} onChange={event=>controller.edit(event.target.value)}
+        value={state.text} disabled={navigationLocked} readOnly={locked} onChange={event=>controller.edit(event.target.value)}
         onCompositionStart={()=>controller.setComposing(true)} onCompositionEnd={()=>controller.setComposing(false)}
         onKeyDown={event=>{
           if((event.metaKey||event.ctrlKey)&&!event.altKey&&!event.shiftKey&&event.key.toLowerCase()==="s") {
@@ -76,7 +76,7 @@ export function MinutesMarkdownEditor({ meetingId, controller, durationUs, onPla
           }
         }} />
       <article className="plain-minutes-document" hidden={editing} aria-label="議事録プレビュー">
-        <MinutesMarkdownPreview text={state.text} durationUs={durationUs} locked={locked} onPlay={onPlay} />
+        <MinutesMarkdownPreview text={state.text} durationUs={durationUs} locked={navigationLocked} onPlay={onPlay} />
       </article>
     </div>
     <ToastNotice scope={meetingId} type="plain-minutes-save" eventId={savedEvent} message={savedEvent?"議事録を保存しました":""} />

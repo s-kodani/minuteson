@@ -1,7 +1,7 @@
 // Full workspace with synthetic IPC only. No native files or user data.
 async (page) => {
   const results = [], check = (ok, message) => { if (!ok) throw Error(message); };
-  const origin = new URL(page.url()).origin;
+  const origin = "http://127.0.0.1:1420";
   const scenario = async (name, extra = "") => {
     await page.goto(`${origin}/tests/audio-deletion-browser.html?scenario=${name}${extra}`);
     await page.getByRole("heading", { name: "会議一覧", exact: true }).waitFor();
@@ -22,24 +22,29 @@ async (page) => {
   results.push("two-button confirmation and cancellation without path reads");
 
   await page.getByRole("button", { name: "古い削除可否の応答を保留", exact: true }).click();
+  await menu();
   await waitStatus("held", true);
+  await page.keyboard.press("Escape");
   await review();
   await page.locator("dialog[open] .stop-button:not(:disabled)").waitFor();
   await dialog().getByRole("button", { name: "削除", exact: true }).click();
   await waitStatus("deleted", 1);
   await menu();
   check(!await audio().isEnabled(), "completed audio deletion can run again");
+  await page.locator('.audio-deletion-menu-item[title="音声はすでに削除済みです。"]').waitFor();
   check(await page.locator(".audio-deletion-menu-item").getAttribute("title") === "音声はすでに削除済みです。", "disabled item has no hover explanation");
   await page.getByRole("button", { name: "古い削除可否の応答を返す", exact: true }).click();
   await waitStatus("held", false);
   await menu();
   check(!await audio().isEnabled(), "late availability response enabled deleted audio");
+  await page.locator('.deletion-trigger[aria-label="既存会議を削除"]:not(:disabled):visible').waitFor();
   check(await page.getByRole("menuitem", { name: "既存会議を削除", exact: true }).isEnabled(), "audio deletion blocked whole-meeting deletion");
   check((await status()).paths === 0, "completion fetched a path page");
   results.push("immediate disable, hover help and stale response rejection");
 
   for (const name of ["deleted", "unknown"]) {
     await scenario(name); await menu();
+    await page.locator('.deletion-trigger[aria-label="既存会議を削除"]:not(:disabled):visible').waitFor();
     check(!await audio().isEnabled(), `${name} audio state allowed deletion`);
     check(await page.getByRole("menuitem", { name: "既存会議を削除", exact: true }).isEnabled(), `${name} audio state blocked meeting deletion`);
     results.push(`${name} startup state disables only audio deletion`);

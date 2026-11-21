@@ -168,31 +168,88 @@ pub(in crate::storage::deletion) fn inspect_one(
     // never exempts a row from startup inspection.
     Ok(checked.unwrap_or(Some("audio_completed_receipt_invalid")))
 }
-pub(in crate::storage) fn deleted(db: &Connection, meeting: &str) -> Result<bool, String> {
+fn completed_for_meeting(
+    db: &Connection,
+    meeting: &str,
+    require_ledger: bool,
+) -> Result<Vec<String>, String> {
     let has_table: bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='maintenance_operations')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
     if !has_table {
-        return Err("現行DBの音声削除台帳が欠落しています。音声を利用しません".into());
+        return if require_ledger {
+            Err("現行DBの音声削除台帳が欠落しています。音声を利用しません".into())
+        } else {
+            Ok(Vec::new())
+        };
     }
     // Also route a restored header claiming this meeting when its nullable FK
     // was detached. The raw claim is NOT authority: strict load must match it
     // to the FK and ledger, or source use fails closed. Model receipts do not
     // carry this top-level meeting field. Unknown subtypes are never exempted.
-    let ids=db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND (meeting_id=?1 OR json_extract(target_manifest_json,'$.meeting')=?1) ORDER BY id LIMIT 257").map_err(|e|e.to_string())?.query_map(params![meeting],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
+    let ids=db.prepare("SELECT id FROM maintenance_operations WHERE kind='delete_assets' AND state='completed' AND (meeting_id=?1 OR CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 AND json_valid(target_manifest_json) THEN json_extract(target_manifest_json,'$.meeting') END=?1) ORDER BY id LIMIT 257").map_err(|e|e.to_string())?.query_map(params![meeting],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?;
     if ids.len() > 256 {
         return Err("音声削除履歴が安全上限を超えています".into());
     }
-    for id in &ids {
+    Ok(ids)
+}
+
+fn verify_completed_for_meeting(
+    db: &Connection,
+    meeting: &str,
+    ids: &[String],
+    anchor: Option<&RootAnchor>,
+    check: &impl Fn() -> bool,
+) -> Result<(), String> {
+    for id in ids {
+        super::super::super::cancel(check)?;
         if crate::storage::deletion::audio::restored::hinted(db, id)? {
-            crate::storage::deletion::audio::restored::deleted(db, id, meeting)?;
+            if let Some(anchor) = anchor {
+                if crate::storage::deletion::audio::restored::backup_meeting(db, anchor, id, check)?
+                    != meeting
+                {
+                    return Err("復元音声履歴の会議が一致しません".into());
+                }
+            } else {
+                crate::storage::deletion::audio::restored::deleted(db, id, meeting)?;
+            }
             continue;
         }
-        let r = Receipt::load(db, id, &|| false)?;
+        let r = Receipt::load(db, id, check)?;
         if r.saved.meeting() != meeting {
             return Err("音声削除の会議が一致しません".into());
         }
-        verify_available_state(db, &r, &|| false)?;
+        verify_available_state(db, &r, check)?;
+        if let Some(anchor) = anchor {
+            if !absent(db, anchor, &r, check)? {
+                return Err(
+                    "削除済み音声が再出現しています。復元時に削除済みとして扱いません".into(),
+                );
+            }
+        }
     }
+    Ok(())
+}
+
+pub(in crate::storage) fn deleted(db: &Connection, meeting: &str) -> Result<bool, String> {
+    let ids = completed_for_meeting(db, meeting, true)?;
+    verify_completed_for_meeting(db, meeting, &ids, None, &|| false)?;
     Ok(!ids.is_empty())
+}
+
+// Inspect a single meeting in an isolated SQLite copy. The original directory
+// is held by the salvage session and supplies the file-absence evidence.
+pub(in crate::storage) fn salvage_deleted(
+    db: &Connection,
+    meeting: &str,
+    root: &std::path::Path,
+    check: &impl Fn() -> bool,
+) -> Result<bool, String> {
+    let ids = completed_for_meeting(db, meeting, false)?;
+    if ids.is_empty() {
+        return Ok(false);
+    }
+    let anchor = RootAnchor::bind(RootAnchor::directory(root)?)?;
+    verify_completed_for_meeting(db, meeting, &ids, Some(&anchor), check)?;
+    Ok(true)
 }
 
 // Read-only backup admission. The image carries the original journal but has

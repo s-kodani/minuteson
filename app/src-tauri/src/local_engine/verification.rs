@@ -10,6 +10,12 @@ use std::{
     path::{Path, PathBuf},
 };
 thread_local! { static CACHE: RefCell<Option<Cache>> = const { RefCell::new(None) }; }
+
+#[cfg(test)]
+pub(crate) fn physical_hash_bytes() -> u64 {
+    CACHE.with(|cache| cache.borrow().as_ref().unwrap().bytes)
+}
+
 #[derive(Default)]
 struct Cache {
     entries: BTreeMap<PathBuf, Entry>,

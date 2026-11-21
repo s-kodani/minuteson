@@ -112,7 +112,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     );
     assert_eq!(
         catalog[3]["review"]["recipeHash"],
-        "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666"
+        "c8dfeba400033dc9c3076dd0335a28b79628800310b57da07a31656a2acc55ae"
     );
     let recipe = bundle.recipe().unwrap();
     let review = recipe.review().unwrap();

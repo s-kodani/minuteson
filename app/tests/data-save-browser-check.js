@@ -1,7 +1,7 @@
 // CLI-first verification with mocked IPC; not a Playwright test spec.
 // Route local index.html to data-save-browser-fixture.js, then run this file
 // with playwright-cli run-code --filename <absolute path>.
-async (page) => {
+async (page, capturePath) => {
   const results = [];
   const check = (value, message) => { if (!value) throw Error(message); };
   const set = values => page.evaluate(v => Object.assign(window.dataFixture, v), values);
@@ -10,9 +10,10 @@ async (page) => {
     const before = (await calls("get_data_operation")).length;
     await page.waitForFunction(n => window.dataFixture.calls.filter(c => c.command === "get_data_operation").length > n, before);
   };
+  const openSettings = () => page.getByRole("button", { name: "設定", exact: true }).click();
   const boot = async () => {
     await page.reload();
-    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await openSettings();
     await page.getByRole("region", { name: "データと保存" }).waitFor();
   };
   const region = () => page.getByRole("region", { name: "データと保存" });
@@ -27,11 +28,35 @@ async (page) => {
   const stopChoice = () => page.getByRole("dialog", { name: "データ操作の安全な取消を確認", exact: true });
   const stop = async () => { await region().getByRole("button", { name: "処理を取り消す", exact: true }).click(); await stopChoice().getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).click(); };
 
-  await boot(); await page.getByRole("button", { name: "バックアップと追加復元の説明を開く", exact: true }).click();
+  const modelModule = url => url.pathname === "/src/model-inspection.tsx";
+  const { promise: releaseModelModule, resolve: allowModelModule } = Promise.withResolvers();
+  await page.reload();
+  await page.route(modelModule, async route => {
+    await releaseModelModule;
+    await route.continue();
+  }, { times: 1 });
+  const helpButton = page.getByRole("button", { name: "バックアップと追加復元の説明を開く", exact: true });
+  try {
+    await Promise.all([page.waitForRequest(request => modelModule(new URL(request.url()))), openSettings()]);
+    await page.getByText("画面を読み込んでいます。", { exact: true }).waitFor();
+    check(await helpButton.count() === 0, "backup help appeared before the settings sections above it finished loading");
+  } finally {
+    allowModelModule();
+  }
+  await helpButton.click();
   await page.getByRole("dialog", { name: "バックアップと追加復元", exact: true }).getByRole("link", { name: "詳しい説明", exact: true }).click();
   const info = await page.getByRole("dialog", { name: "バックアップと追加復元", exact: true }).innerText();
   check(info.includes("AIモデル本体") && info.includes("独自暗号化やクラウド同期ではありません") && info.includes("新しい別会議"), "data scope explanation missing");
   results.push("scope info: no model-body, encryption or replace-existing claim");
+
+  await boot(); await set({ mode: "scratchFailure" }); await choose("backup");
+  await page.getByText(/バックアップに使う一時ファイルの状態を確認できません/).first().waitFor();
+  await page.screenshot({ path: capturePath("backup-scratch-unavailable.png"), fullPage: true });
+  await page.locator(".sidebar").getByRole("button", { name: "会議一覧", exact: true }).click();
+  await page.getByRole("button", { name: "既存会議", exact: true }).waitFor();
+  check(await page.getByText(/保存先は閲覧専用です/).count() === 0, "scratch failure made the workspace read-only");
+  await page.screenshot({ path: capturePath("workspace-after-backup-scratch-error.png"), fullPage: true });
+  results.push("a scratch-ledger failure is shown with backup only and the meeting workspace stays available");
 
   await boot(); await set({ mode: "delay" }); await choose("backup");
   await page.waitForFunction(() => window.dataFixture.snapshot.phase === "publishing");
@@ -59,7 +84,7 @@ async (page) => {
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 1000 });
     await deletedWarning.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `output/playwright/deleted-audio-backup-${width}.png` });
+    await page.screenshot({ path: capturePath(`deleted-audio-backup-${width}.png`) });
   }
   results.push("deleted source: explicit history-only counts and no audio replay/reanalysis claim");
 
@@ -71,7 +96,7 @@ async (page) => {
   check((await calls("start_data_operation")).length === 0, "history-only preview published before confirmation");
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 1000 });
-    await page.screenshot({ path: `output/playwright/deleted-audio-restore-confirm-${width}.png` });
+    await page.screenshot({ path: capturePath(`deleted-audio-restore-confirm-${width}.png`) });
   }
   await set({ mode: "lost", suppressEvents: true }); await confirm(); await done();
   const restoredWarning = region().getByRole("alert").filter({ hasText: "保存済み文書と音声の欠落情報を復元しました" });
@@ -81,7 +106,7 @@ async (page) => {
   for (const width of [1200, 900]) {
     await page.setViewportSize({ width, height: 1000 });
     await restoredWarning.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `output/playwright/deleted-audio-restore-result-${width}.png` });
+    await page.screenshot({ path: capturePath(`deleted-audio-restore-result-${width}.png`) });
   }
   results.push("history-only restore: confirmation and terminal warning, lost-reply polling without duplicate admission");
 

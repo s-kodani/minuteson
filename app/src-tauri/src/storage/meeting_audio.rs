@@ -2,6 +2,8 @@
 use super::transcription::{ChunkPlan, RecordedAudioPlan, TrackPlan};
 use super::*;
 
+pub(in crate::storage) mod availability;
+
 pub(crate) const POLICY: &str = "meeting_wav_pcm16_16000_v1";
 
 /// Historical input bytes intentionally retired after verified publication.
@@ -95,7 +97,10 @@ fn read_metadata(
         || frames != chunk_frames
         || size < 0
         || !crate::audio::wave::valid_size(frames as u64, size as u64)
-        || end != frames * 1_000_000 / 16000
+        || frames
+            .checked_mul(1_000_000)
+            .map(|duration| duration / 16000)
+            != Some(end)
     {
         return Err("共通会議音声の保存記録が不正です".into());
     }
@@ -138,9 +143,26 @@ impl Storage {
         meeting: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<RecordedAudioPlan, String> {
+        self.verify_canonical_audio_hash(meeting, cancelled, false)
+    }
+
+    pub(crate) fn verify_canonical_audio_retained(
+        &self,
+        meeting: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<RecordedAudioPlan, String> {
+        self.verify_canonical_audio_hash(meeting, cancelled, true)
+    }
+
+    fn verify_canonical_audio_hash(
+        &self,
+        meeting: &str,
+        cancelled: &impl Fn() -> bool,
+        retain: bool,
+    ) -> Result<RecordedAudioPlan, String> {
         let plan = self.canonical_audio_plan(meeting)?;
         let c = &plan.tracks[0].chunks[0];
-        self.verify_meeting_asset_cancellable(meeting, &c.asset_id, &c.hash, cancelled)?;
+        self.verify_meeting_asset_hash(meeting, &c.asset_id, &c.hash, cancelled, retain)?;
         let path = self.meeting_mix_path(meeting, &plan.tracks[0])?;
         let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let layout = crate::audio::wave::inspect(&mut f, c.size as u64)?;

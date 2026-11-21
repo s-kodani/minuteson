@@ -81,7 +81,7 @@ test("all Windows model choices from the native IPC pass the production frontend
   }
   const gemma = choices.find(option => option.id === "windows-llama-b11960-gemma4-e4b-it-q4km");
   assert.ok(gemma);
-  assert.equal(gemma.review.manifest.engineVersion, "b11960");
+  assert.equal(gemma.review.manifest.engineVersion, "b12556");
   assert.equal(gemma.tokenLimits?.tokenizer, "gguf");
   const titanet = choices.find(option => option.id === "windows-sherpa-1138-pyannote3-int8-titanet-small");
   assert.ok(titanet);

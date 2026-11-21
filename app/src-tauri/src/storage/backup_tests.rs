@@ -112,8 +112,13 @@ fn wal_snapshot_preserves_all_rows_markdown_transcript_edits_and_vocabulary() {
     assert!(!obsolete_tables);
     drop(original);
     drop(saved);
+    let output = tempfile::tempdir().unwrap();
     snapshot
-        .verify(&crate::test_support::never_cancelled)
+        .write_archive(
+            &mut tempfile::tempfile_in(output.path()).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
         .unwrap();
     drop(snapshot);
     assert!(!stage.exists());
@@ -429,8 +434,13 @@ fn schema_vocabulary_and_staged_bytes_corruption_are_detected() {
         .prepare_backup_snapshot(&crate::test_support::never_cancelled)
         .unwrap();
     std::fs::write(&snapshot.assets[0].path, b"other").unwrap();
+    let output = tempfile::tempdir().unwrap();
     assert!(snapshot
-        .verify(&crate::test_support::never_cancelled)
+        .write_archive(
+            &mut tempfile::tempfile_in(output.path()).unwrap(),
+            output.path(),
+            &crate::test_support::never_cancelled,
+        )
         .is_err());
     drop(snapshot);
     storage

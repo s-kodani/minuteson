@@ -43,9 +43,16 @@ fn cleanup_after_unrelated_forks(directory: &files::TestDirectory) -> Result<(),
     }
 }
 #[test]
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn startup_checking_and_attention_reject_new_capture_but_attention_can_exit_without_deleting() {
+    let fixture = tempfile::tempdir().unwrap();
     let controller = CaptureTests::default();
+    controller
+        .lock()
+        .unwrap()
+        .ownership
+        .configure(fixture.path())
+        .unwrap();
     assert!(controller.reserve(request()).is_err());
     assert!(controller.require_empty().is_err());
     assert!(controller.require_exit_ready().is_err());
@@ -63,6 +70,59 @@ fn startup_checking_and_attention_reject_new_capture_but_attention_can_exit_with
     assert!(controller.reserve(request()).is_err());
     controller.abort_exit().unwrap();
     assert!(controller.recovery_blocked());
+}
+#[test]
+#[cfg(any(target_os = "macos", windows))]
+fn shared_startup_damage_allows_uninitialized_capture_to_exit_for_salvage_and_retains_its_journal()
+{
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path().canonicalize().unwrap();
+    let config = root.join("config");
+    let app_data = root.join("application");
+    let bootstrap = crate::bootstrap::Bootstrap::open(&config, &app_data).unwrap();
+    let storage = bootstrap.open_storage().unwrap();
+    let a = storage.create_meeting("meeting A").unwrap();
+    let b = storage.create_meeting("meeting B").unwrap();
+    crate::storage::with_test_database(&storage, |db| {
+        let claim = serde_json::json!({"scope": {"meetingId": b.id}});
+        db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at)
+                    VALUES('capture-exit-conflict',?1,'delete_meeting','attention',?2,?3,'{}',0,0)",
+            rusqlite::params![a.id, claim.to_string(), "a".repeat(64)]).unwrap();
+    });
+    drop(storage);
+    drop(bootstrap);
+
+    // Retain an older run without opening or collecting its ownership in the
+    // new controller, as happens when shared damage defers startup recovery.
+    let registry = journal::Registry::open(&app_data).unwrap();
+    let area = registry.allocate(request()).unwrap();
+    let retained = area.path().join("retained-test-audio");
+    std::fs::write(&retained, b"unverified test audio").unwrap();
+    drop(area);
+    drop(registry);
+
+    let bootstrap = crate::bootstrap::Bootstrap::open(&config, &app_data).unwrap();
+    let storage = bootstrap.open_storage().unwrap();
+    assert!(storage.data_write_blocked());
+    assert!(storage.ready_salvage_available());
+    bootstrap.require_ready_salvage(&storage).unwrap();
+    let controller = CaptureTests::default();
+    assert_eq!(controller.recovery_snapshot().unwrap().phase, "checking");
+    assert!(controller.recovery_blocked());
+    assert!(controller.require_empty().is_err());
+    assert!(controller.reserve(request()).is_err());
+    controller.require_exit_ready().unwrap();
+    controller.seal_exit().unwrap();
+    assert!(controller.reserve(request()).is_err());
+    bootstrap.request_ready_salvage(&storage).unwrap();
+    bootstrap.undo_salvage_request().unwrap();
+
+    assert_eq!(std::fs::read(retained).unwrap(), b"unverified test audio");
+    let registry = journal::Registry::open(&app_data).unwrap();
+    assert_eq!(registry.pending().unwrap().len(), 1);
+    controller.abort_exit().unwrap();
+    assert!(controller.recovery_blocked());
+    assert!(controller.reserve(request()).is_err());
 }
 #[test]
 #[cfg(target_os = "macos")]

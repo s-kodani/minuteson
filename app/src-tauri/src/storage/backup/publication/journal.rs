@@ -572,33 +572,48 @@ fn recover_one(root: &Path, db: &Connection, id: &str) -> Result<(), String> {
 }
 #[cfg(test)]
 pub(in crate::storage::backup) fn recover_all(root: &Path, db: &Connection) -> Result<(), String> {
-    recover_with_policy(root, db, None)
+    recover_with_policy(root, db, Ok(None))
 }
 pub(in crate::storage::backup) fn recover_with_policy(
     root: &Path,
     db: &Connection,
-    registry: Option<&scratch::Registry>,
+    registry: Result<Option<&scratch::Registry>, &str>,
 ) -> Result<(), String> {
     let pending:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='restore_addition' AND state NOT IN ('completed','recovered'))",[],|r|r.get(0)).map_err(|e|e.to_string())?;
     if !pending {
         return Ok(());
     }
+    let registry = registry?;
     if schema(db)? != schema(&portable::schema()?)? {
         return Err("復元回収前の保存先SQL定義が信頼済み定義と一致しません".into());
     }
     let mut query=db.prepare("SELECT id FROM maintenance_operations WHERE kind='restore_addition' AND state NOT IN ('completed','recovered') ORDER BY created_at,id").map_err(|e|e.to_string())?;
-    let mut rows = query.query([]).map_err(|e| e.to_string())?;
-    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        let id: String = row.get(0).map_err(|e| e.to_string())?;
-        if let Some(registry) = registry {
-            let evidence = recovery_evidence(db, &id)?;
-            if registry.retained("restore_addition", &id, &evidence.intent_hash)? {
-                continue;
+    let ids = query
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Vec<_>>();
+    drop(query);
+    let mut errors = Vec::new();
+    for id in ids {
+        let result = (|| {
+            let id = id.map_err(|e| e.to_string())?;
+            if let Some(registry) = registry {
+                let evidence = recovery_evidence(db, &id)?;
+                if registry.retained("restore_addition", &id, &evidence.intent_hash)? {
+                    return Ok(());
+                }
             }
+            recover_one(root, db, &id).map_err(|error| format!("{id}: {error}"))
+        })();
+        if let Err(error) = result {
+            errors.push(error);
         }
-        recover_one(root, db, &id)?;
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join(" / "))
+    }
 }
 
 pub(in crate::storage::backup) fn recovery_evidence(

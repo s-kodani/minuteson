@@ -17,10 +17,11 @@ export function useMeetingAudio(meetingId?: string) {
   return audio && (!meetingId || audio.meetingId === meetingId) ? audio : null;
 }
 
-export function MeetingAudioProvider({ meetingId, sourceType, active, locked, audioDeleted, children }: {
+export function MeetingAudioProvider({ meetingId, sourceType, active, navigationLocked, storageReadOnly, audioDeleted, unavailable = false, children }: {
   meetingId: string | null; sourceType?: "recording" | "audio_import" | null;
-  active: boolean; locked: boolean; audioDeleted: boolean | null; children: ReactNode;
+  active: boolean; navigationLocked: boolean; storageReadOnly: boolean; audioDeleted: boolean | null; unavailable?: boolean; children: ReactNode;
 }) {
+  const locked = navigationLocked || storageReadOnly;
   const [modes, setModes] = useState<MeetingPlaybackMode[]>([]);
   const [summaryError, setSummaryError] = useState("");
   const [mode, setMode] = useState<MeetingPlaybackMode>("mixed");
@@ -29,7 +30,7 @@ export function MeetingAudioProvider({ meetingId, sourceType, active, locked, au
   // The existing native deletion census identifies intentional absence before
   // a summary can warm a mix. A transient census error need not reset a valid
   // summary for this same source; confirmed deletion always invalidates it.
-  const canInspectSource = audioDeleted !== true && (audioDeleted === false || matchingSummary);
+  const canInspectSource = !unavailable && audioDeleted !== true && (audioDeleted === false || matchingSummary);
   const available = active && canInspectSource && !!meetingId && matchingSummary && modes.includes(mode);
   const durationUs = available ? summary!.durationUs : null;
   const audio = useTranscriptAudio(meetingId ?? "", locked || !available, { scope:"meeting", label:"会議全体の音声", idleMeetingMode:mode, idleMeetingDurationUs:durationUs, active });
@@ -57,7 +58,7 @@ export function MeetingAudioProvider({ meetingId, sourceType, active, locked, au
   };
   const playReference = (reference: MeetingPlaybackStartReference) => available && summary
     ? audio.startMeetingAt(mode, reference, summary.durationUs) : Promise.resolve();
-  return <MeetingAudioContext.Provider value={{ ...audio, meetingId, mode, modes, canPlay:available, canInspectSource, locked, summaryError, durationUs, changeMode, playReference }}>
+  return <MeetingAudioContext.Provider value={{ ...audio, meetingId, mode, modes, canPlay:available && !storageReadOnly, canInspectSource, locked, summaryError, durationUs, changeMode, playReference }}>
     {children}{active && <><IssueNotice scope={meetingId ?? "meeting"} type="meeting-audio-summary" label="保存音声の確認" message={summaryError} />{audio.controls}</>}
   </MeetingAudioContext.Provider>;
 }

@@ -59,30 +59,56 @@ fn reserve(state: &DataController) -> Result<Option<(Snapshot, Arc<AtomicBool>)>
 
 fn run_items(app: &AppHandle, check: &impl Fn() -> bool) -> Result<(), String> {
     let storage = app.state::<Storage>();
-    let root = storage.native_models_root().to_owned();
+    let root = storage.native_models_root().ok();
     let mut errors = Vec::new();
-    for item in deletion::listing(&storage)?.items {
+    let meetings = match deletion::listing(&storage) {
+        Ok(list) => list.items,
+        Err(error) => {
+            errors.push(error);
+            Vec::new()
+        }
+    };
+    let audio = match audio_deletion::listing(&storage) {
+        Ok(list) => list.items,
+        Err(error) => {
+            errors.push(error);
+            Vec::new()
+        }
+    };
+    let models = match root {
+        Some(root) => match model_deletion::listing(&storage, root) {
+            Ok(list) => list.items,
+            Err(error) => {
+                errors.push(error);
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
+    for item in meetings {
         if check() {
             break;
         }
-        let result =
-            Admission::acquire_deletion(app, Some(&item.operation_id)).and_then(|admission| {
-                crate::storage::deletion::automatic::meeting(
-                    &storage,
-                    admission.proof().ok_or("整理の実行権限を確認できません")?,
-                    &item.operation_id,
-                    check,
-                )
-            });
+        let admission = match item.meeting_id.as_deref() {
+            Some(meeting) => {
+                Admission::acquire_meeting_deletion(app, meeting, Some(&item.operation_id))
+            }
+            None => Admission::acquire_deletion(app, Some(&item.operation_id)),
+        };
+        let result = admission.and_then(|admission| {
+            crate::storage::deletion::automatic::meeting(
+                &storage,
+                admission.proof().ok_or("整理の実行権限を確認できません")?,
+                &item.operation_id,
+                check,
+            )
+        });
         if let Err(error) = result {
+            storage.startup_diagnostic(item.meeting_id.as_deref(), "deletion_pending", &error);
             errors.push(error);
         }
     }
-    for item in audio_deletion::listing(&storage)?
-        .items
-        .into_iter()
-        .filter(|item| item.review_allowed)
-    {
+    for item in audio.into_iter().filter(|item| item.review_allowed) {
         if check() {
             break;
         }
@@ -97,22 +123,24 @@ fn run_items(app: &AppHandle, check: &impl Fn() -> bool) -> Result<(), String> {
             },
         );
         if let Err(error) = result {
+            storage.startup_diagnostic(
+                item.meeting_id.as_deref(),
+                "audio_deletion_pending",
+                &error,
+            );
             errors.push(error);
         }
     }
-    for item in model_deletion::listing(&storage, &root)?
-        .items
-        .into_iter()
-        .filter(|item| item.review_allowed)
-    {
+    for item in models.into_iter().filter(|item| item.review_allowed) {
         if check() {
             break;
         }
+        let root = storage.native_models_root()?;
         let result = Admission::acquire_model_deletion(app, Some(&item.operation_id)).and_then(
             |admission| {
                 crate::storage::deletion::automatic::model(
                     &storage,
-                    &root,
+                    root,
                     admission.proof().ok_or("整理の実行権限を確認できません")?,
                     &item.operation_id,
                     check,
