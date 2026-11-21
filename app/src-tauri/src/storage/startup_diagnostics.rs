@@ -100,7 +100,50 @@ impl Storage {
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
         protected_diagnostics(&db, &mut items)?;
+        let sources = super::meeting_audio::availability::Source::ready(&db)?;
         drop(db);
+        let protected = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.reason.as_str(),
+                    "deletion_pending" | "audio_deletion_pending" | "audio_unavailable"
+                )
+            })
+            .filter_map(|item| item.meeting_id.as_deref())
+            .collect::<std::collections::HashSet<_>>();
+        let mut audio_issues = Vec::new();
+        for candidate in sources {
+            if candidate
+                .meeting
+                .as_deref()
+                .is_some_and(|id| protected.contains(id))
+            {
+                continue;
+            }
+            let source = match candidate.source {
+                Ok(source) => source,
+                Err(error) => {
+                    let issue = super::meeting_audio::availability::Issue::Unreadable(error);
+                    audio_issues.push(diagnostic(
+                        candidate.meeting.as_deref(),
+                        issue.reason(),
+                        &issue.message(),
+                    ));
+                    continue;
+                }
+            };
+            if let super::meeting_audio::availability::Observation::Unavailable(issue) =
+                source.inspect(self)?
+            {
+                audio_issues.push(diagnostic(
+                    Some(&source.meeting),
+                    issue.reason(),
+                    &issue.message(),
+                ));
+            }
+        }
+        items.extend(audio_issues);
         let entries = self
             .startup_diagnostics
             .0

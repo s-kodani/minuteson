@@ -90,6 +90,34 @@ fn every_fixed_model_has_offline_terms_bound_to_actual_weight_identity() {
         assert!(validate_download_policy(&changed).is_err());
     }
 }
+
+#[test]
+fn current_and_pre_update_eres2net_packages_keep_offline_terms() {
+    let manifests: Vec<_> = fixed()
+        .into_iter()
+        .filter(|m| m.model_name.contains("ERes2Net base"))
+        .collect();
+    assert_eq!(manifests.len(), 2);
+    for manifest in manifests {
+        for target in [Target::MacosAarch64, Target::WindowsX86_64] {
+            let mut manifest = manifest.clone();
+            manifest.target = target;
+            let current = official(&manifest).unwrap().unwrap();
+            assert!(current.official);
+            let embedding = manifest
+                .files
+                .iter_mut()
+                .find(|f| f.role == Role::SpeakerEmbedding)
+                .unwrap();
+            embedding.expected_size = Some(39_593_761);
+            embedding.expected_hash =
+                Some("1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b".into());
+            let previous = official(&manifest).unwrap().unwrap();
+            assert_eq!(previous.summary, current.summary);
+            assert!(previous.official);
+        }
+    }
+}
 #[test]
 fn all_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_changes() {
     let network: serde_json::Value =
@@ -116,7 +144,8 @@ fn all_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_change
 #[test]
 fn preserved_notice_bytes_and_sources_are_checked_and_complete() {
     let registry = registry().unwrap();
-    assert_eq!(registry.models.len(), 13);
+    // Includes both previous ERes2Net weight identities for installed packages.
+    assert_eq!(registry.models.len(), 15);
     assert_eq!(registry.notices.len(), 22);
     for record in &registry.notices {
         let bytes = assets::embedded(&record.sha256).unwrap();

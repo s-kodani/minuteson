@@ -913,6 +913,36 @@ impl RootAnchor {
         self.inspection_history = Some(history);
         Ok(self)
     }
+    /// Open an existing managed file without following links or granting mutation rights.
+    /// Only a genuine NotFound becomes None; access and I/O failures remain errors.
+    pub(in crate::storage) fn readable_file(
+        &self,
+        relative: &Path,
+    ) -> Result<Option<File>, String> {
+        self.verify()?;
+        let names = relative
+            .components()
+            .map(|part| match part {
+                std::path::Component::Normal(name) => {
+                    name.to_str().ok_or("管理パスを読み取れません".to_owned())
+                }
+                _ => Err("管理領域から外れるパスです".to_owned()),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let (leaf, parents) = names.split_last().ok_or("管理ファイル名がありません")?;
+        let mut opened = Vec::<Directory>::new();
+        for parent in parents {
+            let directory = opened.last().unwrap_or(&self.root);
+            let Some(child) = directory.child(parent)? else {
+                self.verify()?;
+                return Ok(None);
+            };
+            opened.push(child);
+        }
+        let file = opened.last().unwrap_or(&self.root).optional_regular(leaf)?;
+        self.verify()?;
+        Ok(file)
+    }
     pub(super) fn directory_ref(&self) -> Result<&Directory, String> {
         self.verify()?;
         Ok(&self.root)

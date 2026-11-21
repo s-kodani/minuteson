@@ -124,6 +124,7 @@ impl Storage {
         meeting: &str,
     ) -> Result<MeetingAudioSummary, String> {
         let plan = self.canonical_audio_plan(meeting)?;
+        self.require_canonical_audio_available(meeting, &plan)?;
         Ok(MeetingAudioSummary {
             schema_version: 1,
             duration_us: plan.tracks[0].end_us,

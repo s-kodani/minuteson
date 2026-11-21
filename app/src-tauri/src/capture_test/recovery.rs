@@ -51,7 +51,16 @@ impl Ownership {
         self.snapshot.phase != "clear"
     }
     pub(super) fn checking(&self) -> bool {
-        self.snapshot.phase == "checking"
+        if self.snapshot.phase != "checking" {
+            return false;
+        }
+        // A write-fenced startup leaves capture recovery unconfigured. No
+        // collector was started, so exit can retain its untouched journal.
+        // Once configured, even a not-yet-scheduled collector must block exit.
+        #[cfg(any(target_os = "macos", windows))]
+        return self.root.is_some();
+        #[cfg(not(any(target_os = "macos", windows)))]
+        true
     }
     pub(super) fn retry_revision(&self) -> Option<u64> {
         (self.snapshot.phase == "attention").then_some(self.snapshot.revision)

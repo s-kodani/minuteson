@@ -167,10 +167,10 @@ mod tests {
             assert_eq!(recipe.hash().unwrap(), choice.review.recipe_hash);
             let expected = match choice.id.as_str() {
                 "sherpa-1138-pyannote3-eres2net-base" => {
-                    "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666"
+                    "c8dfeba400033dc9c3076dd0335a28b79628800310b57da07a31656a2acc55ae"
                 }
                 "sherpa-1138-pyannote3-int8-eres2net-base" => {
-                    "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96"
+                    "8849a721ab5b73353b6093de25354f921865c0ccddaa24db79535392a004a8af"
                 }
                 "sherpa-1138-pyannote3-int8-titanet-small" => {
                     "b2ac4fcbd3527ffe7776601b28eb6198d922164cc383340cc67a9cec2e16ceb7"

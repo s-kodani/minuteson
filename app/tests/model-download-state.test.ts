@@ -221,13 +221,13 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const sherpa = options.find(o => o.id === "sherpa-1138-pyannote3-eres2net-base")!;
   assert.equal(sherpa.tokenLimits, null);
   assert.equal(sherpa.review.manifest.files.filter(f => f.role === "notice").length, 5);
-  assert.equal(sherpa.review.downloadBytes, 64_804_373);
+  assert.equal(sherpa.review.downloadBytes, 64_804_374);
   assert.equal(sherpa.review.archiveBytes, 25_210_612);
-  assert.equal(sherpa.review.totalBytes, 78_117_057);
-  assert.equal(sherpa.review.recipeHash, "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666");
+  assert.equal(sherpa.review.totalBytes, 78_117_058);
+  assert.equal(sherpa.review.recipeHash, "c8dfeba400033dc9c3076dd0335a28b79628800310b57da07a31656a2acc55ae");
   const int8 = options.find(o => o.id === "sherpa-1138-pyannote3-int8-eres2net-base")!;
   assert.equal(int8.tokenLimits, null);
-  assert.equal(int8.review.recipeHash, "e1dc02a6b2a5224f76e2432f7daaf97154427fccb3c16627340ccf07380c8b96");
+  assert.equal(int8.review.recipeHash, "8849a721ab5b73353b6093de25354f921865c0ccddaa24db79535392a004a8af");
   const qwen3 = options.find(o => o.id === "llama-b11533-qwen3-8b-q4km")!;
   assert.equal(qwen3.label, "Qwen 3 8B · Q4_K_M");
   assert.deepEqual(qwen3.tokenLimits, { maxInputTokens: 40960, maxOutputTokens: 32768, maxContextTokens: 40960, tokenizer: "utf8_byte_bpe" });

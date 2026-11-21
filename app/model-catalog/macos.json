@@ -10,7 +10,7 @@
         "engine": "sherpa-onnx",
         "engineVersion": "v1.13.8",
         "modelName": "pyannote segmentation 3.0 + 3D-Speaker ERes2Net base",
-        "modelVersion": "segmentation-3-0+eres2net-base-16k-SHA-fixed-capi1",
+        "modelVersion": "segmentation-3-0+eres2net-base-16k-20261119-SHA-fixed-capi1",
         "quantization": null,
         "licenseRef": "sherpa-onnx Apache-2.0: https://github.com/k2-fsa/sherpa-onnx/blob/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE ; segmentation MITは公式配布アーカイブ内。3D-Speaker Apache-2.0: https://github.com/modelscope/3D-Speaker/blob/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE ; ONNX Runtime 1.28.2 MIT/ThirdPartyNotices: https://github.com/microsoft/onnxruntime/tree/33ca9628233dc8f002435e868d4c2e9f82766ca1 ; 本文はnoticesに保持。segmentationアーカイブ・内部ファイル・本文SHAは独立算出の照合値で、配布元署名の認証や再配布承認ではない。",
         "target": "macos_aarch64",
@@ -42,8 +42,8 @@
           {
             "relativePath": "models/embedding.onnx",
             "role": "speaker_embedding",
-            "expectedSize": 39593761,
-            "expectedHash": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+            "expectedSize": 39593762,
+            "expectedHash": "f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498"
           },
           {
             "relativePath": "notices/segmentation-MIT.txt",
@@ -162,7 +162,7 @@
         "engine": "sherpa-onnx",
         "engineVersion": "v1.13.8",
         "modelName": "pyannote segmentation 3.0 int8 + 3D-Speaker ERes2Net base",
-        "modelVersion": "segmentation-3-0-int8+eres2net-base-16k-SHA-fixed-capi1",
+        "modelVersion": "segmentation-3-0-int8+eres2net-base-16k-20261119-SHA-fixed-capi1",
         "quantization": null,
         "licenseRef": "sherpa-onnx Apache-2.0: https://github.com/k2-fsa/sherpa-onnx/blob/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE ; segmentation MITは公式配布アーカイブ内。3D-Speaker Apache-2.0: https://github.com/modelscope/3D-Speaker/blob/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE ; ONNX Runtime 1.28.2 MIT/ThirdPartyNotices: https://github.com/microsoft/onnxruntime/tree/33ca9628233dc8f002435e868d4c2e9f82766ca1 ; 本文はnoticesに保持。segmentationアーカイブ・内部ファイル・本文SHAは独立算出の照合値で、配布元署名の認証や再配布承認ではない。",
         "target": "macos_aarch64",
@@ -194,8 +194,8 @@
           {
             "relativePath": "models/embedding.onnx",
             "role": "speaker_embedding",
-            "expectedSize": 39593761,
-            "expectedHash": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+            "expectedSize": 39593762,
+            "expectedHash": "f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498"
           },
           {
             "relativePath": "notices/segmentation-MIT.txt",

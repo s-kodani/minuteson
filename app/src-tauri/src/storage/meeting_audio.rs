@@ -2,6 +2,8 @@
 use super::transcription::{ChunkPlan, RecordedAudioPlan, TrackPlan};
 use super::*;
 
+pub(in crate::storage) mod availability;
+
 pub(crate) const POLICY: &str = "meeting_wav_pcm16_16000_v1";
 
 /// Historical input bytes intentionally retired after verified publication.
