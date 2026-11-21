@@ -1,43 +1,11 @@
 //! Real archive bytes and owned SQLite/synthetic import files; no user data.
+use super::super::delete_meeting_audio_for_test as deleted;
 use super::*;
-use crate::{analysis_worker::AnalysisController, storage::deletion::audio};
 use serde_json::{json, Value};
 
 #[path = "deleted_audio_publication_tests.rs"]
 mod publication_tests;
 
-pub(in crate::storage) fn deleted(storage: &Storage, meeting: &str) -> String {
-    let lease = AnalysisController::default()
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
-        .unwrap();
-    let op = Uuid::new_v4().to_string();
-    let census =
-        audio::Census::capture(storage, meeting, &crate::test_support::never_cancelled).unwrap();
-    audio::intent::prepare(
-        storage,
-        &op,
-        &census,
-        audio::intent::Policy {
-            include_unregistered_audio: true,
-            retain_unclassified: true,
-        },
-        &lease,
-        &crate::test_support::never_cancelled,
-    )
-    .unwrap();
-    audio::intent::removal::start(storage, &op, &lease, &crate::test_support::never_cancelled)
-        .unwrap();
-    audio::intent::removal::run(storage, &op, &lease, &crate::test_support::never_cancelled)
-        .unwrap();
-    audio::intent::removal::completion::finish(
-        storage,
-        &op,
-        &lease,
-        &crate::test_support::never_cancelled,
-    )
-    .unwrap();
-    op
-}
 fn fixture() -> (tempfile::TempDir, Storage, String) {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().join("root")).unwrap();

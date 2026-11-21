@@ -9,8 +9,8 @@ fn private_directory(parent: &Path, leaf: &str) -> PathBuf {
 fn verified_deleted_audio_retains_its_status_through_salvage_and_backup() {
     let source = tempfile::tempdir().unwrap();
     let storage = Storage::open(source.path().into()).unwrap();
-    let meeting = backup::archive::tests::meeting(&storage, "deleted-audio-salvage-source");
-    backup::archive::deleted_audio_tests::deleted(&storage, &meeting);
+    let meeting =
+        backup::deleted_current_meeting_for_test(&storage, "deleted-audio-salvage-source");
     drop(storage);
 
     let stage = tempfile::tempdir().unwrap();

@@ -68,10 +68,40 @@ pub(in crate::storage) fn published_restore_for_rebinding_test(
             .collect(),
     )
 }
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
+fn delete_meeting_audio_for_test(storage: &Storage, meeting: &str) -> String {
+    use crate::{
+        analysis_worker::AnalysisController, storage::deletion::audio,
+        test_support::never_cancelled,
+    };
+
+    let lease = AnalysisController::default()
+        .begin_data_maintenance(false, false, &never_cancelled)
+        .unwrap();
+    let op = Uuid::new_v4().to_string();
+    let census = audio::Census::capture(storage, meeting, &never_cancelled).unwrap();
+    audio::intent::prepare(
+        storage,
+        &op,
+        &census,
+        audio::intent::Policy {
+            include_unregistered_audio: true,
+            retain_unclassified: true,
+        },
+        &lease,
+        &never_cancelled,
+    )
+    .unwrap();
+    audio::intent::removal::start(storage, &op, &lease, &never_cancelled).unwrap();
+    audio::intent::removal::run(storage, &op, &lease, &never_cancelled).unwrap();
+    audio::intent::removal::completion::finish(storage, &op, &lease, &never_cancelled).unwrap();
+    op
+}
+
+#[cfg(all(test, any(unix, windows)))]
 pub(crate) fn deleted_current_meeting_for_test(storage: &Storage, operation: &str) -> String {
     let meeting = archive::tests::meeting(storage, operation);
-    archive::deleted_audio_tests::deleted(storage, &meeting);
+    delete_meeting_audio_for_test(storage, &meeting);
     meeting
 }
 

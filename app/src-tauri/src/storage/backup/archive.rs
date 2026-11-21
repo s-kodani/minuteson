@@ -680,4 +680,4 @@ pub(in crate::storage) mod tests;
 
 #[cfg(all(test, unix))]
 #[path = "deleted_audio_tests.rs"]
-pub(in crate::storage) mod deleted_audio_tests;
+mod deleted_audio_tests;
