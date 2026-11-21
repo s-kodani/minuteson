@@ -1,5 +1,6 @@
 //! Cheap availability observations. Publication/playback still verify the full
 //! audio hash; list and summary reads do not scan long recordings or mutate rows.
+use super::super::deletion::fence::AudioPendingScopes;
 use super::*;
 
 pub(in crate::storage) struct Source {
@@ -79,9 +80,13 @@ impl Source {
             .map_err(|error| error.to_string())
     }
 
-    pub(in crate::storage) fn current(&self, db: &Connection) -> Result<bool, String> {
+    pub(in crate::storage) fn current(
+        &self,
+        db: &Connection,
+        pending: &mut AudioPendingScopes,
+    ) -> Result<bool, String> {
         if super::super::meeting_access::reserved(db, &self.meeting)?
-            || super::super::deletion::fence::audio_pending(db, &self.meeting)?
+            || pending.contains(db, &self.meeting)?
         {
             return Ok(false);
         }
@@ -107,12 +112,21 @@ impl Source {
     }
 
     pub(in crate::storage) fn inspect(&self, storage: &Storage) -> Result<Observation, String> {
-        self.inspect_observed(storage, || {})
+        self.inspect_with_scopes(storage, &mut AudioPendingScopes::default())
+    }
+
+    pub(in crate::storage) fn inspect_with_scopes(
+        &self,
+        storage: &Storage,
+        pending: &mut AudioPendingScopes,
+    ) -> Result<Observation, String> {
+        self.inspect_observed(storage, pending, || {})
     }
 
     fn inspect_observed(
         &self,
         storage: &Storage,
+        pending: &mut AudioPendingScopes,
         observed: impl FnOnce(),
     ) -> Result<Observation, String> {
         // Reserve/delete admission takes this same lock. Keep only one
@@ -124,11 +138,11 @@ impl Source {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        if !self.current(&db)? {
+        if !self.current(&db, pending)? {
             return Ok(Observation::Changed);
         }
         let result = self.inspect_file(storage, observed);
-        if !self.current(&db)? {
+        if !self.current(&db, pending)? {
             return Ok(Observation::Changed);
         }
         Ok(match result {

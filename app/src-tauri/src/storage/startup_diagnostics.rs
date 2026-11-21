@@ -113,6 +113,7 @@ impl Storage {
             .filter_map(|item| item.meeting_id.as_deref())
             .collect::<std::collections::HashSet<_>>();
         let mut audio_issues = Vec::new();
+        let mut pending_audio = deletion::fence::AudioPendingScopes::default();
         for candidate in sources {
             if candidate
                 .meeting
@@ -134,7 +135,7 @@ impl Storage {
                 }
             };
             if let super::meeting_audio::availability::Observation::Unavailable(issue) =
-                source.inspect(self)?
+                source.inspect_with_scopes(self, &mut pending_audio)?
             {
                 audio_issues.push(diagnostic(
                     Some(&source.meeting),

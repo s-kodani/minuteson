@@ -123,6 +123,76 @@ pub(in crate::storage) fn audio_pending(db: &Connection, meeting: &str) -> Resul
     .map_err(|e| e.to_string())
 }
 
+// One list read may inspect many meetings. Reuse only the protected IDs, never
+// a file observation or permission to mutate. Every use is under the live DB
+// mutex; local writes (including TEMP), DDL, and other connections invalidate it.
+#[derive(Default)]
+pub(in crate::storage) struct AudioPendingScopes {
+    stamp: Option<AudioScopeStamp>,
+    meetings: std::collections::HashSet<Vec<u8>>,
+}
+
+#[derive(PartialEq, Eq)]
+struct AudioScopeStamp {
+    connection: usize,
+    changes: u64,
+    data: i64,
+    main_schema: i64,
+    temp_schema: i64,
+}
+
+impl AudioPendingScopes {
+    pub(in crate::storage) fn contains(
+        &mut self,
+        db: &Connection,
+        meeting: &str,
+    ) -> Result<bool, String> {
+        // A rollback does not undo total_changes. Do not reuse a snapshot of
+        // uncommitted changes, even when a caller later rolls those changes back.
+        let stamp = db
+            .is_autocommit()
+            .then(|| -> Result<_, rusqlite::Error> {
+                Ok(AudioScopeStamp {
+                    connection: connection_identity(db),
+                    changes: db.total_changes(),
+                    data: db.query_row("PRAGMA main.data_version", [], |r| r.get(0))?,
+                    main_schema: db.query_row("PRAGMA main.schema_version", [], |r| r.get(0))?,
+                    temp_schema: db.query_row("PRAGMA temp.schema_version", [], |r| r.get(0))?,
+                })
+            })
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        if stamp.is_none() || self.stamp != stamp {
+            let pending = predicate(db)?;
+            let mut query = db
+                .prepare(&format!(
+                    "SELECT meeting_id,{MANIFEST_AUDIO_MEETING} FROM maintenance_operations
+                     WHERE kind='delete_assets' AND {pending}"
+                ))
+                .map_err(|error| error.to_string())?;
+            let mut rows = query.query([]).map_err(|error| error.to_string())?;
+            let mut meetings = std::collections::HashSet::new();
+            while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+                for index in 0..2 {
+                    // Match the existing TEXT bind's SQLite equality without
+                    // requiring UUIDs or decoding corrupt UTF-8. Non-TEXT values
+                    // cannot equal a Rust string. Keep BOTH claims on conflict.
+                    if let rusqlite::types::ValueRef::Text(value) =
+                        row.get_ref(index).map_err(|error| error.to_string())?
+                    {
+                        meetings.insert(value.to_vec());
+                    }
+                }
+            }
+            self.meetings = meetings;
+            // Stamp BEFORE the query: an outside commit during the scan must
+            // invalidate the next use, never get attached to an older result.
+            self.stamp = stamp;
+        }
+        Ok(self.meetings.contains(meeting.as_bytes()))
+    }
+}
+
 pub(in crate::storage) fn audio_unreserved(
     db: &Connection,
     column: &str,
@@ -187,6 +257,7 @@ pub(in crate::storage) fn readonly(context: AuthContext<'_>) -> Authorization {
                 | "journal_mode"
                 | "secure_delete"
                 | "freelist_count"
+                | "data_version"
         ) =>
         {
             Authorization::Allow
