@@ -32,7 +32,7 @@ bridge.invoke=async(cmd,args={})=>{
   if(data.health){
     if(cmd==="list_meetings" && data.health.listError)throw Error("合成の会議一覧取得失敗");
     if(cmd==="get_meeting_list_diagnostics" && data.health.diagnosticsReadFailure)throw Error("合成の会議の注意事項読込み失敗");
-    if(cmd==="get_meeting_list_diagnostics")return { items:[
+    if(cmd==="get_meeting_list_diagnostics")return { items:data.health.diagnostics ?? [
       ...(data.health.audioIssue ? [{meetingId:"m1",reason:"audio_recovery",message:"音声に確認が必要です"}] : []),
       ...(data.health.meetingIssue ? [{meetingId:"m1",reason:"meeting_row_invalid",message:"一部の会議情報を確認できません"}] : []),
     ] };

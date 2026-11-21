@@ -104,14 +104,14 @@ async (page,capturePath) => {
   await page.setViewportSize({ width: 1360, height: 900 });
   await page.evaluate(()=>{window.__mon.health.listError=false;window.__mon.minutesPrefReadFailure=true;window.__mon.health.diagnosticsReadFailure=true;});
   await page.getByRole("button",{name:"再読込",exact:true}).click();
-  const unreadStatuses = page.getByText("確認が必要な会議があるか分かりませんでした。会議一覧の「再読込」を選んでください。", { exact: true });
+  const unreadStatuses = page.getByText("会議の利用状態を取得できませんでした。会議一覧の「再読込」を選んでください。", { exact: true });
   await unreadStatuses.waitFor();
   await page.screenshot({ path: capturePath("meeting-status-read-failed.png") });
   await page.evaluate(()=>{window.__mon.health.diagnosticsReadFailure=false;});
   await page.getByRole("button",{name:"再読込",exact:true}).click();
   await unreadStatuses.waitFor({ state: "hidden" });
   const affected=page.getByRole("row").filter({hasText:"議事録UI確認"});
-  await affected.getByText("要確認",{exact:true}).waitFor();
+  await affected.getByText("音声保存エラー",{exact:true}).waitFor();
   await affected.getByRole("button",{name:"議事録UI確認",exact:true}).click();
   await page.getByText(/確定した文字起こしを閲覧専用で表示/).waitFor();
   await page.locator(".utterance-list").getByText("点検日を確認する",{exact:true}).waitFor();
@@ -302,7 +302,7 @@ async (page,capturePath) => {
     window.__mon.health.meetingIssue = true;
     window.__mon.emitPlain("background-cleanup-finished");
   });
-  await page.getByText("一部の会議情報を確認できません", { exact: true }).waitFor();
+  await page.locator(".workspace-warning strong").getByText("会議データを利用できません", { exact: true }).waitFor();
   check(await page.getByText("音声に確認が必要です", { exact: true }).count() === 0, "a separate meeting diagnosis also exposed the hidden audio text");
   await meetings().click();
   await affected.getByRole("button",{name:"議事録UI確認",exact:true}).waitFor();
@@ -322,7 +322,7 @@ async (page,capturePath) => {
   await openSalvage().waitFor();
   await page.screenshot({ path: capturePath("workspace-shared-rescue-available.png") });
   await affected.getByRole("button", { name: "議事録UI確認", exact: true }).click();
-  await page.getByText("一部の会議情報を確認できません", { exact: true }).waitFor({ state: "hidden" });
+  await page.locator(".workspace-warning strong").getByText("会議データを利用できません", { exact: true }).waitFor({ state: "hidden" });
   for (const [tab, label] of [["transcript", "文字起こし"], ["minutes", "議事録"]]) {
     await page.getByRole("tab", { name: label, exact: true }).click();
     for (const width of [1360, 400]) {

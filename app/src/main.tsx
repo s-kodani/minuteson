@@ -25,6 +25,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type Form
 import { formatElapsed, useRecordingSession } from "./session";
 import { phaseLabel } from "./recording-phase";
 import { meetingStatusLabel } from "./meeting-status";
+import { meetingDiagnosticPresentation, meetingDiagnosticSummary } from "./meeting-diagnostics";
 import { backgroundReadFailure } from "./background-read-failure";
 import { VocabularyEditor } from "./vocabulary";
 import { RecordingVocabulary } from "./recording-vocabulary";
@@ -112,12 +113,13 @@ function MainWindow() {
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
   const selectedDiagnostics = selectedMeeting ? meetingList.byMeeting.get(selectedMeeting.id) : undefined;
   const selectedNotices = selectedDiagnostics?.filter(item => item.reason !== "audio_recovery");
+  const selectedDiagnosticSummary = meetingDiagnosticSummary(selectedNotices);
   const selectedProtected = !!selectedMeeting && (
     !!selectedDiagnostics?.some(item => ["meeting_row_invalid", "deletion_pending"].includes(item.reason)) ||
     !!dataOperation.deletionListing?.deletingMeetingIds.includes(selectedMeeting.id) ||
     (dataOperation.snapshot?.deletionPreview?.pending === true && dataOperation.snapshot.deletionPreview.meetingId === selectedMeeting.id)
   );
-  const selectedAudioUnavailable = !!selectedDiagnostics?.some(item => ["audio_recovery", "audio_deletion_pending", "audio_unavailable"].includes(item.reason)) ||
+  const selectedAudioUnavailable = !!selectedDiagnostics?.some(item => ["audio_recovery", "audio_deletion_pending", "audio_unavailable", "audio_missing", "audio_unreadable"].includes(item.reason)) ||
     (!!selectedMeeting && dataOperation.snapshot?.audioDeletionPreview?.pending === true && dataOperation.snapshot.audioDeletionPreview.meetingId === selectedMeeting.id);
   const [preparation,setPreparation]=useState<RecordingPreparation|null>(null);
   const [screen, setScreen] = useState<"overview" | "meetings" | "settings" | "recording" | "jobs" | "logs" | "voices" | "prompts">("meetings");
@@ -491,11 +493,11 @@ function MainWindow() {
             disabled={navigationLocked || modelCleanupActive || !!savingRecording && recordingActive(savingRecording)} />}
           {writeStateUnverified && dataOperation.writeStateError && <p className="workspace-warning meeting-list-notice" role="status">保存先の書き込み可否を再確認しています。会議を閲覧できます。</p>}
           {selectedNotices?.length ? <div className="workspace-warning meeting-list-notice" role="status">
-            <strong>要確認</strong>
-            <ul>{[...new Set(selectedNotices.map(item => item.message))].map(message => <li key={message}>{message}</li>)}</ul>
+            <strong>{selectedDiagnosticSummary?.label}</strong>
+            <ul>{[...new Set(selectedNotices.map(item => meetingDiagnosticPresentation(item, { documentEditingBlocked: selectedWriteLocked }).description))].map(message => <li key={message}>{message}</li>)}</ul>
           </div> : null}
           {meetings.map(meeting => <ToastNotice key={meeting.id} scope={meeting.id} type="meeting-integrity" level="warning" historyOnly meetingId={meeting.id}
-            message={meetingList.byMeeting.has(meeting.id) ? `会議「${meeting.title}」に確認が必要な項目があります。` : ""} />)}
+            message={meetingList.byMeeting.has(meeting.id) ? `会議「${meeting.title}」：${meetingDiagnosticSummary(meetingList.byMeeting.get(meeting.id))!.label}。` : ""} />)}
           {!detail && (screen === "overview" || screen === "meetings") && <div className="page-heading"><h1>会議一覧</h1></div>}
           <AudioImportPanel modelCleanupActive={modelCleanupActive} overlayHost={audioDropHost} visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
             await flushPendingEdits();
@@ -546,13 +548,13 @@ function MainWindow() {
             {meetingList.status === "loading" && <p className="empty-meetings" role="status">保存済み会議を読み込んでいます。</p>}
             {meetingList.status === "failed" && <p className="meeting-list-notice" role="status">会議一覧を取得できませんでした。{meetings.length > 0 && "前回取得した一覧を表示しています。"}再読込してください。</p>}
             <IssueNotice scope="main" type="meeting-list" label="会議一覧" message={meetingList.error}/>
-            {meetingList.status === "ready" && meetingList.diagnosticError && <p className="meeting-list-notice" role="status">確認が必要な会議があるか分かりませんでした。会議一覧の「再読込」を選んでください。</p>}
+            {meetingList.status === "ready" && meetingList.diagnosticError && <p className="meeting-list-notice" role="status">会議の利用状態を取得できませんでした。会議一覧の「再読込」を選んでください。</p>}
             {meetingList.byMeeting.get(null)?.map(item => <p key={`${item.reason}:${item.message}`} className="meeting-list-notice" role="status">{item.message}</p>)}
             {shownMeetings.length === 0 ? meetingList.status === "ready" && <p className="empty-meetings">{meetingQuery ? "条件に合う会議はありません。" : restoredFilter ? "対象の復元会議は現在の一覧にありません。" : "保存済み会議はありません。"}</p> : <div className="meeting-table-frame"><table className="meeting-table"><thead><tr><th scope="col">会議名</th><th scope="col">作成日時</th><th scope="col">状態</th><th scope="col"><span className="sr-only">操作</span></th></tr></thead><tbody>{shownMeetings.map((meeting) => <tr key={meeting.id}>
               <td><button type="button" className="meeting-name" data-screen-navigation onClick={() => selectMeeting(meeting.id)} disabled={navigationLocked}>{meeting.title}</button>{restoredIds.includes(meeting.id) && <small className="restore-badge">バックアップから復元</small>}</td>
               <td className="meeting-date">{new Date(meeting.createdAt).toLocaleString("ja-JP")}</td>
-              <td><span className="state-pill">{meetingList.byMeeting.has(meeting.id) ? "要確認" : meetingStatusLabel(meeting, state, recovery.snapshot)}</span>{recovery.error && recoveryMeetingState(recovery.snapshot, meeting.id) && <small role="status">保存状態を確認できません。表示は前回取得した状態です。</small>}</td>
-              <td><RowMenu label={`${meeting.title}の操作`} disabled={navigationLocked} onOpenChange={open => trackDeletionMenu(meeting.id, open)}><button type="button" role="menuitem" data-screen-navigation onClick={() => selectMeeting(meeting.id)} disabled={navigationLocked}>開く</button>{recoveryMeetingState(recovery.snapshot, meeting.id)?.error && <RecordingSaveRetry snapshot={recovery.snapshot} meetingId={meeting.id} locked={writeLocked} />}{deletionMenu(meeting)}{dataOperation.deletionListing?.deletingMeetingIds.includes(meeting.id) && <span role="status">削除中・要確認</span>}</RowMenu></td>
+              <td><span className="state-pill">{meetingStatusLabel(meeting, state, recovery.snapshot, meetingList.byMeeting.get(meeting.id))}</span>{recovery.error && recoveryMeetingState(recovery.snapshot, meeting.id) && <small role="status">保存状態を確認できません。表示は前回取得した状態です。</small>}</td>
+              <td><RowMenu label={`${meeting.title}の操作`} disabled={navigationLocked} onOpenChange={open => trackDeletionMenu(meeting.id, open)}><button type="button" role="menuitem" data-screen-navigation onClick={() => selectMeeting(meeting.id)} disabled={navigationLocked}>開く</button>{recoveryMeetingState(recovery.snapshot, meeting.id)?.error && <RecordingSaveRetry snapshot={recovery.snapshot} meetingId={meeting.id} locked={writeLocked} />}{deletionMenu(meeting)}{dataOperation.deletionListing?.deletingMeetingIds.includes(meeting.id) && <span role="status">会議の削除が完了していません。</span>}</RowMenu></td>
             </tr>)}</tbody></table></div>}
           </section>
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-transcript" role="tabpanel" aria-labelledby="meeting-tab-transcript" hidden={detailTab !== "transcript"}>
