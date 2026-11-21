@@ -261,6 +261,9 @@ button:disabled { opacity:.5; }
 .meeting-audio-settings-fields p { color:var(--muted); margin:0; }
 /* The same two-column reading surface as the mock, even at 960px. */
 .content.meeting-detail-content { --tab-header-padding-top:24px; --tab-content-padding-inline:32px; position:relative; padding:0; gap:0; overflow:visible; }
+/* The main window renders this heading before the transcript bundle loads. */
+.transcript-primary-heading { padding:var(--tab-header-padding-top) var(--tab-content-padding-inline) 8px; }
+.transcript-primary-heading > h2 { flex:none; margin:0; }
 /* Historical warnings expand in the workspace, never in a tiny scrollbox.
    Keep a usable editor viewport below them, reachable through workspace scroll. */
 .content.meeting-detail-content:has(>.archived-input-notices:not([hidden])) { overflow-y:auto; }
@@ -592,6 +595,8 @@ button:disabled { opacity:.5; }
 .meeting-list-notice { display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px; min-width:0; }
 .meeting-list-notice>button { flex:none; max-width:100%; }
 .meeting-detail-content > .workspace-warning { flex:none; margin-inline:var(--tab-content-padding-inline); }
+.meeting-detail-content > .meeting-diagnostic-notice { margin-block-start:12px; }
+.meeting-detail-content .deferred-panel-loading { flex:none; margin:0; padding:16px var(--tab-content-padding-inline); }
 .content.meeting-detail-content:has(> .storage-recovery-notice) { --tab-header-padding-top:0px; }
 .meeting-detail-content > .storage-recovery-notice { padding-block:8px; }
 .meeting-detail-content > .storage-recovery-notice > p { margin-block:0; }

@@ -1,6 +1,7 @@
 import { useCaptureActions, useCaptureActionState, type CaptureMeeting as Meeting } from "./capture-actions";
 import { useWorkspaceClose } from "./workspace-close";
 import { InfoPopover, closeInfoPopovers } from "./info-popover";
+import { Callout } from "./callout";
 import { ModelDeletionDialog, useModelDeletion } from "./model-deletion";
 import { SettingsFooter } from "./settings-footer";
 import { AppUpdateBanner, AppUpdateProvider } from "./app-updates";
@@ -76,7 +77,7 @@ const MinutesPanel = lazy(() => import("./minutes").then(module => ({ default: m
 const ModelInspectionPanel = lazy(() => import("./model-inspection").then(module => ({ default: module.ModelInspectionPanel })));
 
 function DeferredPanel({ children, visible = true }: { children: ReactNode; visible?: boolean }) {
-  return <Suspense fallback={visible ? <p role="status">画面を読み込んでいます。</p> : null}>{children}</Suspense>;
+  return <Suspense fallback={visible ? <p className="deferred-panel-loading" role="status">画面を読み込んでいます。</p> : null}>{children}</Suspense>;
 }
 
 
@@ -492,10 +493,9 @@ function MainWindow() {
                 ? "設定の「データと保存」で未完了の移動の状態を確認してください。" : undefined}
             disabled={navigationLocked || modelCleanupActive || !!savingRecording && recordingActive(savingRecording)} />}
           {writeStateUnverified && dataOperation.writeStateError && <p className="workspace-warning meeting-list-notice" role="status">保存先の書き込み可否を再確認しています。会議を閲覧できます。</p>}
-          {selectedNotices?.length ? <div className="workspace-warning meeting-list-notice" role="status">
-            <strong>{selectedDiagnosticSummary?.label}</strong>
+          {selectedNotices?.length ? <Callout className="workspace-warning meeting-diagnostic-notice" title={selectedDiagnosticSummary!.label}>
             <ul>{[...new Set(selectedNotices.map(item => meetingDiagnosticPresentation(item, { documentEditingBlocked: selectedWriteLocked }).description))].map(message => <li key={message}>{message}</li>)}</ul>
-          </div> : null}
+          </Callout> : null}
           {meetings.map(meeting => <ToastNotice key={meeting.id} scope={meeting.id} type="meeting-integrity" level="warning" historyOnly meetingId={meeting.id}
             message={meetingList.byMeeting.has(meeting.id) ? `会議「${meeting.title}」：${meetingDiagnosticSummary(meetingList.byMeeting.get(meeting.id))!.label}。` : ""} />)}
           {!detail && (screen === "overview" || screen === "meetings") && <div className="page-heading"><h1>会議一覧</h1></div>}
