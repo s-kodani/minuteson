@@ -10,9 +10,10 @@ async (page, capturePath) => {
     const before = (await calls("get_data_operation")).length;
     await page.waitForFunction(n => window.dataFixture.calls.filter(c => c.command === "get_data_operation").length > n, before);
   };
+  const openSettings = () => page.getByRole("button", { name: "設定", exact: true }).click();
   const boot = async () => {
     await page.reload();
-    await page.getByRole("button", { name: "設定", exact: true }).click();
+    await openSettings();
     await page.getByRole("region", { name: "データと保存" }).waitFor();
   };
   const region = () => page.getByRole("region", { name: "データと保存" });
@@ -27,7 +28,22 @@ async (page, capturePath) => {
   const stopChoice = () => page.getByRole("dialog", { name: "データ操作の安全な取消を確認", exact: true });
   const stop = async () => { await region().getByRole("button", { name: "処理を取り消す", exact: true }).click(); await stopChoice().getByRole("button", { name: "取消を要求して停止を待つ", exact: true }).click(); };
 
-  await boot(); await page.getByRole("button", { name: "バックアップと追加復元の説明を開く", exact: true }).click();
+  const modelModule = url => url.pathname === "/src/model-inspection.tsx";
+  const { promise: releaseModelModule, resolve: allowModelModule } = Promise.withResolvers();
+  await page.reload();
+  await page.route(modelModule, async route => {
+    await releaseModelModule;
+    await route.continue();
+  }, { times: 1 });
+  const helpButton = page.getByRole("button", { name: "バックアップと追加復元の説明を開く", exact: true });
+  try {
+    await Promise.all([page.waitForRequest(request => modelModule(new URL(request.url()))), openSettings()]);
+    await page.getByText("画面を読み込んでいます。", { exact: true }).waitFor();
+    check(await helpButton.count() === 0, "backup help appeared before the settings sections above it finished loading");
+  } finally {
+    allowModelModule();
+  }
+  await helpButton.click();
   await page.getByRole("dialog", { name: "バックアップと追加復元", exact: true }).getByRole("link", { name: "詳しい説明", exact: true }).click();
   const info = await page.getByRole("dialog", { name: "バックアップと追加復元", exact: true }).innerText();
   check(info.includes("AIモデル本体") && info.includes("独自暗号化やクラウド同期ではありません") && info.includes("新しい別会議"), "data scope explanation missing");

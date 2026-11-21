@@ -429,6 +429,8 @@ function MainWindow() {
   };
   const shownMeetings = meetings.filter(meeting => (!restoredFilter || restoredFilter.includes(meeting.id)) && meeting.title.toLocaleLowerCase("ja-JP").includes(meetingQuery.toLocaleLowerCase("ja-JP")));
   const detail = screen === "overview" && !!selectedMeeting;
+  // Keep the data operation mounted and reveal its controls after the model panel above it.
+  const settingsReady = screen === "settings" && modelProgressOwnerReady;
   const dataWorkActive = ["backup", "restore"].includes(dataOperation.snapshot?.kind ?? "") && !!dataOperation.snapshot?.busy;
   const showJobs = () => { if (dataWorkActive) setScreen("jobs"); else if (!navigationLocked) void navigate(() => setScreen("jobs")); };
   const deletionMenu = (meeting: Meeting) => {
@@ -509,8 +511,8 @@ function MainWindow() {
             <MinutesPromptSettings visible={screen === "prompts"} locked={writeLocked} />
             {screen === "prompts" && <VocabularyEditor locked={writeLocked} />}
           </DeferredPanel>}
-          <DataSavePanel operation={dataOperation} visible={screen === "settings"} locked={captureTest.blocked || navigationBusy || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataProtection} onRestored={async () => { await refreshMeetings(); await loadOrigins(); }} onShowMeetings={showRestored} />
-          {screen === "settings" && <SettingsFooter />}
+          <DataSavePanel operation={dataOperation} visible={settingsReady} locked={captureTest.blocked || navigationBusy || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataProtection} onRestored={async () => { await refreshMeetings(); await loadOrigins(); }} onShowMeetings={showRestored} />
+          {settingsReady && <SettingsFooter />}
           <ModelDeletionDialog operation={dataOperation} control={modelDeletion} />
           <MeetingDeletionPanel operation={dataOperation} control={deletion} />
           <AudioDeletionPanel operation={dataOperation} control={audioDeletion} meetingTitle={meetings.find(m => m.id === audioDeletion.preview?.meetingId)?.title} />
