@@ -913,9 +913,9 @@ fn synthetic_recording_result(
     (temp, storage, meeting.id, session.id, output)
 }
 #[test]
-fn windows_delayed_endpoint_packets_fail_without_retiming_and_keep_the_durable_prefix() {
+fn windows_delayed_endpoint_packets_keep_recording_and_preserve_pcm_with_clock_evidence() {
     let (_temp, storage, meeting, _session, output) =
-        synthetic_recording_result("endpoint-switch-late", false);
+        synthetic_recording_result("endpoint-switch-late", true);
     let diagnostics: serde_json::Value =
         serde_json::from_slice(&fs::read(output.join("capture-clock.json")).unwrap()).unwrap();
     assert!(
@@ -938,21 +938,27 @@ fn windows_delayed_endpoint_packets_fail_without_retiming_and_keep_the_durable_p
             <= 32
     );
     assert_eq!(diagnostics["endpointAlignment"]["discardedFrames"], 0);
-    assert_eq!(diagnostics["endpointAlignment"]["retimedFrames"], 0);
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["state"], "failed");
-    assert!(manifest["errors"]
+    for counter in ["retimedPackets", "retimedFrames", "clockAdjustmentFrames"] {
+        assert!(diagnostics["endpointAlignment"][counter].as_u64().unwrap() > 0);
+    }
+    assert!(diagnostics["endpointAlignment"]["ranges"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|value| value
-            .as_str()
-            .is_some_and(|s| s.contains("endpoint packet precedes committed audio"))));
+        .any(|range| range["reason"] == "clock_rebased"
+            && range["mappedStartQpc100ns"].as_u64().unwrap()
+                > range["startQpc100ns"].as_u64().unwrap()));
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["state"], "saved");
+    assert!(manifest["errors"].as_array().unwrap().is_empty());
+    assert_eq!(manifest["timingEstimated"], true);
+    assert_eq!(manifest["microphone"]["frames"], 80_000);
+    assert!(manifest["system"]["frames"].as_u64().unwrap() >= 80_000);
     let tip: serde_json::Value =
         serde_json::from_slice(&fs::read(output.join("single-wav.json")).unwrap()).unwrap();
-    assert!(tip["frames"].as_u64().unwrap() >= 64_000);
-    assert_eq!(tip["producerClosed"], false);
+    assert!(tip["frames"].as_u64().unwrap() >= 80_000);
+    assert_eq!(tip["producerClosed"], true);
     assert!(output.join("wav-00000001.json").is_file());
     storage.verify_canonical_audio(&meeting, &|| false).unwrap();
 }

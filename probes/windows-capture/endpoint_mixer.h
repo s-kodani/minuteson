@@ -31,8 +31,13 @@ class EndpointMixer {
   std::size_t pending_blocks()const{return blocks_.size();}
   // flush() can retain a partial block or a peer's buffered audio. Neither an
   // empty output FIFO nor wall time is permission to advance over that PCM.
-  std::uint64_t observed_through(std::uint64_t through)const{
-    return blocks_.empty()?through:std::min(through,blocks_.begin()->first);
+  std::uint64_t observed_through(std::uint64_t through){
+    const auto safe=blocks_.empty()?through:std::min(through,blocks_.begin()->first);
+    // The consumer can seal an empty interval after this FIFO observation.
+    // A returning endpoint must stay beyond it even when no nonempty block
+    // was emitted here, so sealed_ alone is not the complete output frontier.
+    published_through_=std::max(published_through_,safe);
+    return published_through_;
   }
 
   template<class Emit>AddResult add(EndpointCursor& source,std::uint64_t first,
@@ -53,25 +58,25 @@ class EndpointMixer {
       const auto current=checked_add(mapped,consumed);
       if(current>=floor)return;
       const auto adjustment=floor-current;
-      if(current<sealed_){
+      const auto published=std::max(sealed_,published_through_);
+      if(current<published){
         if(!late_noted)++diagnostics_.late_packets;
-        diagnostics_.late_frames+=std::min<std::uint64_t>(frames-consumed,sealed_-current);
+        diagnostics_.late_frames+=std::min<std::uint64_t>(frames-consumed,published-current);
         late_noted=true;
-        if(ordered_capture_){
-          diagnostics_.loss(current,frames-consumed,"late_endpoint_packet",sealed_);
-          throw std::runtime_error("endpoint packet precedes committed audio");
-        }
       }
+      // Rebase the complete newly received packet; never rewrite committed
+      // output or discard its late prefix. Retain the correction for this
+      // native connection so subsequent packets keep their relative clock.
       mapped=checked_add(mapped,adjustment);
       source.correction=checked_add(source.correction,adjustment);source.estimated=true;
       diagnostics_.clock_adjustment_frames+=adjustment;
-      diagnostics_.loss(current,frames-consumed,"clock_rebased",floor);
+      diagnostics_.loss(checked_add(first,consumed),frames-consumed,"clock_rebased",floor);
       result.adjusted=true;
     };
-    advance(std::max(sealed_,source.next.value_or(0)),0);
+    advance(std::max({sealed_,published_through_,source.next.value_or(0)}),0);
     checked_add(mapped,frames);
     while(result.accepted<frames){
-      advance(sealed_,result.accepted);
+      advance(std::max(sealed_,published_through_),result.accepted);
       checked_add(mapped,frames);
       const auto frame=checked_add(mapped,result.accepted),base=frame/block_frames*block_frames;
       if(!blocks_.count(base)&&blocks_.size()>=max_blocks){
@@ -106,6 +111,7 @@ class EndpointMixer {
   struct Block {std::array<float,block_frames*2> samples{};std::array<bool,block_frames> covered{};std::uint32_t flags=0;};
   std::map<std::uint64_t,Block> blocks_;
   std::uint64_t sealed_=0;
+  std::uint64_t published_through_=0;
   AlignmentDiagnostics diagnostics_;
   bool ordered_capture_=false;
   static std::uint64_t checked_add(std::uint64_t a,std::uint64_t b){

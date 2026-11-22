@@ -15,7 +15,39 @@ sources:
 
 # 録音と音声取り込み
 
-アプリとOSの境界、プロセス・スレッド・キューを示す[録音構成図（draw.io・3ページ）](../diagrams/current-recording.drawio)は、入力専用AUHAL化と単一WAV保存への変更前の従来構成です。PNG版は[全体構成](../diagrams/current-recording-01-overview.png)、[macOS](../diagrams/current-recording-02-macos.png)、[Windows](../diagrams/current-recording-03-windows.png)です。現在の取得・再接続・停止の契約は本仕様の本文を参照してください。
+Windows・macOSの取得、時刻補正、共通Rustでの変換・統合、単一WAVへの保存を、[録音データフロー設計図（編集用draw.io・1ページ）](../diagrams/current-recording.drawio)にまとめています。[PNG版](../diagrams/current-recording.png)も同じ正本から書き出しています。2026-11-22の作業ツリー（WindowsのBluetooth再接続修正を含む）と照合した図です。
+
+![Windows・macOSと共通Rustの録音データフロー](../diagrams/current-recording.png)
+
+図を更新するときはdraw.ioファイルを正本として編集し、PNGを同じ内容で書き出し直します。OS別の時計・取得・保存I/Oと、同じRust実装を使う範囲も同時に照合します。
+
+### 図の共通部分とOSごとの差
+
+緑色は両OSが同じRust実装を使う処理、紫色は同じ保存契約に従うOS別の処理です。取得、入力時計の補正、キューの所有、ファイルI/Oまでが同一実装という意味ではありません。共有Rustも各OSの録音ヘルパー内で実行し、WindowsとMacの音声をOS間で送受信して混ぜる構成ではありません。
+
+| 境界 | Windows | macOS |
+| --- | --- | --- |
+| マイク取得 | WASAPI、48 kHz・float・1 ch、取得と停止・COM解放を専用スレッドで所有 | 入力専用AUHAL、実デバイスのレート・チャンネル数。出力busは無効 |
+| PC音声取得 | PC全体は出力別のWASAPIループバックとEndpointMixer、アプリ指定はprocess loopback | 製品の通常起動は全体・アプリ指定ともCore Audio Taps。全体は自プロセス除外、指定時は確認したプロセスツリーに限定 |
+| 入力時計 | QPCを使い、異常時は機器位置・サンプル数・到着時刻で推定。補正下限は自入力の変換末尾と共通WAVの混合出力済み末尾の最大値 | CaptureClockDomainでOSのhost時刻をmach_continuous_timeへ橋渡し。CapturePCMAlignmentは、補正時に自入力の直前PCM末尾と変換出力末尾の最大値を下限にし、接続ごとの補正量を保持 |
+| 共通Rustへの接続 | C++のVoicePCM・WavInput・LiveWavからFFIを呼ぶ | SwiftのVoicePCM・LiveWavSessionから同じFFIを呼ぶ |
+| 同期保存 | LiveWav保存ワーカー、FlushFileBuffers、読戻し照合 | LiveWavSessionとRawSegmentCommitWorker、fsync、読戻し照合 |
+
+WindowsのPC機器間補正と入力時計の補正は別段です。EndpointMixerはPC側の出力・通知済み進行位置とその機器の直前末尾を守り、Laneは共通WAVの混合済み末尾も守ります。後者にはディスク同期前の保存待ち音声も含みます。macOSの補正下限をWindowsと同一として図示していません。補正では受信パケットを切り詰めませんが、その後のレート変換・モノラル化・平均合成ではサンプル数と値が変わります。
+
+実装の対応箇所は、Windowsが[SystemCapture](../../probes/windows-capture/system_capture.h)・[EndpointMixer](../../probes/windows-capture/endpoint_mixer.h)・[Lane](../../probes/windows-capture/product_capture.h)・[LiveWav](../../probes/windows-capture/live_wav.h)、macOSが[通常起動時のバックエンド選択](../../app/src-tauri/src/recorder.rs)・[AUHAL](../../probes/macos-capture/Sources/MONMacOSCapture/MicrophoneAudioUnit.swift)・[Core Audio Taps](../../probes/macos-capture/Sources/MONMacOSCapture/CoreAudioCaptureStream.swift)・[時計補正](../../probes/macos-capture/Sources/MONMacOSCapture/CapturePCMAlignment.swift)・[LiveWavSession](../../probes/macos-capture/Sources/MONMacOSCapture/LiveWavSession.swift)です。共通実装は[Rust音声変換](../../crates/mon-core/src/media/voice.rs)・[Rust WAVミキサーと確定記録](../../crates/mon-core/src/capture/wav.rs)・[録音FFI](../../crates/mon-capture-ffi/src/lib.rs)です。CLI指定のScreenCaptureKit経路、5秒テスト、旧CAF救出は図の対象に含めません。
+
+### 回復に使う管理ファイル
+
+停止を確認できない場合に保持する「回復用記録」は、次のように、WAV内の検証できる保存範囲を判定するための管理情報を指します。
+
+| ファイル | 回復時に確かめる内容 |
+| --- | --- |
+| `single-wav-owner.json` | セッションが所有するWAVのファイル実体・識別情報 |
+| `wav-*.json` | 保存ブロックの連番、フレーム範囲、PCMのSHA-256、直前の記録とのつながり、入力ごとの取得フレーム数・両入力未取得範囲 |
+| `single-wav.json` | 検証済み末尾、最終確定記録、入力の正常終了を確認できたか |
+
+回復処理はこれらと`recording.wav`を照合し、連続して検証できた範囲を採用します。`manifest.json`や時計・入力状態の診断は補助情報であり、音声本体の確定を示す証拠とは区別します。切断中の未取得音声や、ディスクに保存されていない末尾を復元するものではありません。
 
 ## 録音範囲と入力
 
@@ -26,6 +58,8 @@ Windowsの全体録音は、Teamsデスクトップ版の音声がプロセス�
 Windowsでは機器IDとネイティブ接続の寿命を区別します。Bluetoothを切断・再接続すると同じ機器IDが戻る場合でも、切断前のWASAPIクライアントを流用しません。接続状態・追加・削除・音声エンジンの形式変更を機器ごとに記録し、一覧確認の間に切断・再接続が完了しても失効を保持します。PC音声は対象機器の古い取得サービスとクライアントを解放してから新しく開き、無関係な出力は継続します。マイクは初期化前から寿命を監視し、初期化中・受信中の失効を取得所有スレッドへ伝えて停止・解放します。切断通知そのものではWASAPIを操作しません。単なる出力先の選択、音量・表示名の変更だけで正常な接続を作り直しません。[WASAPIの無効デバイスからの回復手順](https://learn.microsoft.com/en-us/windows/win32/coreaudio/recovering-from-an-invalid-device-error)に従い、古い接続の参照を残したまま再接続しません。
 
 Bluetoothなどの切り替えでは、各出力機器の受信位置より先の区間を確定せず、次のパケットが埋めるブロック末尾を待ちます。機器探索・接続準備を取得処理から分離し、機器ごとに公平に読み出して、受信済みデータが残る間は待機・時刻ベースの確定を行いません。既存の取得元の時計補正はパケット全体を保持し、補正後の時刻を推定として元時刻・補正先・フレーム数とともに診断へ残します。合成バッファの容量圧力だけで未読音声を先行確定せず、上限では確定済み音声を保持して失敗を知らせます。無期限の待機やメモリ増加は行わず、実際の未取得区間、不正なPCM、取得時計の不整合、保存不能を区別します。
+
+Windowsで切断・再接続やBluetoothの受信遅延により、受信したPCMの時刻が既に合成した単一WAVの位置より古くなる場合は、新しく受信した音声の区間全体を未確定側へ補正します。同じ接続中の受信再開にも適用し、PCMを切り捨てたり保存済みWAVを書き換えたりしません。元の時刻・補正先・理由を既存の時計診断へ残し、時刻を推定として扱います。マイクの接続が生きている間の空キューは受信完了の根拠にせず、受信途絶の監視と実際の停止・解放を待ちます。PC音声は出力ごとの取得・停止・解放を所有し、1機器の停止待ちでも正常な出力を継続します。再接続の前には同じ機器の旧取得の終了を確認し、全出力の一時取得キューにも共有の上限を適用します。
 
 macOSでは、確認済みの再取得によりPC音声のサンプルレート等が変わっても、以前の変換器に残る末尾を排出し、新しい形式から共通の保存形式へ変換して継続します。終了した入力からの遅延コールバックや、同じ取得中に所属を確認できない形式変化は引き続き採用しません。
 
@@ -65,7 +99,7 @@ macOSの取得は入力専用AUHAL、ScreenCaptureKit／Core Audio Tapsを使い
 
 録音中は、取得した音声を入力ごとに16 kHz・モノラル・PCM16へ変換し、共通Rustミキサーで単一の`recording.wav`へ合成します。区間ごとに実際に取得できた入力数で平均し、片入力のみの区間はその音量を維持します。ゼロ値PCMを受信した入力も取得済みとして数えます。通常の録音中に分割CAF・中間FLAC・別の完成WAVは作成しません。
 
-取得・変換・合成と保存を別の処理所有者へ分けます。入力の接続世代・連番とFIFOの処理完了を確認し、未読・変換中の音声をタイマーや保存処理が追い越して確定しません。未受信の観測も受理済みPCMの後に処理し、取得した無音とは区別します。既存の250 msの合成待ちと750 msの無通信猶予を用い、追加の一律4秒の整列待ちは設けません。OSから異常に古い時刻の音声が届くことまで防げるとは扱わず、出力済み時刻へ合わせる新しい補正は行いません。
+取得・変換・合成と保存を別の処理所有者へ分けます。入力の接続世代・連番とFIFOの処理完了を確認し、未読・変換中の音声をタイマーや保存処理が追い越して確定しません。未受信の観測も受理済みPCMの後に処理し、取得した無音とは区別します。既存の250 msの合成待ちと750 msの無通信猶予を用い、追加の一律4秒の整列待ちは設けません。OSから届く古い時刻の音声は、取得側の時計補正で全フレームを保持し、共通WAVミキサーの接続世代・連番・時刻順序の検査を通して保存します。
 
 約4秒分の出力PCMを書き込み、同期保存と読戻し照合を行ってから、所有・時計原点・ブロックハッシュ・入力別の取得範囲・欠損範囲を記録したチェックポイントと確定位置を公開します。保存先が停止している間はメモリ上の未確定音声が増え、異常終了時に失われる場合があります。停止後は末尾を排出してWAVヘッダーを確定し、形式・ハッシュ・DB登録を検証します。正常停止では既存PCMの全体再ミックスや再書込みは行いません。
 

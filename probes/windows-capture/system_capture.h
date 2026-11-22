@@ -6,12 +6,17 @@
 #include "render_endpoints.h"
 class SystemCapture final : public CaptureReader {
   struct Stream {
-    ComPtr<IAudioClient> client;
-    ComPtr<IAudioCaptureClient> capture;
+    std::unique_ptr<AsyncCapture> reader;
     PacketClock clock;
     EndpointCursor cursor;
-    bool started=false;
-    ~Stream(){if(started)client->Stop();}
+    std::uint64_t admitted_sequence=0;
+    ~Stream(){if(reader)reader->stop();}
+  };
+  using RetirementOperation=InputPreparation<bool,CaptureApartment>;
+  struct Retirement {
+    std::unique_ptr<Stream> stream;
+    std::unique_ptr<RetirementOperation> operation;
+    bool queue_ended=false;
   };
   std::atomic<bool> stopping_{false};
   std::thread thread_;
@@ -53,44 +58,35 @@ class SystemCapture final : public CaptureReader {
     }
     return result;
   }
-  static std::unique_ptr<Stream> open(IMMDevice* device){
+  static std::unique_ptr<Stream> open(IMMDevice* device,std::shared_ptr<PacketIngressBudget> ingress){
     auto stream=std::make_unique<Stream>();
-    acquisition(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(stream->client.GetAddressOf())),"activate PC audio output");
+    ComPtr<IAudioClient> client;
+    acquisition(device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,reinterpret_cast<void**>(client.GetAddressOf())),"activate PC audio output");
     WAVEFORMATEX* mix=nullptr;
-    const bool matching=SUCCEEDED(stream->client->GetMixFormat(&mix))&&mix&&mix->nSamplesPerSec==48000;
+    const bool matching=SUCCEEDED(client->GetMixFormat(&mix))&&mix&&mix->nSamplesPerSec==48000;
     if(mix)CoTaskMemFree(mix);stream->clock.begin_stream(matching);
     WAVEFORMATEX format{};format.wFormatTag=WAVE_FORMAT_IEEE_FLOAT;format.nChannels=2;format.nSamplesPerSec=48000;
     format.wBitsPerSample=32;format.nBlockAlign=8;format.nAvgBytesPerSec=384000;
-    acquisition(stream->client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,5000000,0,&format,nullptr),"initialize PC audio output loopback");
+    acquisition(client->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,5000000,0,&format,nullptr),"initialize PC audio output loopback");
+    // Every endpoint keeps GetService, buffer calls, Stop and native release
+    // on its own owner. One Bluetooth driver cannot stall a healthy peer.
+    stream->reader=std::make_unique<AsyncCapture>(std::move(client),2,false,std::string{},nullptr,std::move(ingress));
     return stream;
   }
-  static void start(Stream& stream){
-    // The preparation worker initializes the client, but the acquisition
-    // owner obtains/releases the capture service and owns every buffer call.
-    acquisition(stream.client->GetService(IID_PPV_ARGS(stream.capture.GetAddressOf())),"get PC audio output capture service");
-    acquisition(stream.client->Start(),"start PC audio output loopback");stream.started=true;
-  }
   bool drain(Stream& stream,EndpointMixer& mixer,unsigned budget=1){
-    UINT32 available=0;acquisition(stream.capture->GetNextPacketSize(&available),"poll PC audio output packets");
-    for(unsigned drained=0;available&&drained<budget;++drained){
-      BYTE* data=nullptr;UINT32 frames=0;DWORD flags=0;UINT64 position=0,time=0;
-      acquisition(stream.capture->GetBuffer(&data,&frames,&flags,&position,&time),"read PC audio output packet");
-      try{
-        if(frames){
-          require_input_pcm(reinterpret_cast<const float*>(data),frames,2,(flags&AUDCLNT_BUFFERFLAGS_SILENT)!=0);
-          auto arrival=qpc();const auto mapped=stream.clock.observe(frames,time,position,flags,arrival);
-          const auto first=EndpointMixer::frame_at(mapped.start);
-          if(mapped.boundary)flags|=AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY;
-          if(stream.clock.estimated_packets)flags|=AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR;
-          const auto result=mixer.add(stream.cursor,first,frames,reinterpret_cast<const float*>(data),flags,arrival,
-            [&](CapturePacket packet){queue.push(std::move(packet));});
-          if(result.adjusted||result.pressure)observe_alignment(mixer);
-        }
-      }catch(...){stream.capture->ReleaseBuffer(frames);throw;}
-      acquisition(stream.capture->ReleaseBuffer(frames),"release PC audio output packet");
-      acquisition(stream.capture->GetNextPacketSize(&available),"poll next PC audio output packet");
+    for(unsigned drained=0;drained<budget;++drained){
+      auto packet=stream.reader->queue.pop();if(!packet)break;
+      if(packet->sequence!=stream.admitted_sequence+1)throw InputDataFault("endpoint ingress order changed");
+      stream.admitted_sequence=packet->sequence;
+      auto flags=packet->flags;const auto mapped=stream.clock.observe(packet->frames,packet->time,packet->position,flags,packet->arrival);
+      const auto first=EndpointMixer::frame_at(mapped.start);
+      if(mapped.boundary)flags|=AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY;
+      if(stream.clock.estimated_packets)flags|=AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR;
+      const auto result=mixer.add(stream.cursor,first,packet->frames,packet->samples.data(),flags,packet->arrival,
+        [&](CapturePacket mixed){queue.push(std::move(mixed));});
+      if(result.adjusted||result.pressure)observe_alignment(mixer);
     }
-    return available!=0;
+    return stream.reader->queue.pending_frames()!=0;
   }
  public:
   explicit SystemCapture(std::function<ComPtr<IMMDeviceEnumerator>()> device_enumerator=enumerator){
@@ -102,21 +98,62 @@ class SystemCapture final : public CaptureReader {
         std::map<std::wstring,std::unique_ptr<Stream>> streams;
         auto devices=endpoints(e.Get(),streams);
         if(devices.empty())throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio output unavailable");
-        for(auto& [id,device]:devices)streams.emplace(id,open(device.Get()));
-        for(auto& [id,stream]:streams)start(*stream);
-        std::cerr<<"mon_capture_system: source=render_endpoints count="<<streams.size()<<std::endl;
+        auto ingress=std::make_shared<PacketIngressBudget>();
         DWORD index=0;auto priority_handle=AvSetMmThreadCharacteristicsW(L"Audio",&index);
         // AVRT handles require AvRevertMmThreadCharacteristics, not CloseHandle.
         struct Priority {HANDLE value;~Priority(){if(value)AvRevertMmThreadCharacteristics(value);}} priority_owner{priority_handle};
         if(priority_handle)AvSetMmThreadPriority(priority_handle,AVRT_PRIORITY_HIGH);
-        EndpointMixer mixer(true);startup();auto next_check=GetTickCount64()+100;
+        EndpointMixer mixer(true);auto next_check=GetTickCount64()+100;bool announced=false;
         using Devices=std::map<std::wstring,ComPtr<IMMDevice>>;
         using Enumeration=InputPreparation<Devices,CaptureApartment>;
         using Opening=InputPreparation<std::unique_ptr<Stream>,CaptureApartment>;
         std::unique_ptr<Enumeration> enumeration;
         std::map<std::wstring,std::unique_ptr<Opening>> openings;
+        std::map<std::wstring,Retirement> retirements;
+        std::map<std::wstring,MonCaptureInputRetry> retries;
         Devices desired=devices;
         auto emit=[&](CapturePacket packet){queue.push(std::move(packet));};
+        auto failed=[&](const std::wstring& id,const InputFailure& error){
+          mon_capture_input_fault(&retries[id],GetTickCount64()*1000000ULL);
+          std::cerr<<"mon_capture_endpoint: "+Json{{"event","retry"},{"uid",utf8(id)},{"hresult",static_cast<std::int64_t>(error.result)},{"attempt",retries[id].failures}}.dump()+"\n";
+        };
+        auto retire=[&](auto iterator){
+          auto id=iterator->first;Retirement retiring;retiring.stream=std::move(iterator->second);streams.erase(iterator);
+          auto* source=retiring.stream->reader.get();
+          retiring.operation=std::make_unique<RetirementOperation>([source](auto){source->stop();return true;});
+          retirements.emplace(std::move(id),std::move(retiring));
+        };
+        std::exception_ptr failure;
+        auto recoverable=[](std::exception_ptr error){
+          try{std::rethrow_exception(error);}
+          catch(const InputFailure&){return true;}
+          catch(const InputDataFault&){return true;}
+          catch(...){return false;}
+        };
+        auto remember_failure=[&](std::exception_ptr error){
+          // A storage/capacity failure cannot become an input retry just
+          // because a disconnected endpoint failed earlier during shutdown.
+          if(error&&(!failure||(recoverable(failure)&&!recoverable(error))))failure=error;
+        };
+        auto poll_retirements=[&](bool closing){
+          bool backlog=false;
+          for(auto it=retirements.begin();it!=retirements.end();){
+            auto& retiring=it->second;
+            if(!retiring.queue_ended){
+              try{backlog|=drain(*retiring.stream,mixer);}
+              catch(const InputFailure&){retiring.queue_ended=true;}
+              catch(...){if(!closing)throw;remember_failure(std::current_exception());retiring.queue_ended=true;}
+            }
+            (void)retiring.operation->take();
+            if(!retiring.operation->finished()){++it;continue;}
+            if(auto error=retiring.operation->error()){if(!closing)std::rethrow_exception(error);remember_failure(error);}
+            if(!retiring.queue_ended&&retiring.stream->reader->queue.pending_frames()){++it;continue;}
+            // stop() joined the native owner, including release of both COM
+            // interfaces. Erase its last reader before allowing the same ID.
+            it=retirements.erase(it);
+          }
+          return backlog;
+        };
         try{
           while(!stopping_.load(std::memory_order_acquire)){
             const auto now_ms=GetTickCount64();
@@ -130,8 +167,7 @@ class SystemCapture final : public CaptureReader {
               if(enumeration&&(revoked.all||!revoked.endpoints.empty())){enumeration->cancel();next_check=0;}
               for(auto it=streams.begin();it!=streams.end();){
                 if(revoked.all||revoked.endpoints.count(it->first)){
-                  auto& stream=*it->second;if(stream.started){stream.client->Stop();stream.started=false;}
-                  try{while(drain(stream,mixer,32)){};}catch(const InputFailure&){}it=streams.erase(it);
+                  auto retired=it++;retire(retired);
                 }else ++it;
               }
               if(!enumeration){
@@ -149,33 +185,46 @@ class SystemCapture final : public CaptureReader {
                 for(auto& [id,pending]:openings)if(!desired.count(id))pending->cancel();
                 for(auto it=streams.begin();it!=streams.end();){
                   if(!desired.count(it->first)){
-                    auto& stream=*it->second;if(stream.started){stream.client->Stop();stream.started=false;}
-                    try{while(drain(stream,mixer,32)){};}catch(const InputFailure&){}it=streams.erase(it);
+                    auto retired=it++;retire(retired);
                   }else ++it;
                 }
               }else if(enumeration->finished()){
-                auto error=enumeration->error();enumeration.reset();if(error)std::rethrow_exception(error);
+                auto error=enumeration->error();enumeration.reset();
+                if(error){try{std::rethrow_exception(error);}catch(const InputFailure&){next_check=now_ms+1000;}}
               }
             }
             for(auto it=openings.begin();it!=openings.end();){
               if(auto stream=it->second->take()){
-                start(**stream);
                 streams.emplace(it->first,std::move(*stream));it=openings.erase(it);
               }else if(it->second->finished()){
-                auto error=it->second->error();it=openings.erase(it);if(error)std::rethrow_exception(error);
+                auto error=it->second->error();auto id=it->first;it=openings.erase(it);
+                if(error){try{std::rethrow_exception(error);}catch(const InputFailure& input){failed(id,input);}}
               }else ++it;
             }
-            for(const auto& [id,device]:desired)if(!streams.count(id)&&!openings.count(id)){
-              openings.emplace(id,std::make_unique<Opening>([device](auto cancelled){
-                if(cancelled())return std::unique_ptr<Stream>{};auto stream=open(device.Get());
+            bool backlog=poll_retirements(false);
+            for(const auto& [id,device]:desired)if(!streams.count(id)&&!openings.count(id)&&!retirements.count(id)
+                &&now_ms*1000000ULL>=retries[id].retry_at&&streams.size()+openings.size()+retirements.size()<128){
+              openings.emplace(id,std::make_unique<Opening>([device,ingress](auto cancelled){
+                if(cancelled())return std::unique_ptr<Stream>{};auto stream=open(device.Get(),ingress);
                 if(cancelled())return std::unique_ptr<Stream>{};return stream;
               }));
             }
-            bool backlog=false;
-            for(auto& [id,stream]:streams)backlog|=drain(*stream,mixer);
+            for(auto it=streams.begin();it!=streams.end();){
+              try{
+                const auto previous=it->second->cursor.last_arrival;backlog|=drain(*it->second,mixer);
+                if(it->second->cursor.last_arrival!=previous)mon_capture_input_valid(&retries[it->first],now_ms*1000000ULL);
+                ++it;
+              }catch(const InputFailure& error){failed(it->first,error);auto retired=it++;retire(retired);}
+            }
+            if(!announced&&!streams.empty()){
+              announced=true;std::cerr<<"mon_capture_system: source=render_endpoints count="<<streams.size()<<std::endl;startup();
+            }
+            if(streams.empty()&&openings.empty()&&retirements.empty()&&!enumeration)throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio outputs are unavailable");
+            for(auto it=retries.begin();it!=retries.end();)if(!desired.count(it->first)&&!streams.count(it->first)&&!openings.count(it->first)&&!retirements.count(it->first))it=retries.erase(it);else ++it;
             const auto now=qpc(),frame=EndpointMixer::frame_at(now);
             auto through=frame>EndpointMixer::latency_frames?frame-EndpointMixer::latency_frames:0;
             for(auto& [id,stream]:streams)through=stream->cursor.safe_through(now,through);
+            for(auto& [id,retiring]:retirements)through=retiring.stream->cursor.safe_through(now,through);
             // An empty observation follows every currently queued endpoint
             // packet. A timer must never overtake a backlog on another peer.
             if(!backlog){
@@ -186,23 +235,20 @@ class SystemCapture final : public CaptureReader {
             // backlog can make a 10 ms stream fall behind the Windows timer.
             if(!backlog)Sleep(1);
           }
-          for(auto& [id,stream]:streams){
-            acquisition(stream->client->Stop(),"stop PC audio output loopback");stream->started=false;
-            while(drain(*stream,mixer,256)){}
-          }
-        }catch(...){
-          auto error=std::current_exception();observe_alignment(mixer);
-          for(auto& [id,stream]:streams){
-            if(stream->started){stream->client->Stop();stream->started=false;}
-            try{drain(*stream,mixer,256);}catch(const InputFailure&){}catch(const InputDataFault&){}catch(...){error=std::current_exception();}
-          }
-          try{
-            mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);
-          }catch(const InputFailure&){}catch(...){error=std::current_exception();}
-          // A device resync must never hide invalid PCM or storage failures.
-          std::rethrow_exception(error);
+        }catch(...){remember_failure(std::current_exception());startup(failure);}
+        // Cancellation is not native closure. Own every opening/enumeration
+        // and retirement through disposal before stop() may return to its Lane.
+        if(enumeration)enumeration->cancel();
+        for(auto& [id,pending]:openings)pending->cancel();
+        while(!streams.empty())retire(streams.begin());
+        while(enumeration||!openings.empty()||!retirements.empty()){
+          poll_retirements(true);
+          if(enumeration&&enumeration->finished())enumeration.reset();
+          for(auto it=openings.begin();it!=openings.end();)if(it->second->finished())it=openings.erase(it);else ++it;
+          Sleep(1);
         }
-        mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);
+        try{mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);}catch(...){remember_failure(std::current_exception());}
+        observe_alignment(mixer);if(failure)std::rethrow_exception(failure);
       }catch(...){auto error=std::current_exception();queue.fail(error);startup(error);}
     });
     std::unique_lock lock(startup_mutex_);startup_changed_.wait(lock,[&]{return startup_finished_;});
