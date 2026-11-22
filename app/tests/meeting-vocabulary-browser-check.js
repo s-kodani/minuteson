@@ -16,7 +16,13 @@ async (page, capturePath) => {
     const f=window.monBrowserFixture;
     f.vocabulary["meeting-0"]={id:"meeting:meeting-0",lockVersion:1,payload:[{id:crypto.randomUUID(),term:"点検日",reading:"てんけんび",note:"取り込み時の補足",enabled:true}]};
   });
-  await page.getByRole("button",{name:"会議A",exact:true}).click();await open();
+  await page.getByRole("button",{name:"会議A",exact:true}).click();
+  // Both lazy panels fill the toolbar after the meeting shell appears. Wait
+  // for their visible controls before WebKit sends the vocabulary pointer click.
+  await page.getByRole("heading",{name:"発言一覧",exact:true}).waitFor();
+  await page.getByRole("button",{name:"文字起こしをコピー",exact:true}).waitFor();
+  await page.getByRole("button",{name:"文字起こしを再生成",exact:true}).waitFor();
+  await open();
   check(await term().inputValue()==="点検日","saved import vocabulary was not displayed");
   check(await dialog().getByRole("textbox",{name:"読み（任意）",exact:true}).inputValue()==="てんけんび","reading was lost");
   check(await dialog().getByRole("textbox",{name:"補足（任意・保存表示用）",exact:true}).inputValue()==="取り込み時の補足","note was lost");
