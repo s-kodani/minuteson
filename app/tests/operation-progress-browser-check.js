@@ -10,8 +10,16 @@ async (page, capturePath, { approveModelLicense }) => {
   const results = [];
   await page.clock.setFixedTime(new Date("2026-10-17T00:00:00Z"));
   await page.goto("http://127.0.0.1:1420/tests/operation-progress-browser.html");
+  await page.waitForFunction(() => !!window.operationProgressFixture);
+  await page.evaluate(() => window.operationProgressFixture.automaticCleanup(true));
+  await expand(); await common().getByText("重複モデルを整理中", { exact: true }).waitFor();
   await page.getByRole("button", { name: "設定", exact: true }).click();
   const models = page.getByRole("region", { name: "AIモデル", exact: true });
+  await models.waitFor();
+  check(await page.locator(".job-nav-count").innerText() === "1", "lazy Settings duplicated automatic model cleanup");
+  await page.evaluate(() => window.operationProgressFixture.automaticCleanup(false));
+  await common().waitFor({ state: "hidden" });
+  results.push("automatic cleanup is visible before first Settings visit and keeps one row when Settings loads");
   await models.getByRole("combobox", { name: "文字起こしのモデル", exact: true }).selectOption("official:synthetic-catalog");
   await page.evaluate(() => { window.modelDownloadFixture.mode = "delay"; });
   await models.getByRole("button", { name: "ダウンロードして使用", exact: true }).first().click();

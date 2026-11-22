@@ -1,7 +1,7 @@
 // Production UI with synthetic lifecycle persistence; no native DB/model/audio.
 import { emit } from "@tauri-apps/api/event";
 const key="MON_LIFECYCLE_GUIDANCE";
-const f=window.lifecycleFixture={calls:[],pending:localStorage.getItem(key)==="pending"||(localStorage.getItem(key)===null&&new URLSearchParams(location.search).has("initial")),failDismiss:false,readFail:false};
+const f=window.lifecycleFixture={calls:[],pending:localStorage.getItem(key)==="pending"||(localStorage.getItem(key)===null&&new URLSearchParams(location.search).has("initial")),failDismiss:false,readFail:false,backfillPending:false};
 await import("./voice-browser-fixture.js");
 const original=window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
 const kinds=["minutes_generation","diarization","transcription","backup","restore","model","recording_save","audio_import","voice_registration","voice_matching","speaker_completion","deletion","audio_deletion","model_deletion"];
@@ -26,7 +26,7 @@ window.__TAURI_INTERNALS__.invoke=async(command,args={})=>{
     const q=args.query;
     const rows=f.rows.filter(r=>(!q.kind||r.kind===q.kind)&&(!q.state||r.state===q.state)&&(!q.cursor||(r.finishedAt??r.observedAt)<q.cursor.at||(r.finishedAt??r.observedAt)===q.cursor.at&&r.id<q.cursor.id));
     const items=rows.slice(0,q.limit),last=items.at(-1);
-    return {items:structuredClone(items),nextCursor:rows.length>q.limit?{at:last.finishedAt??last.observedAt,id:last.id}:null,storageError:null};
+    return {items:structuredClone(items),nextCursor:rows.length>q.limit?{at:last.finishedAt??last.observedAt,id:last.id}:null,storageError:null,backfillPending:f.backfillPending};
   }
   return original(command,args);
 };

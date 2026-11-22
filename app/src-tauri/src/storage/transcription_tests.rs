@@ -664,7 +664,7 @@ fn durable_units_pause_resume_and_publish_a_candidate_without_replacing_edits() 
 
 #[test]
 fn changed_source_model_and_checkpointed_output_are_rejected() {
-    for change in ["source", "model", "result", "spec"] {
+    for change in ["source", "model", "result", "spec", "pcm_reference"] {
         let directory = tempfile::tempdir().unwrap();
         let (storage, meeting, config) = fixture(directory.path(), 124);
         let job = enqueue(&storage, &meeting, "operation", config, "high_accuracy").unwrap();
@@ -708,9 +708,15 @@ fn changed_source_model_and_checkpointed_output_are_rejected() {
                 storage.connection.lock().unwrap().execute_batch("DROP TRIGGER job_spec_fixed; UPDATE processing_jobs SET parameters_json = '{}';").unwrap();
                 directory.path().join("unused")
             }
+            "pcm_reference" => directory.path().join("unused"),
             _ => unreachable!(),
         };
-        if change != "spec" {
+        if change == "source" {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+            file.seek(SeekFrom::End(-1)).unwrap();
+            file.write_all(&[0xff]).unwrap();
+        } else if matches!(change, "model" | "result") {
             std::fs::write(path, b"changed").unwrap();
         }
         storage.resume_job(&job.id).unwrap();
@@ -718,6 +724,14 @@ fn changed_source_model_and_checkpointed_output_are_rejected() {
             .acquire_job_kind(Some(JobKind::Transcription))
             .unwrap()
             .unwrap();
+        if change == "pcm_reference" {
+            let (_, checkpoint) = storage.fixed_job_input(&job.id).unwrap();
+            let mut checkpoint = checkpoint.unwrap();
+            checkpoint["outputs"][0]["wavHash"] = serde_json::json!("0".repeat(64));
+            storage
+                .save_job_checkpoint(&job.id, 1, 1, checkpoint)
+                .unwrap();
+        }
         assert!(
             process(
                 &storage,
@@ -984,7 +998,7 @@ for line in sys.stdin:
  print(json.dumps({'protocol':1,'id':r['id'],'op':'done'}),flush=True)
 "#;
     let (_tmp, root, snapshot) = worker_fixture(script);
-    let (storage, meeting, config) = fixture(&root, 124);
+    let (storage, meeting, config) = fixture(&root, 244);
     let job;
     {
         let _admission = Admission::enter(snapshot.clone());
@@ -1011,34 +1025,58 @@ for line in sys.stdin:
     );
     storage.acquire_next_job().unwrap().unwrap();
     assert!(process(&storage, &job.id, &|| false, &|j| {
-        if j.completed_units == 1 && j.state == "running" {
+        if j.completed_units == 2 && j.state == "running" {
             storage.request_job_pause(&job.id, "user").unwrap();
         }
     })
     .unwrap()
     .is_none());
-    assert_eq!(storage.get_job(&job.id).unwrap().completed_units, 1);
-    let saved = storage.fixed_job_input(&job.id).unwrap().1.unwrap()["outputs"][0].clone();
+    assert_eq!(storage.get_job(&job.id).unwrap().completed_units, 2);
+    let checkpoint = storage.fixed_job_input(&job.id).unwrap().1.unwrap();
+    let saved = checkpoint["outputs"].as_array().unwrap().clone();
+    let plan = storage.recorded_audio_plan(&meeting).unwrap();
+    let wav_size = plan.tracks[0].chunks[0].size as u64;
     let calls = root.join("calls");
-    assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 1);
+    assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 2);
     drop(storage);
     let storage = Storage::open(root.clone()).unwrap();
     storage.resume_job(&job.id).unwrap();
     storage.acquire_next_job().unwrap().unwrap();
-    assert!(process(&storage, &job.id, &|| false, &|_| {})
-        .unwrap()
-        .is_some());
+    let bytes_before_new_unit = std::cell::Cell::new(None);
+    assert!(process(&storage, &job.id, &|| false, &|snapshot| {
+        if snapshot
+            .execution_progress
+            .as_ref()
+            .is_some_and(|p| p.phase == "loading")
+        {
+            bytes_before_new_unit.set(Some(
+                crate::local_engine::verification::physical_hash_bytes(),
+            ));
+        }
+    })
+    .unwrap()
+    .is_some());
+    let bytes = bytes_before_new_unit.get().expect("new unit began loading");
+    assert!(
+        (wav_size..2 * wav_size).contains(&bytes),
+        "resume fingerprint bytes={bytes}, WAV bytes={wav_size}"
+    );
     assert_eq!(storage.get_job(&job.id).unwrap().state, "succeeded");
+    let checkpoint = storage.fixed_job_input(&job.id).unwrap().1.unwrap();
     assert_eq!(
-        storage.fixed_job_input(&job.id).unwrap().1.unwrap()["outputs"][0],
-        saved
+        &checkpoint["outputs"].as_array().unwrap()[..2],
+        saved.as_slice()
     );
     let history = std::fs::read_to_string(&calls).unwrap();
     let lines: Vec<_> = history.lines().collect();
-    assert_eq!(lines.len(), 2);
-    assert_ne!(
+    assert_eq!(lines.len(), 3);
+    assert_eq!(
         lines[0].split_whitespace().next(),
         lines[1].split_whitespace().next()
+    );
+    assert_ne!(
+        lines[0].split_whitespace().next(),
+        lines[2].split_whitespace().next()
     );
 }
 

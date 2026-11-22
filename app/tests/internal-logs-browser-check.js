@@ -1,5 +1,5 @@
 // Independent synthetic log scenarios; no native processes or user storage.
-async (page, _capturePath, detailUI) => {
+async (page, capturePath, detailUI) => {
   const results = [], check = (condition, message) => { if (!condition) throw Error(message); };
   const logs = page.locator('section.internal-logs[aria-label="内部ログ"]');
   const list = logs.locator('.internal-logs-scroll[aria-label="ログ一覧"]');
@@ -67,6 +67,17 @@ async (page, _capturePath, detailUI) => {
     check(await filterToggle.getAttribute("aria-controls") === await filterPanel.getAttribute("id"), "filter control is not associated with panel");
     await logs.getByRole("tab", { name: "エンジンログ", exact: true }).click();
     await logs.getByText(/using device MTL0/).first().waitFor();
+    await filterToggle.click();
+    await setTheme("dark");
+    await page.screenshot({ path: capturePath("engine-logs-dark.png") });
+    const logHelp = page.getByRole("dialog", { name: "内部ログ", exact: true });
+    await logs.getByRole("button", { name: "内部ログの説明を開く", exact: true }).click();
+    await logHelp.getByText(/stderrは必ずしもエラーではありません/).waitFor();
+    await page.screenshot({ path: capturePath("engine-logs-help-dark.png") });
+    await page.keyboard.press("Escape");
+    await logHelp.waitFor({ state: "hidden" });
+    await setTheme("light");
+    await filterToggle.click();
     check(await page.evaluate(() => window.logMarkupExecuted) === undefined, "raw HTML executed");
     const detailTrigger = logs.getByRole("button", {name:/のログ詳細/});
     await detailTrigger.hover();

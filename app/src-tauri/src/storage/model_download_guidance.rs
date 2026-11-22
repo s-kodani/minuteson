@@ -31,6 +31,34 @@ fn load(db: &Connection) -> Result<Guidance, String> {
     serde_json::from_str(&json).map_err(|_| "初回モデル案内の保存形式を確認できません".into())
 }
 impl Storage {
+    pub(crate) fn pending_history_reset_key(&self) -> Result<Option<String>, String> {
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        if !load(&db)?.pending {
+            return Ok(None);
+        }
+        let created: i64 = db
+            .query_row(
+                "SELECT updated_at FROM app_settings WHERE key=?1",
+                [KEY],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        #[cfg(any(unix, windows))]
+        let identity = {
+            let file = super::deletion::history_database_identity(self)?;
+            // Device numbers can change when a volume remounts. The first-run
+            // timestamp and native file birth identity identify this DB.
+            (file.inode, file.birth_seconds, file.birth_nanos)
+        };
+        #[cfg(not(any(unix, windows)))]
+        let identity = &self.root;
+        let key = serde_json::to_vec(&(created, identity)).map_err(|e| e.to_string())?;
+        Ok(Some(format!("{:x}", Sha256::digest(key))))
+    }
+
     pub(crate) fn model_download_guidance(&self) -> Result<Guidance, String> {
         load(
             &*self

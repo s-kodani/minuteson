@@ -43,7 +43,7 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertEqual(len(llms), 5)
             for choice in llms:
                 manifest = choice['recipe']['manifest']
-                self.assertEqual(manifest['engineVersion'], 'b11960')
+                self.assertEqual(manifest['engineVersion'], 'b12556')
                 engine = 'llama'
                 executable = next(f for f in manifest['files'] if f['role'] == 'executable')
                 self.assertEqual(executable['expectedHash'], hashlib.sha256(engine.encode()).hexdigest())
@@ -53,7 +53,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_generated_macos_recipes_bind_the_reviewed_runtime_and_preserve_asr(self):
         expected = {
-            'macos.json': ('base', '79b5b89774c16ede8e0e75ee64ddbce5de2b0d3e6bbdf4785a4932bee315defe'),
+            'macos.json': ('base', '4de6bd6f2856e3dff6839170d47d71a27a3e8d56b05dadfa683c3c23be9095d6'),
             'asr-transducer.json': ('asr', 'd72e39de3b7a96da478e4d267bf88f83400dee5fc64cb35d4deaade73eadc8a1'),
         }
         for name, (group, golden) in expected.items():
@@ -65,7 +65,7 @@ class ModelCatalogTests(unittest.TestCase):
         identity = 'sherpa-1138-pyannote3-int8-titanet-small'
         mac = catalog.compile_target('macos_aarch64')
         self.assertEqual(canonical_hash([c for c in mac if c['id'] != identity]),
-                         'e18a2f918edf15e882817b3a30855162b450f895b7a4dba119cad3784464f99f')
+                         'a9d682f5dfa7e753daad4515299d33ce80cb972db403587e6041b75f4c7d0a8f')
         for target, prefix in [('macos_aarch64', ''), ('windows_x86_64', 'windows-')]:
             choice = next(c for c in catalog.compile_target(target) if c['id'] == prefix + identity)
             files = choice['recipe']['manifest']['files']
@@ -96,6 +96,34 @@ class ModelCatalogTests(unittest.TestCase):
             choice['recipe']['sources'] = [s for _, s in pairs]
             expected.append(choice)
         self.assertEqual(catalog.compile_target('windows_x86_64'), expected)
+
+    def test_eres2net_update_preserves_old_voice_names_and_license_identities(self):
+        current = 'f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498'
+        previous = '1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b'
+        definitions = [d for d in catalog.definitions()
+                       if d.get('speakerEmbeddingName') == '3D-Speaker ERes2Net base']
+        self.assertEqual(len(definitions), 2)
+        self.assertIn(previous, [h for d in definitions
+                                for h in d.get('previousSpeakerEmbeddingHashes', [])])
+        policy = json.loads((catalog.CATALOG / 'model-license-policy.json').read_text(encoding='utf8'))
+        for target in ['macos_aarch64', 'windows_x86_64']:
+            choices = [c for c in catalog.compile_target(target)
+                       if 'ERes2Net base' in c['recipe']['manifest']['modelName']]
+            self.assertEqual(len(choices), 2)
+            for choice in choices:
+                manifest = choice['recipe']['manifest']
+                embedding = next(f for f in manifest['files'] if f['role'] == 'speaker_embedding')
+                self.assertEqual((embedding['expectedSize'], embedding['expectedHash']),
+                                 (39593762, current))
+                self.assertIn('20261119', manifest['modelVersion'])
+                segmentation = next(f for f in manifest['files'] if f['role'] == 'segmentation')
+                for size, digest in [(39593761, previous), (39593762, current)]:
+                    identity = sorted([('speaker_embedding', size, digest),
+                                       ('segmentation', segmentation['expectedSize'],
+                                        segmentation['expectedHash'])])
+                    self.assertTrue(any(sorted((f['role'], f['size'], f['sha256'])
+                                               for f in p['modelFiles']) == identity
+                                        for p in policy['models']))
 
     def test_asr_windows_templates_preserve_neutral_weights_and_explicit_backend_binding(self):
         mac = catalog.compile_target('macos_aarch64', 'asr')

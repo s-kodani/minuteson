@@ -7,7 +7,7 @@ test("meeting title editing has its own guarded modal instead of management sect
   assert.match(main,/meeting-title-row.*label="会議名を変更".*icon="edit"/);
   assert.match(main,/open=\{renameOpen && !!selectedMeeting\} blocked=\{meetingBusy\}/);
   assert.match(main,/expectedLockVersion: selectedMeeting.lockVersion/);
-  assert.match(main,/!renameOpen \|\| meetingBusy \|\| writeLocked \|\| !renameTitle.trim\(\)/);
+  assert.match(main,/!renameOpen \|\| meetingBusy \|\| selectedWriteLocked \|\| !renameTitle.trim\(\)/);
 });
 test("navigation has no routine progress toast and settings gear is 28px",()=>{
   assert.doesNotMatch(main,/navigation-progress|編集の保存を確認中|操作を実行中/);

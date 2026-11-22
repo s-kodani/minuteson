@@ -15,7 +15,7 @@
     d.pending("not_started");
     Object.assign(window.dataFixture.snapshot, { token: crypto.randomUUID(), kind: "audio_deletion", phase: "ready", busy: false, retryAllowed: true, audioDeletionPreview: d.pendingPreview });
   }
-  await import("/src/main.tsx");
+  await import("/src/bootstrap.tsx");
   const controls = document.createElement("aside");
   controls.setAttribute("aria-label", "合成テスト制御");
   const hold = document.createElement("button");

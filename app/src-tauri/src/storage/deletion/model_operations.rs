@@ -161,8 +161,22 @@ fn active(lease: &DataMaintenanceLease, check: &impl Fn() -> bool) -> Result<(),
         Ok(())
     }
 }
+
+fn pending_review_blocker(storage: &Storage) -> Option<&'static str> {
+    if storage.common_write_hold() {
+        Some("会議保存先の確認が必要です。保存先の警告を確認してください。")
+    } else if storage.restart_required() {
+        Some("会議保存先を確認するため、アプリを再起動してください。")
+    } else {
+        None
+    }
+}
+
 pub(crate) fn authorize_review(storage: &Storage, operation: Option<&str>) -> Result<(), String> {
     if let Some(id) = operation {
+        if let Some(reason) = pending_review_blocker(storage) {
+            return Err(reason.into());
+        }
         intent::authorize_review(storage, id)
     } else {
         storage.require_data_writable()?;
@@ -218,6 +232,12 @@ fn load(storage: &Storage, root: &Path, operation: &str) -> Result<Target, Strin
     }
     Ok(target)
 }
+impl Storage {
+    pub(crate) fn list_model_deletion_items(&self) -> Result<Listing, String> {
+        listing(self, &self.native_models_root)
+    }
+}
+
 pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String> {
     let rows = {
         let db = crate::operation_observation::lock(&storage.connection)?;
@@ -235,28 +255,36 @@ pub(crate) fn listing(storage: &Storage, root: &Path) -> Result<Listing, String>
     if rows.len() > 100 {
         return Err("未完了モデル削除の件数が安全上限を超えています".into());
     }
+    let model_storage = storage.require_model_storage();
     let items = rows
         .into_iter()
         .map(|(operation_id, state)| -> Result<Item, String> {
-            let startup_reason = {
+            let (startup_reason, other_pending) = {
                 let db = crate::operation_observation::lock(&storage.connection)?;
-                super::super::startup::reason(&db, &operation_id)?.filter(|reason| {
+                let reason = super::super::startup::reason(&db, &operation_id)?.filter(|reason| {
                     matches!(
                         reason.as_str(),
                         "model_completed_scope_reappeared"
                             | "model_completed_receipt_invalid"
                             | "model_completed_scope_uninspectable"
                     )
-                })
+                });
+                let other = super::super::fence::other_pending(&db, Some(&operation_id))?;
+                (reason, other)
             };
-            Ok(match load(storage, root, &operation_id) {
+            let blocker = pending_review_blocker(storage)
+                .or(other_pending.then_some("別の未完了保守操作を先に確認してください"));
+            let target = model_storage
+                .clone()
+                .and_then(|()| load(storage, root, &operation_id));
+            Ok(match target {
                 Ok(target) => Item {
                     operation_id,
                     state,
                     package_id: Some(target.snapshot().record.package_id.clone()),
                     model_name: Some(target.snapshot().record.manifest.model_name.clone()),
-                    review_allowed: true,
-                    error_message: None,
+                    review_allowed: blocker.is_none(),
+                    error_message: blocker.map(str::to_owned),
                     startup_reason,
                 },
                 Err(reason) => Item {

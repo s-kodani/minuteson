@@ -89,7 +89,7 @@ pub(crate) async fn start_model_download(
             let root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("model-downloads");
             let mut last = None::<std::time::Instant>;
             let bundled = app.path().resource_dir().map_err(|e| e.to_string())?.join(if cfg!(windows) { "windows-runtime" } else { "asr-runtime" });
-            let reuse_root = root.parent().ok_or("モデル管理領域がありません")?.join("models");
+            let reuse_root = app.state::<Storage>().native_models_root()?.to_owned();
             let reusable = app.state::<crate::storage::Storage>().list_model_placements()?;
             let receipt = crate::model_download::download_platform(&root, &bundled, Some((&reuse_root, &reusable)), &operation, &recipe, &expected_recipe_hash, &|| cancelled(), &mut |received, total| {
                 if received == 0 || received == total || last.is_none_or(|time| time.elapsed().as_millis() >= 200) {
@@ -215,7 +215,7 @@ pub(crate) async fn place_downloaded_model(
                 let root = app.path().app_data_dir().map_err(|e| e.to_string())?;
                 json(crate::model_download::place_with_progress(
                     &app.state::<Storage>(),
-                    &root.join("models"),
+                    app.state::<Storage>().native_models_root()?,
                     &root.join("model-downloads"),
                     &download_id,
                     &expected_recipe_hash,

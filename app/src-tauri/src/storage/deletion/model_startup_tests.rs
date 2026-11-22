@@ -451,7 +451,7 @@ fn model_startup_wrong_native_root_never_inspects_saved_foreign_root() {
         inspect(
             &db,
             &f.storage.managed_anchor,
-            &foreign.path().join("models")
+            Some(&foreign.path().join("models"))
         )
         .unwrap(),
         vec![(op, INVALID)]
@@ -597,28 +597,23 @@ fn model_startup_database_identity_replacement_defers_recovery_and_retains_recei
 }
 
 #[test]
-fn model_startup_completed_scan_caps_history_and_rejects_noncanonical_ids() {
+fn model_startup_completed_scan_retains_invalid_ids_and_walks_large_history() {
     let f = Fixture::new();
     let db = Connection::open_in_memory().unwrap();
     db.execute_batch("CREATE TABLE maintenance_operations(id TEXT,kind TEXT,state TEXT,target_manifest_json TEXT,progress_json TEXT,created_at INTEGER); INSERT INTO maintenance_operations VALUES('invalid','delete_assets','completed','{}','{}',1);").unwrap();
-    assert!(inspect(
-        &db,
-        &f.storage.managed_anchor,
-        Path::new("/synthetic/models")
-    )
-    .is_err());
-    db.execute_batch("DELETE FROM maintenance_operations; WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<10001) INSERT INTO maintenance_operations SELECT printf('00000000-0000-0000-0000-%012d',n),'delete_assets','completed','{}','{}',n FROM seq;").unwrap();
-    assert!(inspect(
-        &db,
-        &f.storage.managed_anchor,
-        Path::new("/synthetic/models")
-    )
-    .unwrap_err()
-    .contains("上限"));
+    let root = Path::new("/synthetic/models");
+    assert_eq!(
+        inspect(&db, &f.storage.managed_anchor, Some(root)).unwrap(),
+        vec![("invalid".to_string(), INVALID)]
+    );
+    db.execute_batch("WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<10001) INSERT INTO maintenance_operations SELECT printf('00000000-0000-0000-0000-%012d',n),'delete_assets','completed','{}','{}',n FROM seq;").unwrap();
+    let records = inspect(&db, &f.storage.managed_anchor, Some(root)).unwrap();
+    assert_eq!(records.len(), 10_002);
+    assert!(records.iter().all(|(_, reason)| *reason == INVALID));
 }
 
 #[test]
-fn model_startup_noncanonical_completed_asset_stops_open_before_mutable_recovery() {
+fn model_startup_noncanonical_completed_asset_starts_read_only_before_mutable_recovery() {
     let mut f = Fixture::new();
     stale(&f);
     f.storage.connection.lock().unwrap().execute("INSERT INTO maintenance_operations VALUES('older',NULL,'delete_assets','completed',NULL,'{}',?1,1,'{}',NULL,1,1)", ["a".repeat(64)]).unwrap();
@@ -628,12 +623,11 @@ fn model_startup_noncanonical_completed_asset_stops_open_before_mutable_recovery
         &mut f.storage,
         Storage::open(placeholder.path().into()).unwrap(),
     ));
-    let error = match Storage::open_with_models(root.clone(), f.root.clone()) {
-        Ok(_) => panic!("Malformed completed asset must not be adopted"),
-        Err(error) => error.to_string(),
-    };
-    assert!(error.contains("操作IDが不正"));
-    let db = Connection::open(root.join("meetings.sqlite3")).unwrap();
+    let storage = Storage::open_with_models(root, f.root.clone()).unwrap();
+    assert!(storage.common_write_hold());
+    assert!(!storage.list_meetings().unwrap().is_empty());
+    assert!(storage.create_meeting("DENIED").is_err());
+    let db = storage.connection.lock().unwrap();
     let state: String = db
         .query_row(
             "SELECT state FROM processing_jobs WHERE id='stale'",

@@ -1,5 +1,5 @@
 use super::analysis::{AnalysisSpeaker, AnalysisUtterance, AnalysisView};
-use super::drafts::{load_draft, merged_assignments, validate_payload, TranscriptDraftPayload};
+use super::drafts::{draft_for_verified_body, merged_assignments, TranscriptDraftPayload};
 use super::*;
 use rusqlite::{Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -333,13 +333,7 @@ pub(super) fn current_working(
     if view.utterances.len() > 100_000 || view.speakers.len() > 100 {
         return Err("生成入力の件数が大きすぎます".into());
     }
-    let mut draft = load_draft(tx, meeting)?;
-    if let Some(d) = &mut draft {
-        if d.base_analysis_id != id {
-            return Err("下書きの基底と現在版が一致しません".into());
-        }
-        d.payload = validate_payload(tx, &id, d.payload.clone())?;
-    }
+    let draft = draft_for_verified_body(tx, meeting, &id)?;
     Ok((view, draft, title, created_at, started_at))
 }
 

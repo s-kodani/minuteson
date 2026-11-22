@@ -69,7 +69,7 @@ pub(super) fn initialize(mut db: Connection) -> Result<Connection, String> {
 }
 
 pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
-    let actual: BTreeSet<String> = db
+    let mut actual: BTreeSet<String> = db
         .prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         .map_err(|e| e.to_string())?
         .query_map([], |r| r.get(0))
@@ -77,6 +77,8 @@ pub(super) fn tables(db: &Connection) -> Result<Vec<Table>, String> {
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
     verify_database_schema(db).map_err(|e| e.to_string())?;
+    crate::storage::salvage_schema::verify(db).map_err(|e| e.to_string())?;
+    actual.retain(|name| !crate::storage::salvage_schema::owns_object(name));
     let expected: BTreeSet<String> = TABLES
         .iter()
         .chain(

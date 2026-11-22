@@ -68,6 +68,32 @@ wire_enum!(JobState { Queued => "queued", Running => "running", Pausing => "paus
 wire_enum!(PauseReason { User => "user", Recording => "recording", Exit => "exit" });
 wire_enum!(WindowRole { Main => "main", Recorder => "recorder", RecordingConfirmation => "recording-confirmation", StartupAttention => "startup-attention" });
 wire_enum!(Platform { Macos => "macos", Windows => "windows", Other => "other" });
+wire_enum!(MeetingBodyPart { Transcript => "transcript", Minutes => "minutes" });
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MeetingBodyReview {
+    pub text: String,
+    pub complete: bool,
+}
+wire_enum!(SalvageSourceCleanupState {
+    Available => "available",
+    Interrupted => "interrupted",
+    Completed => "completed"
+});
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SalvageSourceCleanup {
+    pub source_root: String,
+    pub database_files: u32,
+    pub audio_files: u32,
+    /// Audio targets left in place because their original identity could no longer be verified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_audio_files: Option<u32>,
+    pub state: SalvageSourceCleanupState,
+}
+
 wire_enum!(AppUpdateChannel { WindowsStore => "windows_store", MacosRelease => "macos_release", Unsupported => "unsupported" });
 wire_enum!(AppUpdateState { NotChecked => "not_checked", Checking => "checking", Available => "available", Downloading => "downloading", Ready => "ready", Installing => "installing", Failed => "failed", NoUpdate => "no_update", Unavailable => "unavailable", Unsupported => "unsupported" });
 

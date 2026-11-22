@@ -90,6 +90,73 @@ fn every_fixed_model_has_offline_terms_bound_to_actual_weight_identity() {
         assert!(validate_download_policy(&changed).is_err());
     }
 }
+
+#[test]
+fn current_and_pre_update_eres2net_packages_keep_offline_terms() {
+    let manifests: Vec<_> = fixed()
+        .into_iter()
+        .filter(|m| m.model_name.contains("ERes2Net base"))
+        .collect();
+    assert_eq!(manifests.len(), 2);
+    for manifest in manifests {
+        for target in [Target::MacosAarch64, Target::WindowsX86_64] {
+            let mut manifest = manifest.clone();
+            manifest.target = target;
+            let current = official(&manifest).unwrap().unwrap();
+            assert!(current.official);
+            let embedding = manifest
+                .files
+                .iter_mut()
+                .find(|f| f.role == Role::SpeakerEmbedding)
+                .unwrap();
+            embedding.expected_size = Some(39_593_761);
+            embedding.expected_hash =
+                Some("1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b".into());
+            let previous = official(&manifest).unwrap().unwrap();
+            assert_eq!(previous.summary, current.summary);
+            assert!(previous.official);
+        }
+    }
+}
+#[test]
+fn previous_llama_runtime_packages_keep_offline_terms_by_weight_identity() {
+    use crate::model_inspection::PackageManifestExt;
+
+    // Exact pre-update Mac catalog manifests from 5d76e2ab, including their
+    // runtime files and notices. A target-only Windows conversion is invalid.
+    let previous: Vec<PackageManifest> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/model-license-llama-b11960-macos.json"
+    ))
+    .unwrap();
+    assert_eq!(previous.len(), 5);
+    assert_eq!(
+        previous
+            .iter()
+            .map(|m| &m.model_name)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        5
+    );
+    let current_catalog = fixed();
+    for manifest in previous {
+        assert_eq!(manifest.engine, Engine::Llama);
+        assert_eq!(manifest.target, Target::MacosAarch64);
+        assert_eq!(manifest.engine_version, "b11960");
+        manifest.validate(Target::MacosAarch64).unwrap();
+        let current_manifest = current_catalog
+            .iter()
+            .find(|m| m.engine == manifest.engine && m.model_name == manifest.model_name)
+            .unwrap();
+        assert_ne!(manifest.engine_version, current_manifest.engine_version);
+        let previous = official(&manifest).unwrap().unwrap();
+        let current = official(current_manifest).unwrap().unwrap();
+        assert!(previous.official);
+        assert_eq!(previous.disclosure_hash, current.disclosure_hash);
+        // Preserved model terms do not authorize an old runtime as the current
+        // catalog package; installed package identity remains exact.
+        assert!(!installed(&manifest, &current_catalog).unwrap().official);
+    }
+}
 #[test]
 fn all_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_changes() {
     let network: serde_json::Value =
@@ -116,7 +183,8 @@ fn all_dynamic_whisper_weights_resolve_without_runtime_or_recipe_identity_change
 #[test]
 fn preserved_notice_bytes_and_sources_are_checked_and_complete() {
     let registry = registry().unwrap();
-    assert_eq!(registry.models.len(), 13);
+    // Includes both previous ERes2Net weight identities for installed packages.
+    assert_eq!(registry.models.len(), 15);
     assert_eq!(registry.notices.len(), 22);
     for record in &registry.notices {
         let bytes = assets::embedded(&record.sha256).unwrap();
@@ -181,7 +249,7 @@ fn disclosure_hash_matches_renderer_golden_with_original_notice_bytes() {
     let manifest = qwen();
     assert_eq!(
         official(&manifest).unwrap().unwrap().disclosure_hash,
-        "77b6234add679035e883adc9955877111dd475233e2897fe7d3d7456b9570de3"
+        "f1e9cb42cf6429e7a7f61d731057f1dce9bb2d5259889d3f60a1e47e8ac2ec39"
     );
     let gemma = fixed()
         .into_iter()

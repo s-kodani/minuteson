@@ -431,7 +431,7 @@ fn deletion_unstarted_keep_preserves_changed_contents_and_replays_without_claimi
     f.unaffected();
 }
 #[test]
-fn deletion_cold_pending_review_skips_recovery_and_requires_restart_after_resolution() {
+fn deletion_cold_pending_review_protects_only_the_target_until_kept() {
     let f = Fixture::new();
     let p = f.pending();
     let op = p.preview.operation_id;
@@ -439,7 +439,16 @@ fn deletion_cold_pending_review_skips_recovery_and_requires_restart_after_resolu
     let audio = f.audio.clone();
     drop(f.storage);
     let storage = Storage::open(root.clone()).unwrap();
-    assert!(storage.data_write_blocked());
+    let target = storage.get_meeting(&f.meeting).unwrap().unwrap();
+    let other = storage.get_meeting(&f.other).unwrap().unwrap();
+    assert!(!storage.data_write_blocked());
+    assert!(storage.require_global_data_writable().is_err());
+    assert!(storage
+        .rename_meeting(&target.id, "保護中は変更できない", target.lock_version)
+        .is_err());
+    storage
+        .rename_meeting(&other.id, "別会議は編集可能", other.lock_version)
+        .unwrap();
     let mut p = Prepared::pending(&storage, &op, &crate::test_support::never_cancelled).unwrap();
     let id = p.preview.confirmation_id.clone();
     let r = p
@@ -450,13 +459,25 @@ fn deletion_cold_pending_review_skips_recovery_and_requires_restart_after_resolu
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-    assert!(r.restart_required);
-    assert!(storage.data_write_blocked());
-    assert!(audio.exists());
+    assert!(r.retained && !r.deleted && !r.restart_required);
+    storage.release_meeting_deletion(&target.id).unwrap();
+    assert!(storage.require_global_data_writable().is_ok());
+    storage
+        .rename_meeting(&target.id, "保持後は編集可能", target.lock_version)
+        .unwrap();
+    assert_eq!(std::fs::read(&audio).unwrap(), b"TARGET");
     drop(storage);
     let storage = Storage::open(root).unwrap();
     assert!(!storage.data_write_blocked());
-    assert!(audio.exists());
+    assert_eq!(
+        storage.get_meeting(&target.id).unwrap().unwrap().title,
+        "保持後は編集可能"
+    );
+    assert_eq!(
+        storage.get_meeting(&other.id).unwrap().unwrap().title,
+        "別会議は編集可能"
+    );
+    assert_eq!(std::fs::read(audio).unwrap(), b"TARGET");
 }
 #[test]
 fn deletion_partial_changed_contents_remain_visible_but_are_never_automatically_adopted() {
@@ -594,7 +615,13 @@ fn deletion_matching_database_copy_cannot_adopt_original_storage_confirmation() 
     }
     drop(copy);
     let copied = Storage::open(destination.path().into()).unwrap();
-    assert!(copied.data_write_blocked());
+    let target = copied.get_meeting(&f.meeting).unwrap().unwrap();
+    let other = copied.get_meeting(&f.other).unwrap().unwrap();
+    assert!(!copied.data_write_blocked());
+    assert!(copied.require_global_data_writable().is_err());
+    copied
+        .rename_meeting(&other.id, "コピー内の別会議", other.lock_version)
+        .unwrap();
     assert!(authorize_review(&copied, Some(&p.preview.operation_id)).is_err());
     assert!(Prepared::pending(
         &copied,
@@ -612,8 +639,15 @@ fn deletion_matching_database_copy_cannot_adopt_original_storage_confirmation() 
             &crate::test_support::never_cancelled
         )
         .is_err());
-    assert!(copied.data_write_blocked());
-    assert!(f.audio.exists());
+    assert!(copied.require_global_data_writable().is_err());
+    assert!(copied
+        .rename_meeting(&target.id, "保護中は変更できない", target.lock_version)
+        .is_err());
+    assert_eq!(
+        f.storage.get_meeting(&f.other).unwrap().unwrap().title,
+        "保持対象"
+    );
+    assert_eq!(std::fs::read(&f.audio).unwrap(), b"TARGET");
     f.unaffected();
 }
 

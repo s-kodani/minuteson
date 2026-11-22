@@ -124,6 +124,7 @@ impl Storage {
         meeting: &str,
     ) -> Result<MeetingAudioSummary, String> {
         let plan = self.canonical_audio_plan(meeting)?;
+        self.require_canonical_audio_available(meeting, &plan)?;
         Ok(MeetingAudioSummary {
             schema_version: 1,
             duration_us: plan.tracks[0].end_us,
@@ -178,16 +179,11 @@ impl Storage {
         if !matches!(request.mode, MeetingPlaybackMode::Mixed) {
             return Err("会議音声の再生方式が不正です".into());
         }
-        let plan = self.verify_canonical_audio(&request.meeting_id, cancelled)?;
+        let plan = self.canonical_audio_plan(&request.meeting_id)?;
         let track = &plan.tracks[0];
         let before = self.resolve_meeting_playback_start(request, track.end_us)?;
-        let audio = self.prepare_meeting_track_audio_cancellable(
-            &request.meeting_id,
-            &track.id,
-            0,
-            track.end_us,
-            cancelled,
-        )?;
+        let audio =
+            self.prepare_meeting_track_audio_cancellable(&request.meeting_id, track, cancelled)?;
         if self.canonical_audio_plan(&request.meeting_id)? != plan
             || self.resolve_meeting_playback_start(request, track.end_us)? != before
         {

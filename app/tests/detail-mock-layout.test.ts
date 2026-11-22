@@ -97,12 +97,12 @@ test("transcript synthetic failure controls are opt-in and never invoke product 
 test("transcript loading and empty states retain responsive workspace insets", () => {
   const transcript=source("transcript.tsx"), css=source("prototype-alignment.css");
   assert.match(transcript,/loading && <p className="transcript-state" role="status"/);
-  assert.match(transcript,/!loading && !analysis && !error && <p className="transcript-state"/);
+  assert.match(transcript,/!loading && !analysis && !analysisError && !draftError && <p className="transcript-state"/);
   assert.match(css,/\.content\.meeting-detail-content \{ --tab-header-padding-top:24px; --tab-content-padding-inline:32px;/);
   assert.match(css,/@media\(max-width:760px\) \{\s*\.content\.meeting-detail-content \{ --tab-header-padding-top:12px; --tab-content-padding-inline:16px;/);
-  assert.match(css,/\.meeting-detail-content \.transcript-state \{ flex:none; padding:24px var\(--tab-content-padding-inline\);/);
-  assert.match(css,/\.meeting-detail-content \.transcript-state \{ padding-block:20px;/);
-  assert.match(css,/\.transcript-feedback \{ padding-inline:16px;/);
+  assert.match(css,/\.meeting-detail-content \.transcript-state \{ flex:none; padding:4px var\(--tab-content-padding-inline\);/);
+  assert.match(css,/\.meeting-detail-content p\.transcript-state \{ padding-block:0;/);
+  assert.match(css,/\.transcript-feedback \{[^}]*padding:8px var\(--tab-content-padding-inline,32px\);/);
 });
 
 

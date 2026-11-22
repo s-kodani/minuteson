@@ -59,12 +59,17 @@ fn worker_imports_more_than_queue_capacity_and_coalesces_progress_before_persist
     let service = Service::start(dir.path().into(), None);
     let time = now();
     let entries = (0..4200)
-        .map(|id| entry(&format!("{id:05}"), "succeeded", time))
+        .map(|id| (entry(&format!("{id:05}"), "succeeded", time), None))
         .collect();
+    let (reply, response) = mpsc::sync_channel(1);
     assert!(service
         .tx
-        .try_send(Message::Backfill(entries, None))
+        .try_send(Message::Backfill(entries, reply))
         .is_ok());
+    response
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
     let page = service
         .query(
             Query {
@@ -111,6 +116,42 @@ fn entry(id: &str, state: &str, time: i64) -> Entry {
     };
     e
 }
+
+#[test]
+fn recording_receipts_survive_reopen_and_initial_workspace_reset_only_runs_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let time = now();
+    let mut recording = Entry::new(
+        "recording_save",
+        "session",
+        "会議",
+        Some("meeting".into()),
+        "succeeded",
+    );
+    recording.finished_at = Some(time);
+    {
+        let db = open(dir.path()).unwrap();
+        assert!(clear_history(&db, Some("workspace")).unwrap());
+        import_rows(
+            &db,
+            vec![(recording.clone(), Some("verified-source".into()))],
+            time,
+        )
+        .unwrap();
+    }
+    let db = open(dir.path()).unwrap();
+    assert!(!clear_history(&db, Some("workspace")).unwrap());
+    assert_eq!(
+        recording_proofs(&db)
+            .unwrap()
+            .get(&recording.id)
+            .map(String::as_str),
+        Some("verified-source")
+    );
+    assert!(clear_history(&db, Some("next-workspace")).unwrap());
+    assert!(recording_proofs(&db).unwrap().is_empty());
+}
+
 #[test]
 fn paging_is_stable_for_identical_times_and_duplicates_and_filters_are_checked() {
     let dir = tempfile::tempdir().unwrap();

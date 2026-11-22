@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "./ipc.ts";
+import { listen } from "@tauri-apps/api/event";
 import { subscribeInvalidations } from "./native-snapshots";
 import { observeInvalidations } from "./snapshot-resource";
 import { browserFocus, browserSchedule } from "./snapshot-browser";
@@ -11,26 +12,31 @@ import { SavedEditsCancelled, withConfirmedEdits } from "./confirmed-action";
 import { jobLabel, type AnalysisJob, type MinutesSource } from "./analysis-state";
 import { minutesConfigured, type MinutesPreferences } from "./minutes-state";
 import { MinutesMarkdownEditor } from "./minutes-markdown-editor";
+import { MinutesMarkdownPreview } from "./minutes-markdown-preview";
 import { MarkdownSaveController, markdownStamp, type MarkdownDocument } from "./minutes-markdown-state";
 import { confirmMarkdownLeave } from "./minutes-markdown-leave";
 import { MarkdownExportController, type MarkdownExportRecord, type MarkdownExportStatus } from "./minutes-markdown-export";
-import "./minutes-markdown-editor.css";
 import { validateAudioSummary, type MeetingAudioSummary } from "./minutes-audio-state";
 import { useMeetingAudio } from "./meeting-audio";
 import { topOpenModal } from "./modal-state";
 import type { ConfirmationOptions } from "./confirmation-state";
 import { minutesAdmissions } from "./minutes-generation-admission";
+import { readMeetingBodyForReview } from "./meeting-body-review";
+import type { MeetingBodyReview } from "./generated/contracts";
 
 type Job = AnalysisJob & { operationId: string };
 
 /** A single human-owned Markdown body, not a candidate or revision editor. */
-export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingActive, locked, withSavedEdits, visible = true }: {
+export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingActive, locked, navigationLocked = false, withSavedEdits, visible = true }: {
   meetingId: string; meetingTitle: string; sourceEpoch: number; recordingActive: boolean; locked: boolean;
   withSavedEdits: (action: () => void | Promise<void>) => Promise<void | "cancelled">;
-  onHeadChanged: () => Promise<void>; visible?: boolean;
+  visible?: boolean; navigationLocked?: boolean;
 }) {
-  const [controller] = useState(() => new MarkdownSaveController(meetingId,
-    request => invoke<MarkdownDocument>("save_minutes_markdown", { request })));
+  const documentWritable = useRef(false);
+  const [controller] = useState(() => new MarkdownSaveController(meetingId, async request => {
+    if (!documentWritable.current) throw Error("議事録の保存状態を確認できません。入力を保持しています。");
+    return invoke<MarkdownDocument>("save_minutes_markdown", { request });
+  }));
   const [documentState, setDocumentState] = useState(() => controller.snapshot());
   const [exporter] = useState(() => new MarkdownExportController(meetingId,
     request => invoke<MarkdownExportRecord|null>("export_plain_minutes_markdown", { request }),
@@ -47,10 +53,18 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
   const [settings, setSettings] = useState<MinutesPreferences | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [bodyError, setBodyError] = useState("");
+  const [review, setReview] = useState<MeetingBodyReview | null>(null);
+  const [sourceError, setSourceError] = useState(""), [settingsError, setSettingsError] = useState(""), [jobsError, setJobsError] = useState("");
   const [externalChange, setExternalChange] = useState(false);
   const [actionsHost, setActionsHost] = useState<HTMLDivElement | null>(null);
   const alive = useRef(true), running = useRef(false);
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  const refreshJobs = useRef<() => Promise<unknown>>(async () => {});
+  const refreshSource = useRef<() => Promise<unknown>>(async () => {});
+  const refreshAudio = useRef<() => Promise<unknown>>(async () => {});
+  const previousSourceEpoch = useRef(sourceEpoch);
+  const previousAudioAvailability = useRef(canInspectSource);
   const admissions = useSyncExternalStore(minutesAdmissions.subscribe, minutesAdmissions.getSnapshot);
   const preparing = admissions.some(item => item.meetingId === meetingId && item.pending);
   // Navigation/quit sets a main-window lock while awaiting this decision.
@@ -92,36 +106,83 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       if (reason === "tab") return false;
       const current = controller.snapshot();
       return current.dirty || current.saving;
+    }, () => {
+      if (controller.isComposing()) throw Error("議事録の日本語入力を確定してから退避してください。");
+      const current = controller.snapshot();
+      return { kind: "minutes", meetingId, input: { markdown: current.text, base: markdownStamp(current.document) } };
     });
     return () => { alive.current = false; unsubscribe(); unregister(); };
   }, [controller]);
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!visible || !isTauri()) return;
     let disposed = false;
-    const resource = observeInvalidations({
-      read: async () => {
-            const [saved, analysis, preferences, allJobs, summary] = await Promise.all([
-              read(), invoke<MinutesSource>("get_minutes_source", { meetingId }),
-              invoke<VersionedDraft<MinutesPreferences>>("get_minutes_preferences"),
-              invoke<Job[]>("get_analysis_jobs", { meetingId }),
-              // Deletion is shared with the player; normal refreshes still
-              // observe changed durations/modes without remounting the editor.
-              sourceAvailable.current ? invoke<MeetingAudioSummary>("get_meeting_audio_summary", { meetingId }).then(validateAudioSummary).catch(() => null) : null,
-            ]);
-            if (disposed) return;
-            setExternalChange(!controller.observe(saved));
-            setSource(analysis); setSettings(preferences.payload); setJobs(allJobs); setLoaded(true);
-            setAudioSummary(summary);
-            minutesAdmissions.observe(meetingId, allJobs.map(job => job.operationId));
-      },
-      subscribe: notify => subscribeInvalidations(["analysis-job-changed", "analysis-version-changed", "model-profile-changed"], notify),
-      error: cause => { if (!disposed) setError(String(cause)); },
-      intervalMs: 3000, schedule: browserSchedule, focus: browserFocus,
+    const subscribeVersion = (notify: () => void) => listen<string>("analysis-version-changed", ({ payload }) => {
+      if (payload == null || payload === meetingId) notify();
     });
-    refreshRef.current = async () => { await resource.refresh(); };
-    return () => { disposed = true; resource.stop(); };
-  }, [meetingId, controller]);
-  useEffect(() => { void refreshRef.current(); }, [sourceEpoch]);
+    const subscribeJobs = (notify: () => void, publicationOnly = false) => listen<Job & { meetingId: string }>("analysis-job-changed", ({ payload }) => {
+      if (payload && (payload.meetingId !== meetingId || payload.kind !== "minutes_generation" || publicationOnly && payload.state !== "succeeded")) return;
+      notify();
+    });
+    const observe = (subscribe: (notify: () => void) => Promise<() => void>, refresh: () => Promise<void>, onError: (cause: unknown) => void, intervalMs = 30000) => observeInvalidations({
+      read: refresh,
+      subscribe,
+      error: cause => { if (!disposed) onError(cause); },
+      intervalMs,
+      schedule: browserSchedule,
+      focus: browserFocus,
+    });
+    const document = observe(async notify => {
+      const stops = await Promise.allSettled([subscribeVersion(notify), subscribeJobs(notify, true)]);
+      return () => stops.forEach(stop => { if (stop.status === "fulfilled") stop.value(); });
+    }, async () => {
+      try {
+        const saved = await read();
+        if (disposed) return;
+        const matched = controller.observe(saved);
+        setExternalChange(!matched); setBodyError(""); setReview(null); setLoaded(true);
+        documentWritable.current = true;
+      } catch (cause) {
+        if (disposed) return;
+        documentWritable.current = false;
+        setBodyError(String(cause)); setLoaded(true);
+        const fallback = await readMeetingBodyForReview(meetingId, "minutes").catch(() => null);
+        if (!disposed) setReview(fallback);
+      }
+    }, () => { /* An event subscription failure is recovered by polling. */ });
+    const transcript = observe(subscribeVersion, async () => {
+      const value = await invoke<MinutesSource>("get_minutes_source", { meetingId });
+      if (!disposed) { setSource(value); setSourceError(""); }
+    }, cause => { setSource(null); setSourceError(String(cause)); });
+    const preferences = observe(notify => subscribeInvalidations(["model-profile-changed", "model-inventory-changed"], notify), async () => {
+      const value = await invoke<VersionedDraft<MinutesPreferences>>("get_minutes_preferences");
+      if (!disposed) { setSettings(value.payload); setSettingsError(""); }
+    }, cause => { setSettings(null); setSettingsError(String(cause)); });
+    const jobList = observe(subscribeJobs, async () => {
+      const rows = await invoke<Job[]>("get_analysis_jobs", { meetingId });
+      if (!Array.isArray(rows)) throw Error("議事録生成のジョブを確認できません。");
+      if (!disposed) { setJobs(rows); setJobsError(""); minutesAdmissions.observe(meetingId, rows.map(job => job.operationId)); }
+    }, cause => { setJobsError(String(cause)); }, 3000);
+    const audio = observe(subscribeVersion, async () => {
+      const value = sourceAvailable.current ? validateAudioSummary(await invoke<MeetingAudioSummary>("get_meeting_audio_summary", { meetingId })) : null;
+      if (!disposed) setAudioSummary(value);
+    }, () => setAudioSummary(null));
+    const resources = [document, transcript, preferences, jobList, audio];
+    refreshRef.current = async () => { await Promise.all(resources.map(resource => resource.refresh())); };
+    refreshJobs.current = jobList.refresh;
+    refreshSource.current = transcript.refresh;
+    refreshAudio.current = audio.refresh;
+    return () => { disposed = true; resources.forEach(resource => resource.stop()); };
+  }, [meetingId, controller, visible]);
+  useEffect(() => {
+    if (previousSourceEpoch.current === sourceEpoch) return;
+    previousSourceEpoch.current = sourceEpoch;
+    if (visible) void refreshSource.current();
+  }, [sourceEpoch, visible]);
+  useEffect(() => {
+    if (previousAudioAvailability.current === canInspectSource) return;
+    previousAudioAvailability.current = canInspectSource;
+    if (visible) void refreshAudio.current();
+  }, [canInspectSource, visible]);
   const run = async (action: () => Promise<void>) => {
     if (running.current || locked || !isTauri()) return;
     running.current = true; setBusy(true); setError("");
@@ -130,6 +191,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     finally { running.current = false; if (alive.current) setBusy(false); }
   };
   const start = () => run(async () => {
+    if (!documentWritable.current) throw Error("議事録の保存状態を確認できません。再読込してください。");
     let submit: (() => Promise<void>) | undefined;
     await withConfirmedEdits(withSavedEdits, async () => {
     const saved = await read();
@@ -167,7 +229,7 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
       // The main-window admission owner also reports failures after this
       // meeting view unmounts; do not emit a second local error toast.
       try { await submit(); } catch { return; }
-      if (alive.current) await refreshRef.current();
+      if (alive.current) await refreshJobs.current();
     }
   });
   const exportMarkdown = (opener:HTMLButtonElement) => run(async () => {
@@ -192,23 +254,23 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     });
   });
   const jobAction = (command: string, jobId: string) => run(async () => {
-    await invoke(command, { jobId }); await refreshRef.current();
+    await invoke(command, { jobId }); await refreshJobs.current();
   });
   const cancelJob = (job: Job) => run(async () => {
     await confirm({ title: "議事録生成を取り消す", target: `会議「${meetingTitle}」`,
       message: "生成を取り消します。保存済みの議事録と編集中の入力は保持します。", confirmLabel: "生成を取り消す",
-      action: async () => { await invoke("cancel_analysis_job", { jobId: job.id }); await refreshRef.current(); } });
+      action: async () => { await invoke("cancel_analysis_job", { jobId: job.id }); await refreshJobs.current(); } });
   });
   const generationJobs = jobs.filter(j => j.kind === "minutes_generation");
   const pending = generationJobs.some(j => ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state));
   const disabled = locked || busy || !loaded || !isTauri();
   const engine = settings?.standard;
-  const cannotGenerate = disabled || recordingActive || pending || preparing || !source?.currentId || !engine || !minutesConfigured(engine);
+  const cannotGenerate = disabled || !!bodyError || !!jobsError || externalChange || recordingActive || pending || preparing || !source?.currentId || !engine || !minutesConfigured(engine);
   return <section className="analysis-card minutes-card plain-minutes-card" aria-label="議事録">
     <div className="card-head"><h2>議事録</h2><div className="plain-minutes-primary-actions">
       <div ref={setActionsHost} className="plain-minutes-editor-actions-host" />
       <IconButton label={exportState.needsCheck ? "書き出し結果を確認" : exportState.retry ? "議事録の書き出しを再試行" : "議事録をMarkdownで保存"} icon="download"
-        disabled={disabled || exportState.busy || (!documentState.document && !exportState.needsCheck && !exportState.retry)} onClick={event => void exportMarkdown(event.currentTarget)} />
+        disabled={disabled || !!bodyError || exportState.busy || (!documentState.document && !exportState.needsCheck && !exportState.retry)} onClick={event => void exportMarkdown(event.currentTarget)} />
       <button type="button" disabled={cannotGenerate} onClick={() => void start()}>議事録を生成</button>
       {generationJobs.filter(j => ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state)).map(j => <div key={j.id} className="analysis-actions">
         {["queued", "running"].includes(j.state) && <IconButton label="生成を一時停止" icon="pause" disabled={disabled} onClick={() => void jobAction("pause_analysis_job", j.id)} />}
@@ -219,9 +281,14 @@ export function MinutesPanel({ meetingId, meetingTitle, sourceEpoch, recordingAc
     {pending && <p className="minutes-generation-status" role="status">議事録生成：{generationJobs.filter(j => ["queued", "running", "pausing", "paused", "interrupted"].includes(j.state)).map(j => `${jobLabel(j.state)} ${j.completedUnits} / ${j.totalUnits ?? "?"}`).join("、")}</p>}
     {externalChange && <p className="plain-minutes-save-error" role="status">保存済みの本文が更新されています。編集中の入力は保持しています。再読込から保存済みの本文を確認できます。</p>}
     {!loaded && <p className="minutes-empty-state">議事録を読み込んでいます。</p>}
-    {loaded && <MinutesMarkdownEditor meetingId={meetingId} controller={controller} locked={locked || busy} visible={visible} actionsHost={actionsHost} inputRef={editorInput}
+    {bodyError && <p className="plain-minutes-save-error" role="status">保存済みの議事録を確認できませんでした。{review && "読み取れた本文を閲覧専用で表示しています。"} {documentState.dirty && "編集中の内容は残っています。"}
+      <IconButton label="議事録を再読込" icon="refresh" disabled={navigationLocked} onClick={() => void refreshRef.current()} /></p>}
+    {review && <section aria-label="確認用の議事録本文"><MinutesMarkdownPreview text={review.text} durationUs={null} /></section>}
+    {(sourceError || settingsError || jobsError) && <p className="meeting-document-notice" role="status">{[sourceError && "文字起こし", settingsError && "生成設定", jobsError && "生成の進み具合"].filter(Boolean).join("、")}を確認できませんでした。現在は議事録を生成できません。</p>}
+    {loaded && (!bodyError || documentState.dirty) && <MinutesMarkdownEditor meetingId={meetingId} controller={controller} locked={locked || busy || !!bodyError} navigationLocked={navigationLocked || busy} visible={visible} actionsHost={actionsHost} inputRef={editorInput}
       durationUs={audioSummary?.modes.length ? audioSummary.durationUs : null}
       onPlay={audio?.canPlay && !audio.locked && audioSummary ? interval => { void audio.playReference({ kind:"interval", ...interval, expectedDurationUs:audioSummary.durationUs }); } : undefined} />}
+    <ToastNotice scope={meetingId} type="minutes-integrity" level="warning" meetingId={meetingId} historyOnly message={bodyError ? "議事録の保存状態に確認が必要です。" : ""} />
     <IssueNotice scope={meetingId} type="minutes-operation" label="議事録操作" message={error} />
     <IssueNotice scope={meetingId} type="plain-minutes-export-error" label="議事録の書き出し" message={exportState.error} />
     <ToastNotice scope={meetingId} type="plain-minutes-export" eventId={exportedEvent} message={exportedEvent ? "議事録をMarkdownで保存しました" : ""} />

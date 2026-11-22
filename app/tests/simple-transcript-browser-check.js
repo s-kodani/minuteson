@@ -1,10 +1,38 @@
-async page => {
+async (page, capturePath = path => path) => {
   const results=[], check=(value,message)=>{if(!value)throw Error(message);};
   await page.getByRole("button",{name:"会議A",exact:true}).click();
   await page.getByRole("heading",{name:"発言一覧",exact:true}).waitFor();
   check(await page.getByRole("button",{name:/編集オプション|内容を確認|候補を採用|直前版|エンジン設定/}).count()===0,"obsolete editing/model/candidate actions remain");
   check(await page.locator(".transcript-workspace-tools,.speaker-merge-tools").count()===0,"removed options are only hidden");
   results.push("meeting has no candidate, per-meeting model or edit-options screens");
+  const search = page.getByRole("searchbox", { name: "発言を検索" });
+  for (const width of [1360, 400]) {
+    await page.setViewportSize({ width, height: 900 });
+    check(await page.locator(".transcript-main").evaluate(main => {
+      const search = main.querySelector("input").getBoundingClientRect();
+      const list = main.querySelector(".utterance-list").getBoundingClientRect();
+      const row = main.querySelector(".utterance-row");
+      const { top, bottom } = row.getBoundingClientRect();
+      const meta = row.querySelector(".utterance-meta").getBoundingClientRect();
+      const body = row.querySelector(".utterance-text").getBoundingClientRect();
+      return Math.abs(list.top - search.bottom - 12) <= 1 &&
+        Math.abs(body.top - meta.bottom - 8) <= 1 &&
+        Math.abs(meta.top - top - (bottom - body.bottom)) <= 1;
+    }), `search and utterance spacing is inconsistent at ${width}px`);
+    await page.screenshot({ path: capturePath(`utterance-spacing-${width}.png`) });
+    await search.fill("一致しない検索語");
+    const empty = page.getByText("条件に一致する発言はありません。", { exact: true });
+    await empty.waitFor();
+    check(await empty.evaluate(message => {
+      const search = message.parentElement.querySelector("input").getBoundingClientRect();
+      const notice = message.getBoundingClientRect();
+      return Math.abs(notice.top - search.bottom - 12) <= 1 && Math.abs(notice.left - search.left) <= 1;
+    }), `empty search message is not directly below the search box at ${width}px`);
+    await page.screenshot({ path: capturePath(`utterance-no-search-results-${width}.png`) });
+    await search.fill("");
+  }
+  await page.setViewportSize({ width: 1360, height: 900 });
+  results.push("search spacing and the empty state match at desktop and compact widths");
   const body=()=>page.getByRole("button",{name:"00:00:00の発言を編集",exact:true});
   const editor=()=>page.getByRole("textbox",{name:"00:00:00の発言",exact:true});
   const save=()=>page.locator(".utterance-text-edit").getByRole("button",{name:"保存",exact:true});
@@ -32,7 +60,15 @@ async page => {
   results.push("individual speaker assignment saves without bulk selection");
   await body().click();await editor().fill("保存失敗でも保持する本文");
   await page.evaluate(()=>{window.monBrowserFixture.failSave=true;});await save().click();
-  await page.getByRole("button",{name:"保存を再試行",exact:true}).waitFor();
+  const retrySave = page.getByRole("button",{name:"保存を再試行",exact:true});
+  await retrySave.waitFor();
+  check(await retrySave.evaluate(button => {
+    const heading = document.querySelector(".transcript-primary-heading h2").getBoundingClientRect();
+    const previous = button.closest(".transcript-feedback").previousElementSibling.getBoundingClientRect();
+    const bounds = button.getBoundingClientRect();
+    return Math.abs(bounds.left - heading.left) <= 1 && bounds.top - previous.bottom >= 8 && bounds.width < 200;
+  }), "retry button is flush with the edge or stretches across the tab");
+  await page.screenshot({ path: capturePath("utterance-save-retry.png") });
   const failures=await page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==="save_transcript_draft").length);
   await page.getByRole("button",{name:"設定",exact:true}).click();
   check(await editor().inputValue()==="保存失敗でも保持する本文","navigation lost failed input");

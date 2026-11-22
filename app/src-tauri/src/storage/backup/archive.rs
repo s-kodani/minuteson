@@ -3,7 +3,7 @@ use super::portable::{self, Table};
 use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Seek, SeekFrom};
+use std::io::{self, BufWriter, Seek, SeekFrom};
 
 const MAGIC: &[u8; 8] = b"MONBAK02";
 const MAX_MANIFEST: usize = 32 * 1024 * 1024;
@@ -142,27 +142,56 @@ pub(super) fn private_stage(parent: &Path) -> Result<scratch::Stage, String> {
     scratch::Stage::create(parent)
 }
 
+struct ContentsWriter {
+    file: File,
+    hash: Sha256,
+    size: u64,
+}
+
+impl Write for ContentsWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() as u64 > contents::MAX_BYTES - self.size {
+            return Err(io::Error::other("会議バックアップの内容が大きすぎます"));
+        }
+        let written = self.file.write(bytes)?;
+        self.hash.update(&bytes[..written]);
+        self.size += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
 impl Snapshot<'_> {
-    fn write_archive(
+    pub(super) fn write_archive(
         &self,
         output: &mut File,
         parent: &Path,
         cancelled: &impl Fn() -> bool,
     ) -> Result<BackupReceipt, String> {
-        self.verify(cancelled)?;
+        self.verify_control(cancelled)?;
         let stage = private_stage(self.stage.path())?;
         let data = stage.path().join("contents.json");
-        let mut file = private_file(&data)?;
-        serde_json::to_writer(&mut file, &self.contents).map_err(|e| e.to_string())?;
+        let mut writer = BufWriter::with_capacity(
+            BUFFER_BYTES,
+            ContentsWriter {
+                file: private_file(&data)?,
+                size: 0,
+                hash: Sha256::new(),
+            },
+        );
+        serde_json::to_writer(&mut writer, &self.contents).map_err(|e| e.to_string())?;
+        // Bind the proof to the bytes produced by serialization, before
+        // reopening the staged file for copying.
+        let ContentsWriter { file, hash, size } = writer.into_inner().map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
-        let (size, sha256) = digest_file(&data, cancelled)?;
-        if size > contents::MAX_BYTES {
-            return Err("会議バックアップの内容が大きすぎます".into());
-        }
+        drop(file);
         let mut entries = vec![Entry {
             path: "contents.json".into(),
             size,
-            sha256,
+            sha256: format!("{:x}", hash.finalize()),
             asset_id: None,
             meeting_id: None,
             source_size: None,
@@ -225,7 +254,7 @@ impl Snapshot<'_> {
             cancelled,
         )?;
         let deleted_audio = self.deleted_audio.bind(&logical, cancelled)?;
-        deleted_audio::verify(&logical, &deleted_audio, &omitted, cancelled)?;
+        let deleted = deleted_audio::verify(&logical, &deleted_audio, &omitted, cancelled)?;
         let manifest = Manifest {
             format_version: crate::current_formats::BACKUP,
             schema_version: SCHEMA_VERSION,
@@ -240,6 +269,8 @@ impl Snapshot<'_> {
             deleted_audio,
         };
         validate_manifest(&manifest)?;
+        validate_inventory(&logical, &manifest, &deleted)?;
+        let mut audio = self.contents.audio_bodies()?;
         let bytes = serde_json::to_vec(&manifest).map_err(|e| e.to_string())?;
         if bytes.len() > MAX_MANIFEST {
             return Err("バックアップmanifestが大きすぎます".into());
@@ -251,16 +282,25 @@ impl Snapshot<'_> {
                 n.checked_add(e.size).ok_or("バックアップ容量が範囲外です")
             })?;
         check_capacity(parent, required)?;
+        let mut prefix = [0; HEADER_BYTES as usize];
+        prefix[..8].copy_from_slice(MAGIC);
+        prefix[8..12].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
+        prefix[12..].copy_from_slice(&Sha256::digest(&bytes));
         output
-            .write_all(MAGIC)
-            .and_then(|_| output.write_all(&(bytes.len() as u32).to_le_bytes()))
-            .and_then(|_| output.write_all(&Sha256::digest(&bytes)))
+            .write_all(&prefix)
             .and_then(|_| output.write_all(&bytes))
             .map_err(|e| e.to_string())?;
         crate::operation_observation::stage("writing_backup", Some(required), "bytes");
         crate::operation_observation::advance(HEADER_BYTES + bytes.len() as u64);
-        for (entry, path) in manifest.entries.iter().zip(sources) {
-            let (mut source, before) = open_source(&path)?;
+        let mut source_proofs = Vec::with_capacity(sources.len());
+        for (entry, path) in manifest.entries.iter().zip(&sources) {
+            let (mut source, before) = open_source(path)?;
+            if let Some(body) = entry.asset_id.as_deref().and_then(|id| audio.remove(id)) {
+                if body.asset.size as u64 != entry.size || body.asset.hash != entry.sha256 {
+                    return Err("バックアップ音声と保存記録が一致しません".into());
+                }
+                body.verify_header(&mut source, entry.size)?;
+            }
             if stream_observed(&mut source, Some(output), entry.size, cancelled)?.1 != entry.sha256
                 || !same_file(
                     &before,
@@ -269,25 +309,118 @@ impl Snapshot<'_> {
             {
                 return Err("バックアップ作成中に入力が変更されています".into());
             }
+            source_proofs.push(before);
+        }
+        if !audio.is_empty() {
+            return Err("バックアップに音声ファイルがありません".into());
         }
         output.sync_all().map_err(|e| e.to_string())?;
-        crate::operation_observation::stage("verifying_backup", Some(required), "bytes");
-        let verified = read(output, stage.path(), cancelled)?;
-        output.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-        crate::operation_observation::stage("verifying_backup", Some(required), "bytes");
-        let (_, sha256) = stream_observed(output, None, required, cancelled)?;
+        let sha256 = verify_written_archive(
+            output,
+            &prefix,
+            &bytes,
+            &manifest.entries,
+            required,
+            cancelled,
+        )?;
         crate::operation_observation::stage("checking_source", None, "bytes");
-        self.verify(cancelled)?;
+        self.verify_control(cancelled)?;
+        for (path, before) in sources.iter().zip(&source_proofs) {
+            check_cancelled(cancelled)?;
+            if !same_file(
+                before,
+                &crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?,
+            ) {
+                return Err("バックアップ作成中に入力が変更されています".into());
+            }
+        }
         Ok(BackupReceipt {
-            archive_id: verified.manifest.archive_id.clone(),
-            meeting_count: verified.manifest.meetings.len(),
-            asset_count: verified.assets.len(),
-            deleted_audio_meeting_count: verified.manifest.deleted_audio.len(),
-            deleted_audio_asset_count: verified.manifest.omitted_assets.len(),
+            archive_id: manifest.archive_id,
+            meeting_count: manifest.meetings.len(),
+            asset_count: manifest.entries.len() - 1,
+            deleted_audio_meeting_count: manifest.deleted_audio.len(),
+            deleted_audio_asset_count: manifest.omitted_assets.len(),
             size: required,
             sha256,
         })
     }
+}
+
+// The staged inputs and logical database were already validated. Verify the
+// synced archive against that exact header, length and entry hashes in place.
+fn verify_written_archive(
+    file: &mut File,
+    prefix: &[u8],
+    manifest: &[u8],
+    entries: &[Entry],
+    size: u64,
+    cancelled: &impl Fn() -> bool,
+) -> Result<String, String> {
+    file.rewind().map_err(|e| e.to_string())?;
+    let before = crate::native_fs::metadata(file).map_err(|e| e.to_string())?;
+    if !before.is_file() || before.len() != size {
+        return Err("バックアップの全体容量・末尾が不正です".into());
+    }
+    crate::operation_observation::stage("verifying_backup", Some(size), "bytes");
+    let mut archive_hash = Sha256::new();
+    let mut buffer = [0; BUFFER_BYTES];
+    for expected in [prefix, manifest]
+        .into_iter()
+        .flat_map(|part| part.chunks(BUFFER_BYTES))
+    {
+        check_cancelled(cancelled)?;
+        let actual = &mut buffer[..expected.len()];
+        file.read_exact(actual).map_err(|e| e.to_string())?;
+        if actual != expected {
+            return Err("作成したバックアップのmanifestが一致しません".into());
+        }
+        archive_hash.update(actual);
+        crate::operation_observation::advance(expected.len() as u64);
+    }
+    for entry in entries {
+        read_entry(
+            file,
+            entry,
+            |bytes| {
+                archive_hash.update(bytes);
+                Ok(())
+            },
+            cancelled,
+        )?;
+    }
+    if !same_file(
+        &before,
+        &crate::native_fs::metadata(file).map_err(|e| e.to_string())?,
+    ) {
+        return Err("検証中にバックアップが変更されています".into());
+    }
+    Ok(format!("{:x}", archive_hash.finalize()))
+}
+
+fn read_entry(
+    input: &mut File,
+    entry: &Entry,
+    mut consume: impl FnMut(&[u8]) -> Result<(), String>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    check_cancelled(cancelled)?;
+    let mut hash = Sha256::new();
+    let mut remaining = entry.size;
+    let mut buffer = [0_u8; BUFFER_BYTES];
+    while remaining != 0 {
+        check_cancelled(cancelled)?;
+        let count = remaining.min(buffer.len() as u64) as usize;
+        let bytes = &mut buffer[..count];
+        input.read_exact(bytes).map_err(|e| e.to_string())?;
+        hash.update(&*bytes);
+        consume(bytes)?;
+        remaining -= count as u64;
+        crate::operation_observation::advance(count as u64);
+    }
+    if format!("{:x}", hash.finalize()) != entry.sha256 {
+        return Err("バックアップの管理ファイルハッシュが一致しません".into());
+    }
+    Ok(())
 }
 
 impl Storage {
@@ -496,25 +629,12 @@ pub(crate) fn read(
         check_cancelled(cancelled)?;
         let path = stage.path().join(&entry.path);
         let mut output = private_file(&path)?;
-        let mut hash = Sha256::new();
-        let mut remaining = entry.size;
-        let mut buffer = [0_u8; BUFFER_BYTES];
-        while remaining != 0 {
-            check_cancelled(cancelled)?;
-            let count = remaining.min(buffer.len() as u64) as usize;
-            input
-                .read_exact(&mut buffer[..count])
-                .map_err(|e| e.to_string())?;
-            output
-                .write_all(&buffer[..count])
-                .map_err(|e| e.to_string())?;
-            hash.update(&buffer[..count]);
-            remaining -= count as u64;
-            crate::operation_observation::advance(count as u64);
-        }
-        if format!("{:x}", hash.finalize()) != entry.sha256 {
-            return Err("バックアップの管理ファイルハッシュが一致しません".into());
-        }
+        read_entry(
+            input,
+            entry,
+            |bytes| output.write_all(bytes).map_err(|e| e.to_string()),
+            cancelled,
+        )?;
         output.sync_all().map_err(|e| e.to_string())?;
         if let Some(id) = &entry.asset_id {
             assets.insert(id.clone(), path);
@@ -676,8 +796,8 @@ fn validate_inventory(
 
 #[cfg(test)]
 #[path = "archive_tests.rs"]
-pub(super) mod tests;
+pub(in crate::storage) mod tests;
 
 #[cfg(all(test, unix))]
 #[path = "deleted_audio_tests.rs"]
-pub(super) mod deleted_audio_tests;
+mod deleted_audio_tests;

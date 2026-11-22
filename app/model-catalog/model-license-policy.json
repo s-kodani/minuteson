@@ -83,7 +83,7 @@
       "file": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d.txt",
       "bytes": 1078,
       "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
     },
     {
       "name": "whisper-MIT.txt",
@@ -275,7 +275,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -304,7 +304,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -333,7 +333,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -362,7 +362,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -391,7 +391,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Gemma-Apache-2.0.txt",
@@ -698,6 +698,104 @@
           "name": "NeMo-Apache-2.0.txt",
           "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
           "sourceUrl": "https://raw.githubusercontent.com/NVIDIA/NeMo/2331b063d6f0282fa79c32e4e780db6cc7ef19f2/LICENSE"
+        },
+        {
+          "name": "onnxruntime-MIT.txt",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+        },
+        {
+          "name": "onnxruntime-ThirdPartyNotices.txt",
+          "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+        }
+      ]
+    },
+    {
+      "id": "sherpa-1138-pyannote3-eres2net-base-20261119",
+      "engine": "sherpa-onnx",
+      "modelFiles": [
+        {
+          "role": "segmentation",
+          "size": 5992913,
+          "sha256": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079"
+        },
+        {
+          "role": "speaker_embedding",
+          "size": 39593762,
+          "sha256": "f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498"
+        }
+      ],
+      "licenseNames": [
+        "モデル: MIT / Apache-2.0",
+        "実行エンジン: Apache-2.0 / MIT"
+      ],
+      "summary": "pyannote segmentationはMIT、3D-Speaker ERes2NetはApache-2.0です。sherpa-onnxはApache-2.0、ONNX RuntimeはMITと同梱の第三者条件に従います。",
+      "restrictions": [],
+      "requiredNotices": [
+        {
+          "name": "segmentation-MIT.txt",
+          "sha256": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba",
+          "sourceUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+        },
+        {
+          "name": "sherpa-Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+        },
+        {
+          "name": "3DSpeaker-Apache-2.0.txt",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "sourceUrl": "https://raw.githubusercontent.com/modelscope/3D-Speaker/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE"
+        },
+        {
+          "name": "onnxruntime-MIT.txt",
+          "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/LICENSE"
+        },
+        {
+          "name": "onnxruntime-ThirdPartyNotices.txt",
+          "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+          "sourceUrl": "https://raw.githubusercontent.com/microsoft/onnxruntime/33ca9628233dc8f002435e868d4c2e9f82766ca1/ThirdPartyNotices.txt"
+        }
+      ]
+    },
+    {
+      "id": "sherpa-1138-pyannote3-int8-eres2net-base-20261119",
+      "engine": "sherpa-onnx",
+      "modelFiles": [
+        {
+          "role": "segmentation",
+          "size": 1540506,
+          "sha256": "d582f4b4c6b48205de7e0643c57df0df5615a3c176189be3fc461e9d18827b5d"
+        },
+        {
+          "role": "speaker_embedding",
+          "size": 39593762,
+          "sha256": "f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498"
+        }
+      ],
+      "licenseNames": [
+        "モデル: MIT / Apache-2.0",
+        "実行エンジン: Apache-2.0 / MIT"
+      ],
+      "summary": "pyannote segmentationはMIT、3D-Speaker ERes2NetはApache-2.0です。sherpa-onnxはApache-2.0、ONNX RuntimeはMITと同梱の第三者条件に従います。",
+      "restrictions": [],
+      "requiredNotices": [
+        {
+          "name": "segmentation-MIT.txt",
+          "sha256": "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba",
+          "sourceUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+        },
+        {
+          "name": "sherpa-Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "sourceUrl": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf/LICENSE"
+        },
+        {
+          "name": "3DSpeaker-Apache-2.0.txt",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "sourceUrl": "https://raw.githubusercontent.com/modelscope/3D-Speaker/065629c313eaf1a01c65c640c46d77e61e9607b4/LICENSE"
         },
         {
           "name": "onnxruntime-MIT.txt",

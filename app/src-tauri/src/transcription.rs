@@ -25,6 +25,10 @@ use crate::storage::{
 };
 use asr::AsrConfig;
 use serde::{Deserialize, Serialize};
+use std::{
+    cell::Cell,
+    time::{Duration, Instant},
+};
 
 fn check_source(storage: &Storage, spec: &JobSpec, p: &Parameters) -> Result<(), String> {
     let current = storage.recorded_analysis_input(&spec.meeting_id)?;
@@ -39,31 +43,17 @@ fn verify_sources(
     spec: &JobSpec,
     p: &Parameters,
     cancelled: &impl Fn() -> bool,
-) -> Result<(), String> {
+) -> Result<RecordedAudioPlan, String> {
     check_source(storage, spec, p)?;
-    if p.source.tracks.len() == 1 && p.source.tracks[0].kind == "processed" {
-        storage.verify_meeting_mix_sources(&spec.meeting_id, cancelled)?;
+    // Keep this proof in the attempt's scope, from checkpoint validation
+    // through worker input preparation and the final physical verification.
+    let plan = storage.verify_canonical_audio_retained(&spec.meeting_id, cancelled)?;
+    if plan != p.source {
+        return Err("固定した会議音声が変更されています".into());
     }
-    for track in &p.source.tracks {
-        if p.known_input.is_some() {
-            storage.prepare_analysis_track(&spec.meeting_id, track, cancelled)?;
-        } else {
-            let audio = storage.prepare_track_audio_cancellable(
-                &spec.meeting_id,
-                &track.id,
-                track.start_us,
-                track.end_us,
-                cancelled,
-            )?;
-            if audio.total_frames() != track.total_frames()?
-                || audio.sample_rate != track.sample_rate
-                || audio.channels != track.channels
-            {
-                return Err("固定した入力フレーム数が変更されています".into());
-            }
-        }
-    }
-    check_source(storage, spec, p)
+    storage.prepare_analysis_track(&spec.meeting_id, &plan.tracks[0], cancelled)?;
+    check_source(storage, spec, p)?;
+    Ok(plan)
 }
 
 #[cfg(test)]
@@ -182,17 +172,15 @@ pub(crate) fn retry_preflight(
         &parameters.source.manifest_asset_id,
         &spec.input_hash,
     )?;
-    verify_sources(storage, spec, &parameters, cancelled)?;
-    for output in &decoded.outputs {
-        verify_saved_pcm(storage, spec, &parameters, output, cancelled)?;
-        let unit = parameters
-            .units
-            .get(output.index)
-            .ok_or("再試行区間が範囲外です")?;
-        let rate = parameters.source.tracks[unit.track_index].sample_rate;
-        let duration = ((unit.window_end - unit.window_first) * 1_000_000 / u64::from(rate)) as i64;
-        saved_output(storage, spec, &parameters, output, duration)?;
-    }
+    let verified_audio = verify_sources(storage, spec, &parameters, cancelled)?;
+    verify_saved_outputs(
+        storage,
+        spec,
+        &parameters,
+        &verified_audio,
+        &decoded.outputs,
+        cancelled,
+    )?;
     if cancelled() {
         return Err("文字起こし再試行の照合を中断しました".into());
     }
@@ -205,17 +193,29 @@ pub(crate) fn retry_preflight(
     optimization.finish(cancelled)
 }
 
-fn verify_saved_pcm(
+fn verify_saved_outputs(
     storage: &Storage,
     spec: &JobSpec,
-    _parameters: &Parameters,
-    output: &UnitOutput,
+    parameters: &Parameters,
+    verified_audio: &RecordedAudioPlan,
+    outputs: &[UnitOutput],
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let plan = storage.verify_canonical_audio(&spec.meeting_id, cancelled)?;
-    let chunk = &plan.tracks[0].chunks[0];
-    if chunk.asset_id != output.wav_asset_id || chunk.hash != output.wav_hash {
-        return Err("完了解析の音声参照が一致しません".into());
+    let chunk = &verified_audio.tracks[0].chunks[0];
+    for output in outputs {
+        if cancelled() {
+            return Err("文字起こしの再開情報の照合を中断しました".into());
+        }
+        if chunk.asset_id != output.wav_asset_id || chunk.hash != output.wav_hash {
+            return Err("完了解析の音声参照が一致しません".into());
+        }
+        let unit = parameters
+            .units
+            .get(output.index)
+            .ok_or("再試行区間が範囲外です")?;
+        let rate = parameters.source.tracks[unit.track_index].sample_rate;
+        let duration = ((unit.window_end - unit.window_first) * 1_000_000 / u64::from(rate)) as i64;
+        saved_output(storage, spec, parameters, output, duration)?;
     }
     Ok(())
 }
@@ -596,6 +596,7 @@ pub(crate) fn enqueue_with_stamp(
     profile: &str,
     expected: Option<crate::storage::VocabularyStamp>,
 ) -> Result<JobSnapshot, String> {
+    storage.require_model_storage()?;
     let verification = crate::local_engine::verification::Scope::join_or_enter(true)?;
     let audio_verification = crate::audio::reuse::Scope::join_or_enter()?;
     if !matches!(profile, "standard" | "high_accuracy") {
@@ -669,12 +670,25 @@ pub(crate) fn process(
         },
     )?);
     let mut checkpoint = checked_checkpoint(&job, checkpoint)?;
-    let cancelled = || {
-        stopping()
-            || storage
-                .get_job(job_id)
-                .map_or(true, |job| job.state != "running")
+    // Reads during hashing/worker polling need only the current run state.
+    // Check immediately at unit boundaries and keep the durable commit guards.
+    let last_running_check = Cell::new(None::<Instant>);
+    let cancelled_by_db = Cell::new(false);
+    let check_cancelled = |force| {
+        if stopping() || cancelled_by_db.get() {
+            return true;
+        }
+        if force
+            || last_running_check
+                .get()
+                .is_none_or(|checked| checked.elapsed() >= Duration::from_millis(50))
+        {
+            cancelled_by_db.set(!storage.job_is_running(job_id).unwrap_or(false));
+            last_running_check.set(Some(Instant::now()));
+        }
+        cancelled_by_db.get()
     };
+    let cancelled = || check_cancelled(false);
     let attempt = (|| {
         let mut runtime = parameters.engine.clone();
         if let Some(policy) = parameters.acceleration_policy {
@@ -720,32 +734,33 @@ pub(crate) fn process(
             &parameters.source.manifest_asset_id,
             &spec.input_hash,
         )?;
-        for (index, output) in checkpoint.outputs.iter().enumerate() {
-            if output.index != index {
-                return Err("再開情報の区間順が不正です".into());
-            }
-            verify_saved_pcm(storage, &spec, &parameters, output, &cancelled)?;
-            let unit = parameters
-                .units
-                .get(index)
-                .ok_or("再試行区間が範囲外です")?;
-            let rate = parameters.source.tracks[unit.track_index].sample_rate;
-            let duration =
-                ((unit.window_end - unit.window_first) * 1_000_000 / u64::from(rate)) as i64;
-            saved_output(storage, &spec, &parameters, output, duration)?;
-        }
-        verify_sources(storage, &spec, &parameters, &cancelled)?;
+        let verified_audio = verify_sources(storage, &spec, &parameters, &cancelled)?;
+        verify_saved_outputs(
+            storage,
+            &spec,
+            &parameters,
+            &verified_audio,
+            &checkpoint.outputs,
+            &cancelled,
+        )?;
         for index in checkpoint.outputs.len()..parameters.units.len() {
             storage.clear_completion_progress(job_id);
-            if cancelled() {
+            if check_cancelled(true) {
                 return Ok(None);
             }
             let unit = &parameters.units[index];
             let directory = storage.analysis_unit_directory(&spec.meeting_id, job_id, index)?;
             let track = &parameters.source.tracks[unit.track_index];
+            let wav = &track.chunks[0];
             let path = storage.meeting_mix_path(&spec.meeting_id, track)?;
-            input::Input::new(&path, unit.window_first, unit.window_end, &cancelled)?
-                .write(&directory)?;
+            let input = input::Input::new(&path, unit.window_first, unit.window_end, &cancelled)?;
+            if input.proof.path != path
+                || input.proof.sha256 != wav.hash
+                || input.proof.size != wav.size as u64
+            {
+                return Err("文字起こしに使う会議音声が固定した入力と一致しません".into());
+            }
+            input.write(&directory)?;
             let duration = ((unit.window_end - unit.window_first) * 1_000_000 / 16000) as i64;
             managed::verify(
                 &spec.profile_snapshot,
@@ -878,7 +893,7 @@ pub(crate) fn process(
                 Err(error) => return Err(error),
             };
             storage.clear_completion_progress(job_id);
-            if cancelled() {
+            if check_cancelled(true) {
                 return Ok(None);
             }
             managed::verify(
@@ -886,7 +901,6 @@ pub(crate) fn process(
                 Execution::Asr(&parameters.engine),
                 &cancelled,
             )?;
-            let wav = &parameters.source.tracks[unit.track_index].chunks[0];
             let register_result = |path: &std::path::Path| -> Result<_, String> {
                 let mut result_path = path.to_owned();
                 if !recovered && runtime.model.path != parameters.engine.model.path {
@@ -1078,6 +1092,9 @@ pub(crate) fn process(
         if let Some(known) = &parameters.known_input {
             config["audioCoverage"] = serde_json::json!({"mode":"known_runs","runCount":known.runs.len(),"missingRangeCount":known.gaps.iter().filter(|gap|!gap.recovered).count(),"timeBase":"meeting"});
         }
+        if check_cancelled(true) {
+            return Ok(None);
+        }
         let candidate = storage.finish_transcription_candidate(
             &spec.meeting_id,
             job_id,
@@ -1094,7 +1111,7 @@ pub(crate) fn process(
         progress(storage.get_job(job_id)?);
         Ok(Some(candidate))
     })();
-    if cancelled() {
+    if check_cancelled(true) {
         let job = storage.get_job(job_id)?;
         if job.state == "running" && stopping() {
             storage.request_job_pause(job_id, "exit")?;

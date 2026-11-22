@@ -49,7 +49,11 @@ struct CaptureSession {
     if(s.synthetic_startup_delay_ms)Sleep(s.synthetic_startup_delay_ms);
     Handle parent(OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,s.parent));if(!parent.value)throw std::runtime_error("capture parent unavailable");
     Handle application_process(s.pid?OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,s.pid):INVALID_HANDLE_VALUE);
-    Json identity=nullptr;if(s.pid){if(!application_process.value||application_process.value==INVALID_HANDLE_VALUE||WaitForSingleObject(application_process.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("capture application is unavailable");identity=process_identity(s.pid);if(Json::parse(s.identity)!=identity)throw std::runtime_error("capture application identity changed");}
+    Json identity=nullptr;
+    if(s.pid){
+      identity=process_identity(s.pid,application_process.value);
+      if(Json::parse(s.identity)!=identity)throw std::runtime_error("capture application identity changed");
+    }
     manifest["targetApplicationIdentity"]=identity;
     FILETIME wall;GetSystemTimePreciseAsFileTime(&wall);auto utc=(ticks(wall)-EPOCH)/10000;auto before=qpc();
     MicrophoneChoice choice{s.uid,"fixed",""};
@@ -65,9 +69,8 @@ struct CaptureSession {
           lane.preparation_schedule.initial_resolved=true;lane.acquisition_failed("acquisition_timeout",true,now);
         }
         if(!lane.preparation_schedule.cancelled){
-          if(!microphone&&s.pid){
-            try{if(process_identity(s.pid)!=identity)throw InputFailure(E_FAIL,"selected application identity changed");}
-            catch(...){lane.acquisition_failed("application_unavailable",true,now);return;}
+          if(!microphone&&s.pid&&!process_is_running(application_process.value)){
+            lane.acquisition_failed("application_unavailable",true,now);return;
           }
           if(auto ready=lane.preparation->take()){
             if(microphone){
@@ -126,8 +129,11 @@ struct CaptureSession {
       if(commits)commits->check();
       if(WaitForSingleObject(parent.value,0)!=WAIT_TIMEOUT)throw std::runtime_error("capture parent exited");
       if(fs::exists(s.output/L"stop.request"))break;
-      // Writer latency is not a clock change or a WASAPI device failure.
-      if(!s.synthetic&&s.pid&&system.started){try{if(process_identity(s.pid)!=identity)system.detach("application_unavailable",true);}catch(...){system.detach("application_unavailable",true);}}
+      // The verified handle remains bound to the original process after exit,
+      // even if Windows assigns its PID to a new process.
+      if(!s.synthetic&&s.pid&&system.started&&!process_is_running(application_process.value)){
+        system.detach("application_unavailable",true);
+      }
       if(s.synthetic){
         const auto packet=synthetic.next(start,qpc());
         if(packet.microphone_lost)mic.binding.lost("device_disconnected",s.scenario=="system-only");

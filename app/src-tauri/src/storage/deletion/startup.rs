@@ -5,7 +5,6 @@ use crate::storage::Storage;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::BTreeMap;
 
-const MAX_COMPLETED: usize = 10_000;
 const REAPPEARED: &str = "completed_scope_reappeared";
 const INVALID: &str = "completed_receipt_invalid";
 const UNINSPECTABLE: &str = "completed_scope_uninspectable";
@@ -184,12 +183,12 @@ pub(super) fn review_manifest(
 pub(in crate::storage) fn inspect(
     db: &Connection,
     anchor: &RootAnchor,
-    models_root: &std::path::Path,
+    models_root: Option<&std::path::Path>,
 ) -> Result<(), String> {
     if exists(db)? {
         return Err("起動時の削除確認情報を再採用できません".into());
     }
-    let attention = completed_attention(db, anchor, models_root)?;
+    let attention = inspect_completed_attention(db, anchor, models_root)?;
     if attention.is_empty() {
         return Ok(());
     }
@@ -215,89 +214,100 @@ pub(super) fn completed_attention(
     anchor: &RootAnchor,
     models_root: &std::path::Path,
 ) -> Result<Vec<(String, &'static str)>, String> {
+    inspect_completed_attention(db, anchor, Some(models_root))
+}
+
+fn inspect_completed_attention(
+    db: &Connection,
+    anchor: &RootAnchor,
+    models_root: Option<&std::path::Path>,
+) -> Result<Vec<(String, &'static str)>, String> {
     let present: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='maintenance_operations')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
     let mut attention = Vec::new();
     if present {
-        let mut q = db.prepare("SELECT id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json ELSE '{}' END,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json ELSE '{}' END,state FROM maintenance_operations WHERE kind='delete_meeting' AND state IN ('completed','recovered') ORDER BY created_at,id LIMIT 10001").map_err(|e| e.to_string())?;
-        let mut rows = q.query([]).map_err(|e| e.to_string())?;
-        let mut count = 0;
-        // Cache only within this locked, synchronous startup scan. A later
-        // writer must load the live typed receipt again; this grants nothing.
+        let mut query = db.prepare("SELECT CASE WHEN typeof(id)='text' AND length(CAST(id AS BLOB))<=256 THEN id END,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json ELSE '{}' END,CASE WHEN length(CAST(progress_json AS BLOB))<=4096 THEN progress_json ELSE '{}' END,state,rowid FROM maintenance_operations WHERE kind='delete_meeting' AND state IN ('completed','recovered') AND rowid>=?1 ORDER BY rowid LIMIT 256").map_err(|e| e.to_string())?;
+        let mut cursor = Some(i64::MIN);
         let mut linked: BTreeMap<String, Result<Vec<renewal::Reference>, String>> = BTreeMap::new();
-        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-            count += 1;
-            if count > MAX_COMPLETED {
-                return Err(
-                    "完了・保持した会議削除履歴が起動時検査の上限を超えています。対象を保持します"
-                        .into(),
-                );
-            }
-            let (operation, json, progress): (String, String, String) = (
-                row.get(0).map_err(|e| e.to_string())?,
-                row.get(1).map_err(|e| e.to_string())?,
-                row.get(2).map_err(|e| e.to_string())?,
-            );
-            if !uuid(&operation) {
-                return Err("完了済み削除の操作IDが不正です。対象を保持します".into());
-            }
-            let result = (|| -> Result<Option<&str>, String> {
-                if json.len() > 65536 || progress.len() > 4096 {
-                    return Err("削除履歴が容量上限を超えています".into());
+        while let Some(first_rowid) = cursor {
+            let mut rows = query.query([first_rowid]).map_err(|e| e.to_string())?;
+            let before = cursor;
+            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                cursor = row
+                    .get::<_, i64>(4)
+                    .map_err(|e| e.to_string())?
+                    .checked_add(1);
+                let Ok(Some(operation)) = row.get::<_, Option<String>>(0) else {
+                    // The fence independently retains unrepresentable IDs.
+                    continue;
+                };
+                if !uuid(&operation) {
+                    attention.push((operation, INVALID));
+                    continue;
                 }
-                let state: String = row.get(3).map_err(|e| e.to_string())?;
-                if state == "recovered" {
-                    super::audio_supersession::inspect_kept_meeting(
-                        db,
-                        anchor,
-                        &operation,
-                        &|| false,
-                    )?;
-                    return Ok(None);
-                }
-                if progress == "{\"confirmationRecorded\":true}" {
-                    let parent = renewal::audit_source(&json)?;
-                    let audits = linked
-                        .entry(parent.clone())
-                        .or_insert_with(|| {
-                            let (original, files) = source(db, &parent)?;
-                            renewal::audit_references(db, &original, &files)
-                        })
-                        .as_ref()
-                        .map_err(Clone::clone)?;
-                    if !audits.iter().any(|r| r.operation_id == operation) {
-                        return Err("元の削除計画に接続していない確認記録です".into());
+                let result = (|| -> Result<Option<&str>, String> {
+                    let json: String = row.get(1).map_err(|e| e.to_string())?;
+                    let progress: String = row.get(2).map_err(|e| e.to_string())?;
+                    if json.len() > 65536 || progress.len() > 4096 {
+                        return Err("削除履歴が容量上限を超えています".into());
                     }
-                    return Ok(None);
+                    let state: String = row.get(3).map_err(|e| e.to_string())?;
+                    if state == "recovered" {
+                        super::audio_supersession::inspect_kept_meeting(
+                            db,
+                            anchor,
+                            &operation,
+                            &|| false,
+                        )?;
+                        return Ok(None);
+                    }
+                    if progress == "{\"confirmationRecorded\":true}" {
+                        let parent = renewal::audit_source(&json)?;
+                        let audits = linked
+                            .entry(parent.clone())
+                            .or_insert_with(|| {
+                                let (original, files) = source(db, &parent)?;
+                                renewal::audit_references(db, &original, &files)
+                            })
+                            .as_ref()
+                            .map_err(Clone::clone)?;
+                        if !audits.iter().any(|r| r.operation_id == operation) {
+                            return Err("元の削除計画に接続していない確認記録です".into());
+                        }
+                        return Ok(None);
+                    }
+                    let (original, files) = source(db, &operation)?;
+                    if !anchor.matches_history_root(
+                        db,
+                        &operation,
+                        &original.manifest().root,
+                        &original.manifest().database,
+                    )? {
+                        return Err("完了した会議削除の保存領域・DB実体が一致しません".into());
+                    }
+                    // Canonical v3 file-only completion still awaits the DB
+                    // wrapper/acknowledgement. The existing unfinished fence
+                    // already covers it; do not label it a corrupt final receipt.
+                    if serde_json::from_str::<serde_json::Value>(&progress)
+                        .is_ok_and(|p| p["version"] == 4)
+                    {
+                        return Ok(None);
+                    }
+                    database::verify_rows_absent(db, original.scope(), &|| false)?;
+                    let roots = renewal::reconfirmation_roots(db, &original, &files, &|| false)?;
+                    match absent(anchor, &original.scope().meeting_id, &roots) {
+                        Ok(true) => Ok(None),
+                        Ok(false) => Ok(Some(REAPPEARED)),
+                        Err(_) => Ok(Some(UNINSPECTABLE)),
+                    }
+                })();
+                match result {
+                    Ok(None) => {}
+                    Ok(Some(reason)) => attention.push((operation, reason)),
+                    Err(_) => attention.push((operation, INVALID)),
                 }
-                let (original, files) = source(db, &operation)?;
-                if !anchor.matches_history_root(
-                    db,
-                    &operation,
-                    &original.manifest().root,
-                    &original.manifest().database,
-                )? {
-                    return Err("完了した会議削除の保存領域・DB実体が一致しません".into());
-                }
-                // Canonical v3 file-only completion still awaits the DB
-                // wrapper/acknowledgement. The existing unfinished fence
-                // already covers it; do not label it a corrupt final receipt.
-                if serde_json::from_str::<serde_json::Value>(&progress)
-                    .is_ok_and(|p| p["version"] == 4)
-                {
-                    return Ok(None);
-                }
-                database::verify_rows_absent(db, original.scope(), &|| false)?;
-                let roots = renewal::reconfirmation_roots(db, &original, &files, &|| false)?;
-                match absent(anchor, &original.scope().meeting_id, &roots) {
-                    Ok(true) => Ok(None),
-                    Ok(false) => Ok(Some(REAPPEARED)),
-                    Err(_) => Ok(Some(UNINSPECTABLE)),
-                }
-            })();
-            match result {
-                Ok(None) => {}
-                Ok(Some(reason)) => attention.push((operation, reason)),
-                Err(_) => attention.push((operation, INVALID)),
+            }
+            if cursor == before {
+                break;
             }
         }
     }

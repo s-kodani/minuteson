@@ -276,6 +276,33 @@
       "title": "JobState",
       "type": "string"
     },
+    "MeetingBodyPart": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "enum": [
+        "transcript",
+        "minutes"
+      ],
+      "title": "MeetingBodyPart",
+      "type": "string"
+    },
+    "MeetingBodyReview": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "complete",
+        "text"
+      ],
+      "title": "MeetingBodyReview",
+      "type": "object"
+    },
     "PackageFile": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
@@ -716,6 +743,55 @@
       ],
       "title": "Role",
       "type": "string"
+    },
+    "SalvageSourceCleanup": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "SalvageSourceCleanupState": {
+          "enum": [
+            "available",
+            "interrupted",
+            "completed"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "audioFiles": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "databaseFiles": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retainedAudioFiles": {
+          "description": "Audio targets left in place because their original identity could no longer be verified.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sourceRoot": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/SalvageSourceCleanupState"
+        }
+      },
+      "required": [
+        "audioFiles",
+        "databaseFiles",
+        "sourceRoot",
+        "state"
+      ],
+      "title": "SalvageSourceCleanup",
+      "type": "object"
     },
     "Target": {
       "$schema": "http://json-schema.org/draft-07/schema#",

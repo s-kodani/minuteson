@@ -17,3 +17,10 @@ test("unreadable completed model cleanup remains held and visible", () => {
   const item = { operationId, state: "completed", packageId: null, modelName: null, reviewAllowed: false, errorMessage: "evidence invalid", startupReason: "model_completed_receipt_invalid" as const };
   assert.doesNotThrow(() => assertModelBodyDeletionListing({ items: [item], writeBlocked: true, restartRequired: false, reason: "held" }));
 });
+test("a known model remains identified when a separate protection prevents its review", () => {
+  const item = { operationId, state: "prepared", packageId, modelName: "合成モデル", reviewAllowed: false, errorMessage: "別の保守操作が未完了です" };
+  const listing = { items: [item], writeBlocked: true, restartRequired: false, reason: "held" };
+  assert.doesNotThrow(() => assertModelBodyDeletionListing(listing));
+  assert.throws(() => assertModelBodyDeletionListing({ ...listing, items: [{ ...item, reviewAllowed: true }] }));
+  assert.throws(() => assertModelBodyDeletionListing({ ...listing, items: [{ ...item, packageId: null }] }));
+});

@@ -21,9 +21,25 @@ async (page,capturePath)=>{
   for(const [label,text] of [["表示テーマ","OSの明るさ"],["バックアップと追加復元","置き換えません"]]){
     await visit(label,text);results.push(`current ${label} help dismisses by keyboard and restores focus`);
   }
-  await page.locator('.sidebar').getByRole("button",{name:"プロンプト",exact:true}).click();
   await page.setViewportSize({width:360,height:640});
+  const promptModule = url => url.pathname === "/src/minutes-prompt-settings.tsx";
+  const { promise: releaseModule, resolve: allowModule } = Promise.withResolvers();
+  await page.route(promptModule, async route => {
+    await releaseModule;
+    await route.continue();
+  });
+  try {
+    await Promise.all([
+      page.waitForRequest(request => promptModule(new URL(request.url()))),
+      page.locator('.sidebar').getByRole("button",{name:"プロンプト",exact:true}).click(),
+    ]);
+    await page.getByText("画面を読み込んでいます。", {exact:true}).waitFor();
+    check(await info("共通用語").count() === 0, "vocabulary help appeared before the section above it finished loading");
+  } finally {
+    allowModule();
+  }
   await visit("共通用語","次回",true);
+  results.push("vocabulary help opens and restores focus after the prompt sections appear together at 360px");
   await page.setViewportSize({width:1200,height:900});
   await page.locator('.sidebar').getByRole("button",{name:"設定",exact:true}).click();
   for(const label of ["要確認データ","モデル本体削除","モデル配置記録","プロファイル構成記録"]){

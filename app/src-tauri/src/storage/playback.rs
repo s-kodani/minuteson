@@ -1,3 +1,4 @@
+use super::transcription::{ChunkPlan, TrackPlan};
 use super::*;
 use crate::audio::VerifiedAudio;
 use crate::audio_clock::{ClockChunk, ClockLayout};
@@ -7,6 +8,7 @@ use std::fs::File;
 
 #[derive(PartialEq, Eq)]
 struct Chunk {
+    asset_id: String,
     relative_path: String,
     size: i64,
     hash: String,
@@ -16,6 +18,19 @@ struct Chunk {
     rate: i64,
     channels: i64,
     id: String,
+}
+
+impl Chunk {
+    fn matches_plan(&self, plan: &ChunkPlan) -> bool {
+        self.asset_id == plan.asset_id
+            && self.hash == plan.hash
+            && self.size == plan.size
+            && self.start_us == plan.start_us
+            && self.end_us == plan.end_us
+            && self.frame_count == plan.frames
+            && self.rate == i64::from(plan.sample_rate)
+            && self.channels == i64::from(plan.channels)
+    }
 }
 
 #[cfg(test)]
@@ -114,7 +129,7 @@ impl Storage {
         end: i64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedAudio, String> {
-        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, false, false)
+        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, false, None)
     }
 
     pub(in crate::storage) fn prepare_preview_track_audio_cancellable(
@@ -139,26 +154,33 @@ impl Storage {
         if !belongs {
             return Err("登録元の音声トラックが会議にありません".into());
         }
+        let canonical = &plan.tracks[0];
         self.prepare_track_audio_mode(
             meeting_id,
-            &plan.tracks[0].id,
+            &canonical.id,
             start,
             end,
             cancelled,
             false,
-            true,
+            Some(&canonical.chunks[0]),
         )
     }
 
     pub(in crate::storage) fn prepare_meeting_track_audio_cancellable(
         &self,
         meeting_id: &str,
-        track: &str,
-        start: i64,
-        end: i64,
+        track: &TrackPlan,
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedAudio, String> {
-        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, true, true)
+        self.prepare_track_audio_mode(
+            meeting_id,
+            &track.id,
+            track.start_us,
+            track.end_us,
+            cancelled,
+            true,
+            Some(&track.chunks[0]),
+        )
     }
 
     pub(in crate::storage) fn prepare_verified_meeting_track_audio_cancellable(
@@ -169,7 +191,7 @@ impl Storage {
         end: i64,
         cancelled: &impl Fn() -> bool,
     ) -> Result<PreparedAudio, String> {
-        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, true, false)
+        self.prepare_track_audio_mode(meeting_id, track, start, end, cancelled, true, None)
     }
 
     fn prepare_track_audio_mode(
@@ -180,7 +202,7 @@ impl Storage {
         end: i64,
         cancelled: &impl Fn() -> bool,
         whole_meeting: bool,
-        direct_playback: bool,
+        canonical: Option<&ChunkPlan>,
     ) -> Result<PreparedAudio, String> {
         if cancelled() {
             return Err("音声の再生準備を取り消しました".into());
@@ -209,7 +231,7 @@ impl Storage {
             let mappings = super::transcription::read_clock_segments(&connection, track)?;
             let mapped = !mappings.is_empty();
             let mut query = connection.prepare(
-                "SELECT f.relative_path, f.size_bytes, f.content_hash, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels, c.id FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND (?5 OR (c.start_us < ?4 AND c.end_us > ?3)) AND c.state = 'ready' AND f.state = 'ready' ORDER BY c.start_us, c.sequence LIMIT 1025",
+                "SELECT f.relative_path, f.size_bytes, f.content_hash, c.start_us, c.end_us, c.frame_count, c.sample_rate, c.channels, c.id, f.id FROM audio_chunks c JOIN file_assets f ON f.id = c.file_asset_id AND f.meeting_id = c.meeting_id WHERE c.track_id = ?1 AND c.meeting_id = ?2 AND (?5 OR (c.start_us < ?4 AND c.end_us > ?3)) AND c.state = 'ready' AND f.state = 'ready' ORDER BY c.start_us, c.sequence LIMIT 1025",
             ).map_err(|e| e.to_string())?;
             let chunks = query
                 .query_map(params![track, meeting_id, start, end, mapped], |row| {
@@ -223,6 +245,7 @@ impl Storage {
                         rate: row.get(6)?,
                         channels: row.get(7)?,
                         id: row.get(8)?,
+                        asset_id: row.get(9)?,
                     })
                 })
                 .map_err(|e| e.to_string())?
@@ -235,10 +258,15 @@ impl Storage {
         if chunks.len() > 1024 {
             return Err("発言の音声セグメントが多すぎます".into());
         }
+        if canonical.is_some_and(|plan| {
+            kind != "processed" || !matches!(chunks.as_slice(), [chunk] if chunk.matches_plan(plan))
+        }) {
+            return Err("再生準備中に共通会議音声の保存記録が変わりました".into());
+        }
         let root = self.root.canonicalize().map_err(|e| e.to_string())?;
         let mut spans = Vec::new();
         let span_cache = SpanCache::default();
-        let defer_readers = whole_meeting && !direct_playback && chunks.len() > 1;
+        let defer_readers = whole_meeting && chunks.len() > 1;
         let mut position = start;
         let mut audio_format = None;
         let layout = if mappings.is_empty() && !whole_meeting {
@@ -291,18 +319,14 @@ impl Storage {
             }
             let file = self.managed_path(relative)?;
             let source_path = file.canonicalize().map_err(|e| e.to_string())?;
-            if source_path != root.join(relative) {
+            if source_path != crate::native_fs::join(&root, relative) {
                 return Err("音声ファイルが管理領域外を参照しています".into());
             }
-            let file = File::open(file).map_err(|e| e.to_string())?;
-            let audio = if direct_playback {
-                VerifiedAudio::open_saved_cancellable(
-                    file,
-                    chunk.size as u64,
-                    &chunk.hash,
-                    cancelled,
-                )
+            let audio = if canonical.is_some() {
+                self.playback_wav
+                    .open(&source_path, chunk.size as u64, &chunk.hash, cancelled)
             } else {
+                let file = File::open(file).map_err(|e| e.to_string())?;
                 VerifiedAudio::open_cancellable(file, chunk.size as u64, &chunk.hash, cancelled)
             }?;
             let format = &audio.format;

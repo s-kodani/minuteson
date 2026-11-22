@@ -13,7 +13,9 @@ const publishCleanup = async active => {
 };
 const f = window.operationProgressFixture = {
   closeCalls: [], hidden: false, hideFailure: false,
+  writeStateFailure: false,
   holdCleanup: false,
+  automaticCleanup: active => publishCleanup(active ? {id:"automatic-cleanup",target:"起動時のモデル整理",startedAtMs:Date.now(),appliedPackage:null} : null),
   finishCleanup: async () => {
     const job = cleanup.snapshot.active;
     cleanup.history = { items: [{ id: `model:${job.id}`, kind: "model", target: job.target, meetingId: null,
@@ -33,6 +35,10 @@ const f = window.operationProgressFixture = {
   },
 };
 mockIPC(async (command, args) => {
+  if (command === "get_storage_write_state" && f.writeStateFailure) throw Error("模擬書き込み可否の取得失敗");
+  if (command === "get_model_placements" && new URLSearchParams(location.search).has("unavailableModels")) {
+    throw Error("復元したモデル保存先を確認できません。モデル保存先を戻してください: 復元したモデル保存先の実体が変更されています");
+  }
   if (command === "get_application_close_activity") return { analysisBusy: false, modelPreparationBusy: window.modelDownloadFixture.active.size > 0 };
   if (command === "get_residency_state") return { supported: true, canBackground: true, trayAvailable: true, dockAvailable: false, error: null };
   if (command === "hide_main_to_background") {

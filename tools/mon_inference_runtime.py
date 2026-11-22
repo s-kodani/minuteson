@@ -19,9 +19,9 @@ else:
     asr = None
 
 ROOT = Path(__file__).resolve().parents[1]
-LLAMA_COMMIT = "8642541b255bfb5dc39cd351a178be09013a55d6"  # b11960
-LLAMA_SHA = "1688a167a8edd9499cdd0c19b8bd044f0fa184b466981977bbf2222d884953a4"
-LLAMA_BYTES = 38685236
+LLAMA_COMMIT = "50518b64c6f2191a116d2760042f106c4b3387d7"  # b12556
+LLAMA_SHA = "df90368465d96bc7c5403afca4bafc8055608ad4499406f3870e784705644c08"
+LLAMA_BYTES = 39084629
 SHERPA_COMMIT = "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf"
 SHERPA_LICENSE_SHA = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 HEADER_SHA = "2a1b95084be8fd1deb3228fcad2fd3f7f0258b64582f7402281ec174c7b7f4ce"
@@ -136,10 +136,11 @@ int llama_completion(int argc, char ** argv) {""")
     text = replace(text, "    auto llama_init = common_init_from_params(params);", '''auto & cached = mon_cached;
     static std::string model_key;
     // The GPU probe requests an upper bound (256); admission records the
-    // actual offloaded count. llama.cpp clamps both to n_layer + 1, so compare
+    // actual offloaded count. llama.cpp clamps both to all layers (including
+    // NextN) + 1, so compare
     // effective placement rather than the original upper bound.
     const auto key_for = [&](llama_model * loaded) {
-        const int layers = loaded ? std::min(params.n_gpu_layers, llama_model_n_layer(loaded) + 1) : params.n_gpu_layers;
+        const int layers = loaded ? std::min(params.n_gpu_layers, llama_model_n_layer(loaded) + llama_model_n_layer_nextn(loaded) + 1) : params.n_gpu_layers;
         return params.model.path + ":" + std::to_string(params.n_ctx) + ":" + std::to_string(layers);
     };
     if (cached && model_key != key_for(cached->model())) {
@@ -331,9 +332,11 @@ def prepare(cache, cmake, whisper_source=None, llama_source=None, sherpa_header=
                 for target in targets:
                     binary = build/"bin"/target
                     if not binary.exists(): binary = build/target
-                    shutil.copyfile(binary,pending/target); (pending/target).chmod(0o700)
-                    asr.command(["/usr/bin/codesign","--force","--sign","-",str(pending/target)])
-                    asr.verify_binary(pending/target)
+                    worker = pending/target
+                    shutil.copyfile(binary,worker); worker.chmod(0o700)
+                    asr.command(["/usr/bin/strip","-x",str(worker)])
+                    asr.command(["/usr/bin/codesign","--force","--sign","-",str(worker)])
+                    asr.verify_binary(worker)
             index = [{"protocol":1,"engine":engine,"name":name,"bytes":(pending/name).stat().st_size,"sha256":asr.digest(pending/name)} for engine,name in NAMES.items()]
             (pending/"runtime-index.json").write_text(json.dumps(index,indent=2)+"\n")
             (pending/"build-info.json").write_text(json.dumps({"recipeSha256":stamp,"buildFingerprint":fingerprint,"whisperCommit":asr.COMMIT,"llamaCommit":LLAMA_COMMIT,"sherpaCommit":SHERPA_COMMIT,"protocol":1,"licenseReview":"not_verified","distributionReady":False},indent=2)+"\n")

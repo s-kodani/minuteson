@@ -8,11 +8,14 @@ export type NativeContract =
   | Engine
   | JobKind
   | JobState
+  | MeetingBodyPart
+  | MeetingBodyReview
   | PackageFile
   | PackageManifest
   | PauseReason
   | Recipe
   | Role
+  | SalvageSourceCleanup
   | Target
   | WindowEnvironment;
 export type RetryDisposition = "not_started" | "reconcile" | "retry" | "never";
@@ -38,6 +41,7 @@ export type JobKind =
   | "speaker_completion";
 export type JobState =
   "queued" | "running" | "pausing" | "paused" | "succeeded" | "failed" | "cancelled" | "interrupted";
+export type MeetingBodyPart = "transcript" | "minutes";
 export type Role =
   | "executable"
   | "runtime_library"
@@ -50,6 +54,7 @@ export type Role =
   | "llm";
 export type Target = "macos_aarch64" | "windows_x86_64";
 export type PauseReason = "user" | "recording" | "exit";
+export type SalvageSourceCleanupState = "available" | "interrupted" | "completed";
 export type Platform = "macos" | "windows" | "other";
 export type WindowRole = "main" | "recorder" | "recording-confirmation" | "startup-attention";
 
@@ -94,6 +99,10 @@ export interface DownloadSource {
   relativePath: string;
   url: string;
 }
+export interface MeetingBodyReview {
+  complete: boolean;
+  text: string;
+}
 export interface PackageFile {
   expectedHash?: string | null;
   expectedSize?: number | null;
@@ -116,6 +125,16 @@ export interface Recipe {
   manifest: PackageManifest;
   schemaVersion: number;
   sources: DownloadSource[];
+}
+export interface SalvageSourceCleanup {
+  audioFiles: number;
+  databaseFiles: number;
+  /**
+   * Audio targets left in place because their original identity could no longer be verified.
+   */
+  retainedAudioFiles?: number | null;
+  sourceRoot: string;
+  state: SalvageSourceCleanupState;
 }
 export interface WindowEnvironment {
   capabilities: Capabilities;

@@ -33,7 +33,12 @@ mockIPC(async(command,args)=>{
     case "record_background_read_failure":return null;
     case "select_audio_import":{
       if(f.failSelect)throw Error("模擬音声選択失敗");
-      if(f.cancelPanel){await f.changed({phase:"idle",busy:false});return structuredClone(f.import);}
+      if(f.cancelPanel){
+        const previous = f.import.phase === "ready" ? structuredClone(f.import) : { phase:"idle", busy:false, token:null };
+        await f.changed({phase:"choosing",busy:true,token:crypto.randomUUID(),fileName:null,info:null});
+        await f.changed({...previous,revision:f.import.revision});
+        return structuredClone(f.import);
+      }
       await f.changed({phase:"inspecting",busy:true,token:crypto.randomUUID(),saved:null,info:null,errorMessage:null});
       setTimeout(()=>{if(f.import.phase==="inspecting")void f.changed({phase:"ready",busy:false,fileName:"会議.wav",sourceBytes:256044,requiredBytes:135497772,availableBytes:f.insufficientSpace?1:800000000,errorMessage:f.insufficientSpace?"保存先の空き容量が不足しています":null,info:{schemaVersion:1,detectedFormat:"wav",codec:"pcm",sampleRate:16000,channels:2,frames:64000,durationUs:importDurationUs}});},200);
       return structuredClone(f.import);

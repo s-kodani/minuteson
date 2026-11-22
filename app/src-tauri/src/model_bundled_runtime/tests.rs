@@ -108,11 +108,11 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     assert_eq!(catalog[0]["review"]["bundledBytes"], bytes.len());
     assert_eq!(
         catalog[6]["review"]["recipeHash"],
-        "19548a8e0a3221266c8d231c2146f85f6575c3cb71adadf89de51b000eb29a66"
+        "29b2c7cb6ec73039e2bfc5c97797e3e1a090c6d8c0cd27e8300574391bcd065f"
     );
     assert_eq!(
         catalog[3]["review"]["recipeHash"],
-        "b564f0b5f9b2b88dbfebed9cb7c5ff6f12403b7ee5619701aa582153d443e666"
+        "c8dfeba400033dc9c3076dd0335a28b79628800310b57da07a31656a2acc55ae"
     );
     let recipe = bundle.recipe().unwrap();
     let review = recipe.review().unwrap();

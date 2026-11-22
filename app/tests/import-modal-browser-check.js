@@ -4,6 +4,7 @@ async (page) => {
   const trigger = () => page.getByRole("button", { name: "音声を取り込む", exact: true });
   const modal = () => page.getByRole("dialog", { name: "音声を取り込む", exact: true });
   const vocabulary = () => page.locator('dialog[open][aria-labelledby="import-vocabulary-title"]');
+  const title = () => modal().getByRole("textbox", { name: "会議名", exact: true });
   const discard = () => page.getByRole("dialog", { name: "取り込み確認内容の破棄を確認", exact: true });
   const acceptDiscard = async () => { await discard().getByRole("button", { name: "確認内容を破棄して閉じる", exact: true }).click(); await closed(); };
   const count = command => page.evaluate(c => window.monImportFixture.calls.filter(x => x.command === c).length, command);
@@ -52,10 +53,9 @@ async (page) => {
   check(await page.evaluate(path => window.monImportFixture.calls.filter(call => call.command === "select_audio_import" && call.args.path === path).length === 1, droppedPath), "file drop did not select exactly the dropped audio path");
   check(await count("start_audio_import") === 0 && await modal().getByRole("textbox", { name: "会議名", exact: true }).inputValue() === "会議", "file drop bypassed confirmation or lost the suggested title");
   await page.keyboard.press("Escape");
-  await discard().getByRole("button", { name: "確認内容を破棄して閉じる", exact: true }).click();
   await modal().waitFor({ state: "hidden" });
-  check(await count("cancel_audio_import") === 1, "file drop dismissal did not cancel the selected import");
-  results.push("one dropped audio path opens the normal confirmation without starting import; dismissal cancels the same selection");
+  check(await count("cancel_audio_import") === 1 && await discard().count() === 0, "unedited suggested title prompted to discard or failed to cancel");
+  results.push("one dropped audio path opens the normal confirmation; its unchanged suggested title never prompts to discard");
 
   await boot(); await open();
   check(await modal().getByRole("button", { name: "確認をキャンセル", exact: true }).evaluate(e => e === document.activeElement), "ready import stayed on container or focused a hidden sibling's cancellation");
@@ -90,22 +90,28 @@ async (page) => {
   }
   // Parent-dialog Escape must not race a fresh hover preview of the last icon.
   await page.mouse.move(8, 8);
+  await title().fill("編集中の会議");
   await page.keyboard.press("Escape");
   await discard().waitFor();
   check(await page.locator("dialog[open]").count() === 1 && (await discard().innerText()).includes("入力は復元できません"), "discard stacked or omitted irreversible input loss");
   await page.keyboard.press("Escape"); await modal().waitFor();
   check(await modal().isVisible() && await count("cancel_audio_import") === 0 && await count("start_audio_import") === 0, "declined discard changed import");
-  check(await modal().getByRole("textbox", { name: "会議名", exact: true }).inputValue() === "会議", "declined discard lost title");
+  check(await title().inputValue() === "編集中の会議", "declined discard lost title");
   await page.keyboard.press("Escape"); await acceptDiscard();
   check(await count("cancel_audio_import") === 1, "cancel bypassed explicit discard decision");
   results.push("Escape retains declined draft; explicit discard cancels same native selection once and restores opener");
 
   await boot(); await open();
-  const box = await modal().boundingBox(); await page.mouse.click(box.x - 10, box.y + 10); await acceptDiscard();
+  const unchangedToken = await page.evaluate(() => { window.monImportFixture.cancelPanel = true; return window.monImportFixture.import.token; });
+  await modal().getByRole("button", { name: "音声を選び直す", exact: true }).click();
+  await page.waitForFunction(() => window.monImportFixture.calls.filter(call => call.command === "select_audio_import").length === 2);
+  check(await page.getByRole("dialog", { name: "音声の選び直しを確認", exact: true }).count() === 0 && await title().inputValue() === "会議" && await page.evaluate(token => window.monImportFixture.import.token === token, unchangedToken), "the default title prompted to discard or disappeared after picker dismissal");
+  const box = await modal().boundingBox(); await page.mouse.click(box.x - 10, box.y + 10); await closed();
   check(await count("start_audio_import") === 0 && await count("cancel_audio_import") === 1, "backdrop started import or failed cancel");
   results.push("backdrop uses existing token-bound cancellation without import admission");
 
   await boot(); await open();
+  await title().fill("編集中の会議");
   await page.evaluate(() => window.monImportFixture.changed({ phase: "waiting", busy: true }));
   await page.waitForFunction(() => document.querySelector('dialog[open] [aria-label="確認をキャンセル"]')?.disabled === true);
   await page.keyboard.press("Escape"); let bounds = await modal().boundingBox(); await page.mouse.click(bounds.x - 10, bounds.y + 10);
@@ -119,7 +125,7 @@ async (page) => {
   bounds = await modal().boundingBox();
   check(bounds.x >= 23.9 && bounds.x + bounds.width <= 336.1 && await modal().evaluate(e => e.scrollWidth <= e.clientWidth + 1), "small import modal clipped or horizontally overflowed");
   await page.screenshot({ path: "import-modal-360.png" });
-  await page.keyboard.press("Escape"); await acceptDiscard();
+  await page.keyboard.press("Escape"); await closed();
   results.push("production import fields and metadata fit a 360px window with 24px margins");
 
   await boot(); await page.setViewportSize({ width: 1200, height: 900 }); await open();
@@ -144,14 +150,25 @@ async (page) => {
 
   await modal().getByRole("textbox", { name: "会議名", exact: true }).fill("保持する会議名");
   await modal().getByRole("button", { name: "音声を選び直す", exact: true }).click();
-  const reselect = page.getByRole("dialog", { name: "取り込み入力の破棄と選び直しを確認", exact: true }); await reselect.waitFor();
+  const reselect = page.getByRole("dialog", { name: "音声の選び直しを確認", exact: true }); await reselect.waitFor();
   check(await page.locator("dialog[open]").count() === 1 && await count("select_audio_import") === 1, "reselect stacked or ran before decision");
   await page.keyboard.press("Escape"); await modal().waitFor(); check(await modal().getByRole("textbox", { name: "会議名", exact: true }).inputValue() === "保持する会議名", "cancel reselect discarded title");
-  await modal().getByRole("button", { name: "音声を選び直す", exact: true }).click(); await reselect.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).click(); await reselect.waitFor({ state: "hidden" });
-  await page.waitForFunction(() => window.monImportFixture.import.phase === "ready");
-  check(await count("select_audio_import") === 2 && await count("start_audio_import") === 0, "reselect duplicated or admitted import");
-  await modal().getByRole("button", { name: "閉じる", exact: true }).click(); await acceptDiscard();
-  results.push("title-only reselect requires consent; cancel retains input, one explicit selection keeps the actual outer opener");
+  const speaker = () => modal().getByRole("combobox", { name: "会議全体の話者数", exact: true });
+  await speaker().selectOption("2");
+  await modal().getByRole("button", { name:"会議の用語（任意）", exact: true }).click();
+  await vocabulary().getByRole("button", { name: "会議の用語を追加", exact: true }).click(); await term.fill("保持する用語");
+  await page.keyboard.press("Escape"); await modal().waitFor();
+  const retainedToken = await page.evaluate(() => { window.monImportFixture.cancelPanel = true; return window.monImportFixture.import.token; });
+  await modal().getByRole("button", { name: "音声を選び直す", exact: true }).click(); await reselect.getByRole("button", { name: "ファイル選択へ進む", exact: true }).click(); await reselect.waitFor({ state: "hidden" });
+  check(await title().inputValue() === "保持する会議名" && await speaker().inputValue() === "2" && await page.evaluate(token => window.monImportFixture.import.token === token, retainedToken), "native picker cancellation dropped the input or replaced the selection");
+  await modal().getByRole("button", { name:"会議の用語（任意）", exact: true }).click(); check(await term.inputValue() === "保持する用語", "native picker cancellation dropped the vocabulary");
+  await page.keyboard.press("Escape"); await modal().waitFor();
+  await page.evaluate(() => { window.monImportFixture.cancelPanel = false; });
+  await modal().getByRole("button", { name: "音声を選び直す", exact: true }).click(); await reselect.getByRole("button", { name: "ファイル選択へ進む", exact: true }).click(); await reselect.waitFor({ state: "hidden" });
+  await page.waitForFunction(token => window.monImportFixture.import.phase === "ready" && window.monImportFixture.import.token !== token, retainedToken);
+  check(await count("select_audio_import") === 3 && await count("start_audio_import") === 0 && await title().inputValue() === "会議", "new selection retained previous input or duplicated admission");
+  await modal().getByRole("button", { name: "閉じる", exact: true }).click(); await closed();
+  results.push("the native picker cancellation retains title, speakers, vocabulary and source token; replacing the source resets the draft");
 
   await boot(); await open(); const originalToken = await page.evaluate(() => window.monImportFixture.import.token);
   await page.evaluate(() => window.monImportFixture.changed({ phase: "waiting", busy: true }));
@@ -163,12 +180,12 @@ async (page) => {
   await cancelChoice.getByRole("button", { name: "取り込みを取り消す", exact: true }).click(); await cancelChoice.waitFor({ state: "hidden" });
   check(await count("cancel_audio_import") === 1 && await page.evaluate(t => window.monImportFixture.calls.find(c => c.command === "cancel_audio_import").args.token === t && window.monImportFixture.import.phase === "cancelled", originalToken), "cancel changed native token or repeated");
   results.push("native busy import supports cancelled choices and exact-opener focus, then one explicit same-token cancellation");
-  await boot(); await open(); await modal().getByRole("button", { name: "音声を選び直す", exact: true }).click();
-  const selectFailure = page.getByRole("dialog", { name: "取り込み入力の破棄と選び直しを確認", exact: true });
+  await boot(); await open(); await title().fill("編集中の会議"); await modal().getByRole("button", { name: "音声を選び直す", exact: true }).click();
+  const selectFailure = page.getByRole("dialog", { name: "音声の選び直しを確認", exact: true });
   await selectFailure.waitFor(); await page.evaluate(() => window.monImportFixture.failSelect = true);
-  await selectFailure.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).click(); await selectFailure.getByRole("alert").filter({hasText:"模擬音声選択失敗"}).first().waitFor();
+  await selectFailure.getByRole("button", { name: "ファイル選択へ進む", exact: true }).click(); await selectFailure.getByRole("alert").filter({hasText:"模擬音声選択失敗"}).first().waitFor();
   check(await selectFailure.getByRole("alert").filter({hasText:"処理を完了できませんでした"}).count()===0, "reselection failure was duplicated");
-  check(await count("select_audio_import") === 2 && await selectFailure.getByRole("button", { name: "入力を破棄して音声を選び直す", exact: true }).isDisabled(), "swallowed selection failure completed or repeated");
+  check(await count("select_audio_import") === 2 && await selectFailure.getByRole("button", { name: "ファイル選択へ進む", exact: true }).isDisabled(), "swallowed selection failure completed or repeated");
   await selectFailure.getByRole("button", { name: "確認を閉じる", exact: true }).click(); await modal().getByRole("alert").filter({hasText:"模擬音声選択失敗"}).first().waitFor();
   check(await count("start_audio_import") === 0 && await count("cancel_audio_import") === 0, "failed selection started or cancelled import");
   results.push("navigation helper cannot swallow accepted selection failure into success; retained error without import admission or automatic retry");

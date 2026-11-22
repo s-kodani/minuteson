@@ -131,7 +131,8 @@ pub(in crate::storage::backup) fn append(
                 .map_err(|e| e.to_string())?;
         }
     }
-    guard.finish()
+    guard.finish()?;
+    super::super::salvage_schema::append_meetings(db, source)
 }
 
 impl Storage {

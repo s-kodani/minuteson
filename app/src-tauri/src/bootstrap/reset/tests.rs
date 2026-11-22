@@ -1,165 +1,95 @@
 use super::*;
 
-fn restorable() -> (Fixture, String, String, String) {
-    let f = Fixture::new(false);
-    // All paths belong to this isolated test fixture.
-    std::fs::remove_file(f.root.join(DB)).unwrap();
-    for path in [
-        f.root.join("meetings"),
-        f.data.join("models"),
-        f.data.join("model-downloads"),
-    ] {
-        std::fs::remove_dir_all(path).unwrap();
-    }
-    let storage = Storage::open_with_models(f.root.clone(), f.data.join("models")).unwrap();
-    let (meeting, person, model) = crate::storage::backup::startup::populate_fixture(&storage);
-    drop(storage);
-    // The ordinary startup fails on an ancillary registry, although all user
-    // content is readable and can be reconstructed independently of that registry.
-    for name in [
-        ".mon-scratch.sqlite3",
-        ".mon-scratch.sqlite3-wal",
-        ".mon-scratch.sqlite3-shm",
-    ] {
-        if f.root.join(name).exists() {
-            std::fs::remove_file(f.root.join(name)).unwrap();
-        }
-    }
-    std::fs::write(
-        f.root.join(".mon-scratch.sqlite3"),
-        b"broken ancillary registry",
-    )
-    .unwrap();
-    (f, meeting, person, model)
-}
-
-fn assert_restored(f: &Fixture, meeting: &str, person: &str, model: &str) {
-    let (storage, bootstrap) = crate::startup_attention::admit_storage(&f.config, &f.data).unwrap();
-    assert_eq!(storage.list_meetings().unwrap().len(), 1);
-    assert!(storage
-        .load_current_analysis(meeting)
-        .unwrap()
-        .unwrap()
-        .utterances[0]
-        .effective_text
-        .contains("点検日"));
-    assert!(storage
-        .get_minutes_markdown(meeting)
-        .unwrap()
-        .unwrap()
-        .markdown
-        .contains("決定事項"));
-    let voices = storage.voice_people().unwrap();
-    assert_eq!(voices[0].id, person);
-    assert_eq!(voices[0].samples.len(), 1);
-    let models = storage.list_model_placements().unwrap();
-    assert_eq!(models[0].package_id, model);
-    assert!(models[0].placement_recorded);
-    assert_eq!(
-        std::fs::read(f.data.join("models").join(model).join("model.bin")).unwrap(),
-        b"recovered model bytes"
-    );
-    crate::storage::with_test_database(&storage, |db| {
-        assert!(db
-            .query_row(
-                "SELECT value_json FROM app_settings WHERE key='ui_preferences'",
-                [],
-                |r| r.get::<_, String>(0)
-            )
-            .unwrap()
-            .contains("dark"));
-        for table in ["file_assets", "voice_sample_audio"] {
-            let mut query = db
-                .prepare(&format!(
-                    "SELECT relative_path FROM {table} WHERE state='ready'"
-                ))
-                .unwrap();
-            for relative in query.query_map([], |r| r.get::<_, String>(0)).unwrap() {
-                assert!(f.root.join(relative.unwrap()).is_file());
-            }
-        }
-    });
-    assert!(!f.config.join(JOURNAL).exists());
-    drop(storage);
-    drop(bootstrap);
-}
-
 #[test]
-fn startup_restore_reconstructs_content_voices_models_and_settings_after_registry_failure() {
-    let (f, meeting, person, model) = restorable();
-    assert!(crate::startup_attention::admit_storage(&f.config, &f.data).is_err());
-    let (b, s, id) = f.prepare();
-    execute_restore(b, &s, &id, &|_| {}).unwrap();
-    assert_restored(&f, &meeting, &person, &model);
-}
-
-#[test]
-fn startup_restore_stops_before_reset_and_preserves_originals_when_any_data_cannot_be_collected() {
-    for fault in ["model", "voice", "settings", "database"] {
-        let (f, _, person, model) = restorable();
-        match fault {
-            "model" => {
-                std::fs::remove_file(f.data.join("models").join(&model).join("model.bin")).unwrap()
-            }
-            "voice" => {
-                let clip = std::fs::read_dir(f.root.join("voices").join(person))
-                    .unwrap()
-                    .next()
-                    .unwrap()
-                    .unwrap()
-                    .path();
-                std::fs::write(clip, b"corrupt voice clip").unwrap();
-            }
-            "settings" => {
-                let db = rusqlite::Connection::open(f.root.join(DB)).unwrap();
-                db.execute(
-                    "UPDATE app_settings SET value_json='{}' WHERE key='ui_preferences'",
-                    [],
-                )
-                .unwrap();
-            }
-            "database" => std::fs::write(f.root.join(DB), b"unreadable database").unwrap(),
-            _ => unreachable!(),
-        }
-        let original = std::fs::read(f.root.join(DB)).unwrap();
-        let (b, s, id) = f.prepare();
-        assert!(execute_restore(b, &s, &id, &|_| {}).is_err(), "{fault}");
-        assert_eq!(std::fs::read(f.root.join(DB)).unwrap(), original, "{fault}");
-        assert!(f.root.join("meetings").is_dir(), "{fault}");
-        assert!(f.root.join("voices").is_dir(), "{fault}");
-        assert!(f.data.join("models").join(model).is_dir(), "{fault}");
-        assert!(!f.config.join(JOURNAL).exists(), "{fault}");
-    }
-}
-
-#[test]
-fn startup_restore_interruptions_roll_back_before_publication_and_finish_after_publication() {
-    for stage in ["recovered", "restore_installed", "restored", "published"] {
-        let (f, meeting, person, model) = restorable();
+fn legacy_restore_journals_roll_back_or_finish_based_on_published_bootstrap() {
+    for stage in ["database", "published"] {
+        let f = Fixture::new(false);
+        std::fs::create_dir(f.root.join("voices")).unwrap();
+        std::fs::write(f.root.join("voices/original"), b"original voice").unwrap();
         let original = std::fs::read(f.root.join(DB)).unwrap();
         let (b, s, id) = f.prepare();
         FAIL.with(|failure| *failure.borrow_mut() = Some(stage.into()));
-        let result = execute_restore(b, &s, &id, &|_| {});
+        let interrupted = execute(b, &s, &id, None, &|_| {});
         FAIL.with(|failure| *failure.borrow_mut() = None);
-        assert_eq!(result.unwrap_err(), "reset test interruption", "{stage}");
+        assert_eq!(interrupted.unwrap_err(), "reset test interruption");
+
+        // The legacy reconstruction engine also wrote version-1 journals,
+        // with identities for a restored meeting, voice and model directory.
+        // Recreate those durable entries without the retired builder.
+        let journal_path = f.config.join(JOURNAL);
+        let (_, mut journal): (String, Journal) =
+            serde_json::from_slice(&read_private(&journal_path, MAX_RECORD).unwrap()).unwrap();
+        let published = stage == "published";
+        for (name, app_data) in [("meetings", false), ("voices", false), ("models", true)] {
+            let parent = if app_data {
+                journal.model_parent()
+            } else {
+                &journal.meeting.path
+            };
+            let root = journal
+                .roots
+                .iter()
+                .position(|root| root.path == parent)
+                .unwrap();
+            let reserved = journal.workspace(root).join(format!("new-{name}"));
+            create_directory(&reserved).unwrap();
+            std::fs::write(reserved.join("reconstructed"), name.as_bytes()).unwrap();
+            let entry = Fresh {
+                name: name.into(),
+                identity: Identity::read(&directory(&reserved).unwrap()).unwrap(),
+                app_data,
+            };
+            if published || !app_data {
+                rename(&reserved, &journal.fresh_path(&entry), false).unwrap();
+            }
+            journal.fresh.push(entry);
+        }
+        journal.save().unwrap();
         recover(&f.config, &f.data).unwrap();
-        if stage == "published" {
-            assert_restored(&f, &meeting, &person, &model);
-        } else {
-            assert_eq!(std::fs::read(f.root.join(DB)).unwrap(), original, "{stage}");
-            assert!(f.root.join("voices").is_dir(), "{stage}");
-            assert!(
-                f.data
-                    .join("models")
-                    .join(model)
-                    .join("model.bin")
-                    .is_file(),
-                "{stage}"
+        assert!(!journal_path.exists());
+        assert!(!f.root.join(PENDING).exists());
+
+        if published {
+            assert_eq!(
+                std::fs::read(f.root.join("meetings/reconstructed")).unwrap(),
+                b"meetings"
             );
-            assert!(!f.config.join(JOURNAL).exists(), "{stage}");
+            assert_eq!(
+                std::fs::read(f.root.join("voices/reconstructed")).unwrap(),
+                b"voices"
+            );
+            assert_eq!(
+                std::fs::read(f.data.join("models/reconstructed")).unwrap(),
+                b"models"
+            );
+            assert!(!f.root.join("meetings/old").exists());
+            assert!(!f.root.join("voices/original").exists());
+            assert!(!f.data.join("models/large").exists());
+        } else {
+            assert_eq!(std::fs::read(f.root.join(DB)).unwrap(), original);
+            assert!(f.root.join("meetings/old/audio.flac").is_file());
+            assert!(f.root.join("voices/original").is_file());
+            assert!(f.data.join("models/large/model.bin").is_file());
+            for fresh in journal
+                .fresh
+                .iter()
+                .filter(|fresh| ["meetings", "voices", "models"].contains(&fresh.name.as_str()))
+            {
+                assert!(!journal.fresh_path(fresh).join("reconstructed").exists());
+                let workspace = journal.fresh_workspace(fresh).unwrap();
+                let retained = workspace
+                    .parent()
+                    .unwrap()
+                    .with_file_name(format!("MON-reset-retained-{id}"));
+                assert!(retained
+                    .join(workspace.file_name().unwrap())
+                    .join("reconstructed")
+                    .is_file());
+            }
         }
     }
 }
+
 struct Fixture {
     _temp: tempfile::TempDir,
     data: PathBuf,

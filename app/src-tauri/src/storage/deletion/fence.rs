@@ -9,7 +9,200 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // Meeting/model v3 residual plans keep the completed SQL state immutable. This predicate
 // is only a conservative read/admission hint; typed receipt validation still
 // precedes every privileged writer and all file/row mutation.
-pub(in crate::storage) const UNFINISHED: &str = "(state IN ('prepared','installing','cleanup','attention') OR (kind='delete_meeting' AND state='completed' AND json_extract(progress_json,'$.version')=4) OR (kind='delete_assets' AND state='completed' AND json_extract(progress_json,'$.version')=4 AND json_extract(progress_json,'$.phase')='removing'))";
+pub(in crate::storage) const UNFINISHED: &str = "(state IN ('prepared','installing','cleanup','attention') OR (state='completed' AND kind IN ('delete_meeting','delete_assets') AND CASE WHEN length(CAST(progress_json AS BLOB))>4096 OR NOT json_valid(progress_json) THEN 1 ELSE json_extract(progress_json,'$.version')=4 AND (kind='delete_meeting' OR json_extract(progress_json,'$.phase')='removing') END))";
+pub(in crate::storage) const MANIFEST_MEETING: &str = "CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 AND json_valid(target_manifest_json) THEN json_extract(target_manifest_json,'$.scope.meetingId') END";
+pub(in crate::storage) const MANIFEST_AUDIO_MEETING: &str = "CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 AND json_valid(target_manifest_json) THEN coalesce(json_extract(target_manifest_json,'$.meetingId'),json_extract(target_manifest_json,'$.meeting')) END";
+
+#[derive(Default)]
+struct StartupScopes {
+    meetings: std::collections::BTreeSet<String>,
+    audio: std::collections::BTreeSet<String>,
+    models: bool,
+    history: bool,
+    unknown: bool,
+    conflicting_shared_target: bool,
+}
+
+fn canonical_meeting(id: &str) -> bool {
+    uuid::Uuid::parse_str(id).is_ok_and(|id_value| id_value.to_string() == id)
+}
+
+// This classification only restricts ordinary access. It does not validate a
+// receipt or grant any ability to resume a deletion. Corroborating IDs can
+// scope a restriction even if the rest of the receipt is damaged.
+fn startup_scopes(db: &Connection) -> Result<StartupScopes, String> {
+    let pending = predicate(db)?;
+    let mut statement = db.prepare(&format!(
+        "SELECT kind,meeting_id,CASE WHEN length(CAST(target_manifest_json AS BLOB))<=65536 THEN target_manifest_json END,state
+         FROM maintenance_operations WHERE kind IN ('delete_meeting','delete_assets') AND {pending}"
+    )).map_err(|e| e.to_string())?;
+    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
+    let mut scopes = StartupScopes::default();
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let decoded = (|| -> rusqlite::Result<_> {
+            let kind: String = row.get(0)?;
+            let meeting: Option<String> = row.get(1)?;
+            let json: Option<String> = row.get(2)?;
+            let state: String = row.get(3)?;
+            Ok((kind, meeting, json, state))
+        })();
+        let Ok((kind, meeting, json, state)) = decoded else {
+            scopes.unknown = true;
+            continue;
+        };
+        let header: serde_json::Value = json
+            .as_deref()
+            .and_then(|text| serde_json::from_str(text).ok())
+            .unwrap_or_default();
+        let claimed = match (kind.as_str(), header["subtype"].as_str()) {
+            ("delete_meeting", None) => header["scope"]["meetingId"].as_str(),
+            ("delete_assets", Some("audioOnlyDeletion")) => header["meetingId"].as_str(),
+            _ => None,
+        }
+        .filter(|id| canonical_meeting(id));
+        let historical = matches!(state.as_str(), "completed" | "recovered");
+        if !historical
+            && claimed
+                .zip(meeting.as_deref().filter(|id| canonical_meeting(id)))
+                .is_some_and(|(manifest, column)| manifest != column)
+        {
+            scopes.conflicting_shared_target = true;
+            continue;
+        }
+        let claims = |id: Option<&str>| {
+            id.filter(|id| canonical_meeting(id))
+                .filter(|id| meeting.as_deref().is_none_or(|column| column == *id))
+                .map(str::to_owned)
+        };
+        match (kind.as_str(), header["subtype"].as_str()) {
+            ("delete_meeting", None) => {
+                if let Some(target) = claims(claimed) {
+                    // Reappeared or unattached historical roots need the
+                    // existing whole-store inspection before consent can be
+                    // reviewed again. A live confirmation has a meeting FK.
+                    if historical || meeting.is_none() {
+                        scopes.history = true;
+                    } else {
+                        scopes.meetings.insert(target);
+                    }
+                } else {
+                    scopes.unknown = true;
+                }
+            }
+            ("delete_assets", Some("audioOnlyDeletion")) => {
+                if let Some(target) = claims(claimed) {
+                    if historical || meeting.is_none() {
+                        scopes.history = true;
+                    } else {
+                        scopes.audio.insert(target);
+                    }
+                } else {
+                    scopes.unknown = true;
+                }
+            }
+            ("delete_assets", Some("restoredAudioUnavailable"))
+                if claims(header["meeting"].as_str()).is_some() =>
+            {
+                scopes.history = true;
+            }
+            ("delete_assets", Some("modelDeletion")) if meeting.is_none() => {
+                scopes.models = true;
+            }
+            _ => scopes.unknown = true,
+        }
+    }
+    Ok(scopes)
+}
+
+pub(in crate::storage) fn audio_pending(db: &Connection, meeting: &str) -> Result<bool, String> {
+    db.query_row(
+        &format!("SELECT NOT ({})", audio_unreserved(db, "?1")?),
+        [meeting],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+// One list read may inspect many meetings. Reuse only the protected IDs, never
+// a file observation or permission to mutate. Every use is under the live DB
+// mutex; local writes (including TEMP), DDL, and other connections invalidate it.
+#[derive(Default)]
+pub(in crate::storage) struct AudioPendingScopes {
+    stamp: Option<AudioScopeStamp>,
+    meetings: std::collections::HashSet<Vec<u8>>,
+}
+
+#[derive(PartialEq, Eq)]
+struct AudioScopeStamp {
+    connection: usize,
+    changes: u64,
+    data: i64,
+    main_schema: i64,
+    temp_schema: i64,
+}
+
+impl AudioPendingScopes {
+    pub(in crate::storage) fn contains(
+        &mut self,
+        db: &Connection,
+        meeting: &str,
+    ) -> Result<bool, String> {
+        // A rollback does not undo total_changes. Do not reuse a snapshot of
+        // uncommitted changes, even when a caller later rolls those changes back.
+        let stamp = db
+            .is_autocommit()
+            .then(|| -> Result<_, rusqlite::Error> {
+                Ok(AudioScopeStamp {
+                    connection: connection_identity(db),
+                    changes: db.total_changes(),
+                    data: db.query_row("PRAGMA main.data_version", [], |r| r.get(0))?,
+                    main_schema: db.query_row("PRAGMA main.schema_version", [], |r| r.get(0))?,
+                    temp_schema: db.query_row("PRAGMA temp.schema_version", [], |r| r.get(0))?,
+                })
+            })
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        if stamp.is_none() || self.stamp != stamp {
+            let pending = predicate(db)?;
+            let mut query = db
+                .prepare(&format!(
+                    "SELECT meeting_id,{MANIFEST_AUDIO_MEETING} FROM maintenance_operations
+                     WHERE kind='delete_assets' AND {pending}"
+                ))
+                .map_err(|error| error.to_string())?;
+            let mut rows = query.query([]).map_err(|error| error.to_string())?;
+            let mut meetings = std::collections::HashSet::new();
+            while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+                for index in 0..2 {
+                    // Match the existing TEXT bind's SQLite equality without
+                    // requiring UUIDs or decoding corrupt UTF-8. Non-TEXT values
+                    // cannot equal a Rust string. Keep BOTH claims on conflict.
+                    if let rusqlite::types::ValueRef::Text(value) =
+                        row.get_ref(index).map_err(|error| error.to_string())?
+                    {
+                        meetings.insert(value.to_vec());
+                    }
+                }
+            }
+            self.meetings = meetings;
+            // Stamp BEFORE the query: an outside commit during the scan must
+            // invalidate the next use, never get attached to an older result.
+            self.stamp = stamp;
+        }
+        Ok(self.meetings.contains(meeting.as_bytes()))
+    }
+}
+
+pub(in crate::storage) fn audio_unreserved(
+    db: &Connection,
+    column: &str,
+) -> Result<String, String> {
+    let pending = predicate(db)?;
+    Ok(format!(
+        "NOT EXISTS(SELECT 1 FROM maintenance_operations
+         WHERE kind='delete_assets' AND (meeting_id={column} OR {MANIFEST_AUDIO_MEETING}={column}) AND {pending})"
+    ))
+}
 // These connection-local hints are not durable consent or a deletion permit.
 // Keep other_pending below restricted to actual unfinished operations: several
 // independent completed receipts can be reviewed one at a time under the real
@@ -18,11 +211,12 @@ pub(in crate::storage) const UNFINISHED: &str = "(state IN ('prepared','installi
 // a startup-detected orphan or make its historical consent executable again.
 pub(in crate::storage) fn predicate(db: &Connection) -> Result<String, String> {
     let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_schema WHERE type='table' AND name='mon_deletion_startup_attention')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-    Ok(if exists {
-        format!("({UNFINISHED} OR (kind IN ('delete_meeting','delete_assets') AND state IN ('completed','recovered') AND id IN (SELECT operation_id FROM temp.mon_deletion_startup_attention)))")
+    let hint = if exists {
+        " OR id IN (SELECT operation_id FROM temp.mon_deletion_startup_attention)"
     } else {
-        UNFINISHED.into()
-    })
+        ""
+    };
+    Ok(format!("({UNFINISHED} OR (kind IN ('delete_meeting','delete_assets') AND state IN ('completed','recovered') AND (typeof(id)!='text' OR length(CAST(id AS BLOB))!=36{hint})))"))
 }
 pub(super) fn other_pending(db: &Connection, operation: Option<&str>) -> Result<bool, String> {
     db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE (?1 IS NULL OR id!=?1) AND {UNFINISHED})"), rusqlite::params![operation], |r| r.get(0)).map_err(|e|e.to_string())
@@ -63,6 +257,7 @@ pub(in crate::storage) fn readonly(context: AuthContext<'_>) -> Authorization {
                 | "journal_mode"
                 | "secure_delete"
                 | "freelist_count"
+                | "data_version"
         ) =>
         {
             Authorization::Allow
@@ -83,19 +278,78 @@ pub(in crate::storage) struct Fence {
     pending: AtomicBool,
     writing: AtomicBool,
     scoped: AtomicBool,
+    unknown_startup_scope: bool,
+    conflicting_shared_startup_target: bool,
+    startup_meeting_scopes: std::collections::BTreeSet<String>,
+    startup_audio_scopes: std::collections::BTreeSet<String>,
     // Startup skipped mutable recovery. Resolving the receipt is not proof that
     // those recoveries ran; ordinary use still requires a clean reopen.
     startup_deferred: bool,
 }
 impl Fence {
     pub(in crate::storage) fn open(db: &Connection) -> Result<Self, String> {
-        let pending = has_pending(db)?;
+        let (pending, mut scopes) = match has_pending(db) {
+            Ok(false) => (false, StartupScopes::default()),
+            Ok(true) => (
+                true,
+                startup_scopes(db).unwrap_or_else(|_| StartupScopes {
+                    unknown: true,
+                    ..StartupScopes::default()
+                }),
+            ),
+            Err(_) => (
+                true,
+                StartupScopes {
+                    unknown: true,
+                    ..StartupScopes::default()
+                },
+            ),
+        };
+        if !scopes.unknown
+            && !scopes.conflicting_shared_target
+            && !scopes.models
+            && !scopes.history
+            && !scopes.meetings.is_empty()
+        {
+            let install = (|| -> Result<(), String> {
+                super::database::trusted_schema(db)?;
+                let tx = db
+                    .unchecked_transaction()
+                    .map_err(|error| error.to_string())?;
+                super::super::meeting_access::install(&tx)?;
+                for meeting in &scopes.meetings {
+                    tx.execute(
+                        "INSERT INTO temp.mon_meeting_deletion_guard VALUES(?1,0)",
+                        [meeting],
+                    )
+                    .map_err(|error| error.to_string())?;
+                }
+                tx.commit().map_err(|error| error.to_string())
+            })();
+            if let Err(error) = install {
+                crate::internal_logs::report_error("deletion_fence", &error);
+                scopes.unknown = true;
+            }
+        }
+        let conflicting_shared_startup_target = scopes.conflicting_shared_target
+            && !scopes.unknown
+            && !scopes.models
+            && !scopes.history
+            && scopes.meetings.is_empty()
+            && scopes.audio.is_empty();
+        let unknown_startup_scope = scopes.unknown || scopes.conflicting_shared_target;
+        let startup_deferred = unknown_startup_scope || scopes.models || scopes.history;
+        let scoped = pending && !startup_deferred;
         let result = Self {
             connection_identity: connection_identity(db),
             pending: AtomicBool::new(pending),
             writing: AtomicBool::new(false),
-            scoped: AtomicBool::new(false),
-            startup_deferred: pending,
+            scoped: AtomicBool::new(scoped),
+            unknown_startup_scope,
+            conflicting_shared_startup_target,
+            startup_meeting_scopes: scopes.meetings,
+            startup_audio_scopes: scopes.audio,
+            startup_deferred,
         };
         if pending {
             result.install(db)?;
@@ -114,6 +368,15 @@ impl Fence {
     }
     pub(in crate::storage) fn resume_restart_required(&self) -> bool {
         self.startup_deferred
+    }
+    pub(in crate::storage) fn unknown_startup_scope(&self) -> bool {
+        self.unknown_startup_scope
+    }
+    pub(in crate::storage) fn conflicting_shared_startup_target(&self) -> bool {
+        self.conflicting_shared_startup_target && self.pending()
+    }
+    pub(in crate::storage) fn preserve_startup_meeting(&self, meeting: &str) -> bool {
+        self.startup_meeting_scopes.contains(meeting)
     }
     fn install(&self, db: &Connection) -> Result<(), String> {
         db.flush_prepared_statement_cache();
@@ -156,8 +419,7 @@ impl Fence {
             self.fail_closed(db);
             return result;
         }
-        let reserved = super::super::meeting_access::any_reserved(db);
-        match reserved {
+        match self.scopes_allow_writes(db) {
             Ok(scoped) => self.scoped.store(scoped, Ordering::Release),
             Err(error) => {
                 self.fail_closed(db);
@@ -166,6 +428,23 @@ impl Fence {
         }
         self.install(db)?;
         result
+    }
+
+    fn scopes_allow_writes(&self, db: &Connection) -> Result<bool, String> {
+        let scopes = startup_scopes(db)?;
+        if scopes.unknown
+            || scopes.models
+            || scopes.history
+            || !scopes.audio.is_subset(&self.startup_audio_scopes)
+        {
+            return Ok(false);
+        }
+        for meeting in &scopes.meetings {
+            if !super::super::meeting_access::reserved(db, meeting)? {
+                return Ok(false);
+            }
+        }
+        Ok(!scopes.audio.is_empty() || super::super::meeting_access::any_reserved(db)?)
     }
 
     pub(in crate::storage) fn fail_closed(&self, db: &Connection) {
@@ -216,7 +495,8 @@ impl Writer<'_> {
         require_pending: bool,
     ) -> Result<Writer<'a>, String> {
         if storage.retired.load(Ordering::Acquire)
-            || storage.recovery_hold
+            || storage.common_write_hold()
+            || storage.deletion_fence.unknown_startup_scope
             || storage.maintenance.load(Ordering::Acquire)
             || (require_pending && !storage.deletion_fence.pending())
             || (!require_pending && has_pending(db)?)
@@ -268,6 +548,27 @@ impl Drop for Writer<'_> {
         #[cfg(not(any(unix, windows)))]
         let anchored = true;
         let pending = has_pending(self.db);
+        let normalized = fence.startup_deferred
+            || fence.startup_audio_scopes.is_empty()
+            || (rolled_back
+                && guards
+                && anchored
+                && pending.is_ok()
+                && (|| -> Result<(), String> {
+                    let tx = self
+                        .db
+                        .unchecked_transaction()
+                        .map_err(|error| error.to_string())?;
+                    for meeting in &fence.startup_audio_scopes {
+                        if !audio_pending(&tx, meeting)?
+                            && !super::super::meeting_access::reserved(&tx, meeting)?
+                        {
+                            super::super::normalize_startup_audio_states(&tx, meeting)?;
+                        }
+                    }
+                    tx.commit().map_err(|error| error.to_string())
+                })()
+                .is_ok());
         let guarded = super::super::meeting_access::bypass(self.db, false).is_ok();
         if !rolled_back || !guards || !anchored || pending.is_err() || !guarded {
             fence.scoped.store(false, Ordering::Release);
@@ -275,8 +576,14 @@ impl Drop for Writer<'_> {
             let _ = self
                 .db
                 .authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
+        } else if !normalized {
+            fence.fail_closed(self.db);
         } else {
             fence.pending.store(pending.unwrap(), Ordering::Release);
+            if !fence.startup_deferred {
+                let scoped = fence.scopes_allow_writes(self.db).unwrap_or(false);
+                fence.scoped.store(scoped, Ordering::Release);
+            }
             let _ = fence.install(self.db);
         }
         fence.writing.store(false, Ordering::Release);
@@ -419,24 +726,6 @@ pub(super) fn write_removal<'a>(
     Writer::begin(storage, db, true)
 }
 
-// Old Scope-only receipts exist only in the row-phase fixtures, not a public
-// deletion format. Tests still exercise the real persistent fence and permit.
-#[cfg(test)]
-pub(super) fn write_scope_fixture<'a>(
-    storage: &'a Storage,
-    db: &'a Connection,
-    operation: &str,
-    scope: &super::database::Scope,
-) -> Result<Writer<'a>, String> {
-    use rusqlite::params;
-    scope.validate_format(db)?;
-    let (json,hash,consent):(String,String,Option<i64>) = db.query_row("SELECT target_manifest_json,target_hash,consent_at FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting' AND state IN ('cleanup','completed')", params![operation], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?;
-    if json != scope.encode()? || hash != scope.hash()? || consent.is_none_or(|n| n < 0) {
-        return Err("DB段階fixtureの確認記録が一致しません".into());
-    }
-    Writer::begin(storage, db, true)
-}
-
 #[cfg(any(unix, windows))]
 pub(super) fn write_completion<'a>(
     storage: &'a Storage,
@@ -446,7 +735,7 @@ pub(super) fn write_completion<'a>(
 ) -> Result<Writer<'a>, String> {
     confirmed.verify_saved(db, check)?;
     // A completed acknowledgement retry can checkpoint only after validating
-    // its full receipt; it never grants the old raw Scope fixture admission.
+    // its full receipt.
     let discovered = super::startup::contains(db, confirmed.confirmed().operation())?;
     // A cold continuation can have reached its canonical final wrapper while
     // independent completed histories still need attention. It may finish its

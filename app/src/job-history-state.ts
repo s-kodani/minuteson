@@ -3,11 +3,12 @@ export const historyStates = { succeeded:"完了", failed:"失敗", cancelled:"�
 export type HistoryState = keyof typeof historyStates;
 export interface JobHistoryEntry { id:string; kind:typeof historyKinds[number];target:string;meetingId:string|null;state:HistoryState;acceptedAt:number|null;finishedAt:number|null;observedAt:number;detail:string|null;relatedMeetingIds?:string[] }
 export interface HistoryCursor { at:number;id:string }
-export interface JobHistoryPage { items:JobHistoryEntry[];nextCursor:HistoryCursor|null;storageError:string|null }
+export interface JobHistoryPage { items:JobHistoryEntry[];nextCursor:HistoryCursor|null;storageError:string|null;backfillPending?:boolean }
 export function checkedHistoryPage(value:unknown):JobHistoryPage {
   const page=value as JobHistoryPage;
   const time=(v:unknown)=>v===null||Number.isSafeInteger(v)&&Number(v)>=0;
   if(!page||!Array.isArray(page.items)||page.items.length>100||page.storageError!==null&&typeof page.storageError!=="string"
+    ||page.backfillPending!==undefined&&typeof page.backfillPending!=="boolean"
     ||page.nextCursor!==null&&(!page.nextCursor||!time(page.nextCursor.at)||page.nextCursor.at===null||typeof page.nextCursor.id!=="string")
     ||page.items.some(e=>!e||typeof e.id!=="string"||!e.id||!historyKinds.includes(e.kind)||!Object.hasOwn(historyStates,e.state)||typeof e.target!=="string"||e.meetingId!==null&&typeof e.meetingId!=="string"||!time(e.acceptedAt)||!time(e.finishedAt)||!time(e.observedAt)||e.observedAt===null||e.detail!==null&&typeof e.detail!=="string"||e.relatedMeetingIds!==undefined&&(!Array.isArray(e.relatedMeetingIds)||e.relatedMeetingIds.some(id=>typeof id!=="string")))
     ||new Set(page.items.map(e=>e.id)).size!==page.items.length)throw Error("ジョブ履歴の取得結果を確認できません。");

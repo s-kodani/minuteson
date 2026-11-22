@@ -40,7 +40,7 @@ class NativeOutputTests(unittest.TestCase):
             root = Path(temporary)
             model = root / 'model.gguf'; model.write_bytes(b'synthetic')
             choice = dict(id='llama-b11533-qwen3-4b-q4km', recipe=dict(manifest=dict(
-                engineVersion='b11960', files=[dict(role='llm', expectedHash='model-sha')])) )
+                engineVersion='b12556', files=[dict(role='llm', expectedHash='model-sha')])) )
             def run(arguments, **kwargs):
                 if 'input' not in kwargs:
                     kwargs['stdout'].write(b'{"ok":true}')
@@ -57,7 +57,7 @@ class NativeOutputTests(unittest.TestCase):
             with patch.object(native, 'prepare', return_value=(root / 'cli', model)), \
                     patch.object(native.subprocess, 'run', side_effect=run):
                 report = native.check(choice, root, None, None, root / 'worker', False)
-            self.assertEqual(report['engineVersion'], 'b11960')
+            self.assertEqual(report['engineVersion'], 'b12556')
             self.assertEqual(report['modelSha256'], 'model-sha')
             self.assertGreaterEqual(report['directSeconds'], 0)
             self.assertGreaterEqual(report['residentThreeRequestsSeconds'], 0)
@@ -70,13 +70,14 @@ class AcquisitionTimingTests(unittest.TestCase):
             data = b'synthetic model'
             digest = hashlib.sha256(data).hexdigest()
             fetch = assets.Fetch(100, base=root)
-            with patch.object(assets.urllib.request, 'urlopen', return_value=io.BytesIO(data)):
+            with patch.object(assets.urllib.request, 'urlopen', return_value=io.BytesIO(data)), \
+                    patch.object(assets.time, 'monotonic', side_effect=[10.0, 12.0, 20.0, 23.0]):
                 path = fetch.acquire('https://example.invalid/model', len(data), digest)
             self.assertEqual(path.read_bytes(), data)
             self.assertEqual(fetch.ledger['downloadedBytes'], len(data))
             self.assertEqual(fetch.ledger['attempts'][0]['state'], 'verified')
-            self.assertGreater(fetch.timings['downloadSeconds'], 0)
-            self.assertGreater(fetch.timings['verificationSeconds'], 0)
+            self.assertEqual(fetch.timings['downloadSeconds'], 2.0)
+            self.assertEqual(fetch.timings['verificationSeconds'], 3.0)
             downloaded = fetch.timings['downloadSeconds']
             with patch.object(assets.urllib.request, 'urlopen', side_effect=AssertionError('unexpected network')):
                 self.assertEqual(fetch.acquire('https://example.invalid/model', len(data), digest), path)
@@ -90,11 +91,12 @@ class AcquisitionTimingTests(unittest.TestCase):
             response.__exit__ = Mock(return_value=False)
             response.read.side_effect = [b'part', OSError('connection lost')]
             with patch.object(assets.urllib.request, 'urlopen', return_value=response), \
+                    patch.object(assets.time, 'monotonic', side_effect=[10.0, 12.0]), \
                     self.assertRaisesRegex(OSError, 'connection lost'):
                 fetch.acquire('https://example.invalid/model', 20, '0' * 64)
             self.assertEqual(fetch.ledger['downloadedBytes'], 4)
             self.assertEqual(fetch.ledger['attempts'][0]['state'], 'failed')
-            self.assertGreater(fetch.timings['downloadSeconds'], 0)
+            self.assertEqual(fetch.timings['downloadSeconds'], 2.0)
 
 
 class NativeArchiveTests(unittest.TestCase):
@@ -136,7 +138,7 @@ class NativeArchiveTests(unittest.TestCase):
                           expectedHash=hashlib.sha256(self.weights.read_bytes()).hexdigest()))
         sources.append(dict(url='https://example.invalid/model.gguf'))
         return dict(id='llama-b11533-qwen3-4b-q4km', recipe=dict(
-            manifest=dict(engineVersion='b11960', files=files), sources=sources))
+            manifest=dict(engineVersion='b12556', files=files), sources=sources))
 
     def fetch(self):
         return Mock(timings={}, acquire=Mock(side_effect=lambda url, size, sha:
@@ -245,7 +247,7 @@ class NativeFailureReportTests(unittest.TestCase):
                                if native.os.name == 'nt' else 'app/model-catalog/macos.json')
         catalog.parent.mkdir(parents=True, exist_ok=True)
         catalog.write_text(json.dumps([
-            dict(id=ident, recipe=dict(manifest=dict(engineVersion='b11960')))
+            dict(id=ident, recipe=dict(manifest=dict(engineVersion='b12556')))
             for ident in native.REPRESENTATIVES]))
 
     def invoke(self):

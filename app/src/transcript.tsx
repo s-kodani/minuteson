@@ -23,6 +23,8 @@ import { canonicalPayload, projectTranscript, filterUtterances, activeSpeakers, 
 import { retainedTextRows } from "./transcript-edit-session";
 import { stopAllPlayback } from "./playback-barrier";
 import { groupTranscriptRows } from "./transcript-groups";
+import { readMeetingBodyForReview } from "./meeting-body-review";
+import type { MeetingBodyReview } from "./generated/contracts";
 import "./transcript-groups.css";
 export { timeLabel } from "./transcript-rows";
 export type { Analysis, DraftPayload } from "./transcript-state";
@@ -31,9 +33,9 @@ export interface Draft {
   id: string; meetingId: string; baseAnalysisId: string; payload: DraftPayload;
   lockVersion: number; contentHash: string; updatedAt: number;
 }
-export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, visible = true, actionsHost, onAnalysisLoaded, onConsolidated }: {
+export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = false, navigationLocked = false, visible = true, actionsHost, onAnalysisLoaded, onConsolidated }: {
   actionsHost?: HTMLElement | null;
-  meetingId: string; sourceEpoch?: number; meetingTitle?: string; locked?: boolean; playbackHost?: HTMLElement | null; visible?: boolean; onAnalysisLoaded?: (present: boolean) => void; onConsolidated?: () => Promise<void>;
+  meetingId: string; sourceEpoch?: number; meetingTitle?: string; writeProtected?: boolean; navigationLocked?: boolean; playbackHost?: HTMLElement | null; visible?: boolean; onAnalysisLoaded?: (present: boolean, readOnly: boolean) => void; onConsolidated?: () => Promise<void>;
 }) {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const analysisRef = useRef(analysis); analysisRef.current = analysis;
@@ -57,6 +59,12 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
   const composingInput = useRef(false);
   const [copyBusy, setCopyBusy] = useState(false);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [readOnly, setReadOnly] = useState(true);
+  const sourceWritable = useRef(false);
+  const [analysisError, setAnalysisError] = useState("");
+  const [draftError, setDraftError] = useState("");
+  const [review, setReview] = useState<MeetingBodyReview | null>(null);
+  const analysisLoaded = useRef(onAnalysisLoaded); analysisLoaded.current = onAnalysisLoaded;
   const [texts, setTexts] = useState<Record<string, string>>({});
   const textRef = useRef(texts); textRef.current = texts;
   const [nameEditor, setNameEditor] = useState<{ id: string; value: string } | null>(null);
@@ -69,6 +77,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
   const structureOpener=useRef<HTMLElement|null>(null);
   const [adding, setAdding] = useState(false), [newName, setNewName] = useState("");
   const addingRef = useRef(false); addingRef.current = adding;
+  const newNameRef = useRef(newName); newNameRef.current = newName;
   const nameOpener = useRef<HTMLElement | null>(null), addOpener = useRef<HTMLElement | null>(null);
   const mounted = useRef(true), running = useRef(false), barrier = useRef(async () => {});
   const bodyFocus = useRef<HTMLElement | null>(null);
@@ -110,8 +119,11 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
     setJumpRequest(null);
   },[jumpRequest,visible]);
   const playingIds = usePlaybackHighlights({ meetingId, analysisId: analysis?.id ?? null, rows: shown,
-    active: visible && !locked, trackKinds: tracks.kinds });
-  const disabled = locked || loading || busy;
+    active: visible && !navigationLocked, trackKinds: tracks.kinds });
+  const viewDisabled = navigationLocked || busy;
+  // The fieldset and live handlers apply temporary locks without updating every row.
+  const rowsEditable = !writeProtected && !loading && !readOnly;
+  const disabled = viewDisabled || !rowsEditable;
   const editable = !disabled && !!analysis;
   // Restore only after React has replaced the editor and unlocked its row.
   // A frame callback can precede that commit (notably in Chromium).
@@ -125,12 +137,13 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
     if (body) { bodyFocus.current = null; body.focus({ preventScroll: true }); }
   });
   const run = async (action: () => Promise<void>) => {
-    if (running.current || locked) return;
+    if (running.current || navigationLocked || writeProtected || !sourceWritable.current) return;
     running.current = true; setBusy(true); setError("");
     try { await action(); } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally { running.current = false; if (mounted.current) setBusy(false); }
   };
   const ensureDraft = async () => {
+    if (!sourceWritable.current) throw Error("文字起こしの下書きの保存状態を確認できません。入力を保持しています。");
     const saved = queue.snapshot().draft;
     if (saved) {
       if (saved.meetingId !== meetingId || saved.baseAnalysisId !== analysis?.id) throw Error("編集対象が変わりました。入力を保持しています。");
@@ -165,6 +178,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
     if (assignmentRef.current) throw Error("話者の変更を保存するか、閉じてから操作してください。");
     if (addingRef.current) throw Error("話者の作成を保存するか、閉じてから操作してください。");
     const inputs = { ...textRef.current }, name = nameRef.current && { ...nameRef.current };
+    if (!sourceWritable.current && (Object.keys(inputs).length || name || queue.snapshot().dirty)) throw Error("文字起こしの下書きの保存状態を確認できません。入力を保持しています。");
     if (!Object.keys(inputs).length && !name) { await queue.flush(); return; }
     running.current = true; setBusy(true);
     try { await saveInputs(inputs, name); } finally { running.current = false; if (mounted.current) setBusy(false); }
@@ -176,17 +190,23 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
       const current = queue.snapshot();
       return current.dirty || current.saving || running.current || composingInput.current
         || Object.keys(textRef.current).length > 0 || !!(nameRef.current || structureRef.current || assignmentRef.current || addingRef.current);
+    }, () => {
+      if (composingInput.current) throw Error("文字起こしの日本語入力を確定してから退避してください。");
+      return { kind: "transcript", meetingId, input: {
+        analysisId: analysisRef.current?.id ?? null,
+        draft: queue.snapshot().payload,
+        texts: textRef.current,
+        speakerName: nameRef.current,
+        assignment: assignmentRef.current,
+        structure: structureRef.current,
+        addingSpeakerName: addingRef.current ? newNameRef.current : null,
+      } };
     });
-    if (isTauri()) void Promise.all([invoke<Analysis | null>("get_current_analysis", { meetingId }), invoke<Draft | null>("get_transcript_draft", { meetingId })]).then(([base, draft]) => {
-      if (!mounted.current) return;
-      if (base && base.meetingId !== meetingId || draft && (!base || draft.meetingId !== meetingId || draft.baseAnalysisId !== base.id)) throw Error("保存された文字起こしと編集が一致しません。");
-      setAnalysis(base); queue.load(draft); onAnalysisLoaded?.(!!base);
-    }).catch(cause => { if (mounted.current) setError(String(cause)); }).finally(() => { if (mounted.current) setLoading(false); });
-    else setLoading(false);
+    if (!isTauri()) setLoading(false);
     return () => { mounted.current = false; unsubscribe(); unregister(); speakerMount.remove(); };
   }, [meetingId, queue, speakerMount]);
   useEffect(()=>{
-    if(!analysis||!view||!consolidationPossible||loading||busy||locked||!visible||running.current||snapshot.error||snapshot.saving||snapshot.dirty
+    if(!analysis||!view||!consolidationPossible||disabled||!visible||running.current||snapshot.error||snapshot.saving||snapshot.dirty
       ||Object.keys(texts).length||nameEditor||assignmentEditor||structureEditor||adding||overlayOpen())return;
     const key=`${analysis.id}:${snapshot.draft?.contentHash??""}:${consolidationRetry}`;
     if(consolidationAttempt.current===key)return;
@@ -211,13 +231,19 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
         }
       } catch(cause) {if(mounted.current)setConsolidationError(String(cause));}
     });
-  },[analysis,view,consolidationPossible,loading,busy,locked,visible,snapshot.draft,snapshot.error,snapshot.saving,snapshot.dirty,texts,nameEditor,assignmentEditor,structureEditor,adding,consolidationRetry]);
+  },[analysis,view,consolidationPossible,disabled,visible,snapshot.draft,snapshot.error,snapshot.saving,snapshot.dirty,texts,nameEditor,assignmentEditor,structureEditor,adding,consolidationRetry]);
   const copyTranscript = async () => {
-    if (copying.current || disabled || !analysis) return;
+    if (copying.current || viewDisabled || (!analysis && !review)) return;
     copying.current = true; setCopyBusy(true);
     try {
       await writeTranscriptClipboard(async () => {
         if (composingInput.current) throw Error("日本語入力を確定してからコピーしてください。");
+        if (review) return review.text;
+        if (!analysis) throw Error("文字起こしを読み込んでください。");
+        if (readOnly || writeProtected) {
+          const current = view ?? analysis;
+          return transcriptCopyText({ ...current, utterances: current.utterances.map(row => ({ ...row, effectiveText: textRef.current[row.id] ?? row.effectiveText })) });
+        }
         await barrier.current();
         if (!mounted.current || analysisRef.current !== analysis) throw Error("文字起こしが変更されました。もう一度コピーしてください。");
         const saved = queue.snapshot();
@@ -230,11 +256,11 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
     finally { copying.current = false; if (mounted.current) setCopyBusy(false); }
   };
   const editorActions = <>
-    <IconButton label="文字起こしをコピー" icon="copy" disabled={disabled || copyBusy || !view?.utterances.length} onClick={() => void copyTranscript()} />
-    {analysis && <button type="button" className="small-secondary" disabled={!jumpRow || disabled || !visible} onClick={jumpToPlayback}>再生位置へ移動</button>}
+    <IconButton label="文字起こしをコピー" icon="copy" disabled={viewDisabled || copyBusy || (!review?.text && !view?.utterances.length)} onClick={() => void copyTranscript()} />
+    {analysis && <button type="button" className="small-secondary" disabled={!jumpRow || viewDisabled || !visible} onClick={jumpToPlayback}>再生位置へ移動</button>}
   </>;
   const openText = (utterance: Utterance) => { if (editable) setTexts(current => Object.hasOwn(current, utterance.id) ? current : { ...current, [utterance.id]: utterance.effectiveText }); };
-  const cancelText = (id: string) => { if (!disabled && !snapshot.error && !snapshot.dirty) {
+  const cancelText = (id: string) => { if (!viewDisabled && !snapshot.error && !snapshot.dirty) {
     const row = document.activeElement?.closest<HTMLElement>("[data-utterance-id]");
     bodyFocus.current = row?.dataset.utteranceId === id ? row : null;
     setTexts(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== id)));
@@ -287,7 +313,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
   };
   const [transcriptRefresh,setTranscriptRefresh]=useState(0);
   const refreshKey=`${sourceEpoch}:${transcriptRefresh}`;
-  const appliedRefresh=useRef(refreshKey);
+  const appliedRefresh=useRef<string | null>(null);
   const reloadVoice=async()=>{setTranscriptRefresh(value=>value+1);};
   useEffect(()=>{
     if(!isTauri())return;
@@ -298,29 +324,63 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
     return()=>{disposed=true;for(const subscription of subscriptions)void subscription.then(unlisten=>unlisten());};
   },[meetingId]);
   useEffect(()=>{
-    // Completion publishes a new immutable revision. Keep its notification
-    // pending until the editor is idle; never flush unconfirmed inputs here.
-    if(refreshKey===appliedRefresh.current||loading||busy||locked||!visible||running.current
+    // Keep incoming heads pending while there is an unfinished local edit.
+    if(!isTauri()||refreshKey===appliedRefresh.current||busy||(!visible&&appliedRefresh.current!==null)||running.current
       ||snapshot.dirty||snapshot.saving||snapshot.error||Object.keys(texts).length||nameEditor||adding||assignmentEditor||structureEditor)return;
     let disposed=false;
     const current=queue.snapshot();
-    void Promise.all([invoke<Analysis|null>("get_current_analysis",{meetingId}),invoke<Draft|null>("get_transcript_draft",{meetingId})]).then(([base,draft])=>{
+    const canApply = () => {
       const latest=queue.snapshot();
-      // Inputs or a local operation may have started while the reads ran.
-      if(disposed||!mounted.current||running.current||analysisRef.current!==analysis||latest.draft!==current.draft||latest.payload!==current.payload
-        ||latest.dirty||latest.saving||latest.error||Object.keys(textRef.current).length||nameRef.current||addingRef.current||assignmentRef.current||structureRef.current)return;
-      if(!base||base.meetingId!==meetingId||!/^[a-f0-9]{64}$/.test(base.contentHash)
-        ||draft&&(draft.meetingId!==meetingId||draft.baseAnalysisId!==base.id))throw Error("保存された文字起こしと編集が一致しません。再読込してください。");
+      return !disposed&&mounted.current&&!running.current&&latest.draft===current.draft&&latest.payload===current.payload
+        &&!latest.dirty&&!latest.saving&&!latest.error&&!Object.keys(textRef.current).length&&!nameRef.current&&!addingRef.current&&!assignmentRef.current&&!structureRef.current;
+    };
+    sourceWritable.current=false; setReadOnly(true);
+    // Start both reads together. Only the editing gate waits for the draft.
+    const draftRead=invoke<Draft|null>("get_transcript_draft",{meetingId}).then(draft=>({ draft }), cause=>({ cause }));
+    void (async()=>{
+      let base: Analysis | null;
+      try {
+        base=await invoke<Analysis|null>("get_current_analysis",{meetingId});
+        if (base !== null && (!base || base.meetingId !== meetingId || typeof base.id !== "string" || !/^[a-f0-9]{64}$/.test(base.contentHash)
+          || !Array.isArray(base.speakers) || !Array.isArray(base.utterances) || base.utterances.some(row => typeof row?.effectiveText !== "string" || !Array.isArray(row.speakerIds)))) throw Error("文字起こし本文の取得結果を確認できません。");
+      } catch(cause) {
+        if (!canApply()) return;
+        setAnalysis(null); setAnalysisError(String(cause)); setDraftError(""); setLoading(false);
+        analysisLoaded.current?.(false,true);
+        const fallback=await readMeetingBodyForReview(meetingId,"transcript").catch(()=>null);
+        if (!canApply()) return;
+        appliedRefresh.current=refreshKey; queue.load(null); setReview(fallback);
+        analysisLoaded.current?.(!!fallback,true);
+        return;
+      }
+      if (!canApply()) return;
+      if(base?.id!==analysisRef.current?.id)setSpeakerFilter("");
+      setAnalysis(base); setAnalysisError(""); setReview(null); setLoading(false);
+      analysisLoaded.current?.(!!base,true);
+      const result=await draftRead;
+      if (!canApply()) return;
       appliedRefresh.current=refreshKey;
-      if(base.id!==analysis?.id)setSpeakerFilter("");
-      setAnalysis(base);queue.load(draft);onAnalysisLoaded?.(true);
-    }).catch(cause=>{if(!disposed&&mounted.current){appliedRefresh.current=refreshKey;setError(String(cause));}});
+      try {
+        if ("cause" in result) throw result.cause;
+        // A successful null means there is no usable saved draft. Only native
+        // storage can establish this after checking or discarding bad records.
+        const { draft } = result;
+        if(draft!==null && (!draft || !base || draft.meetingId!==meetingId || draft.baseAnalysisId!==base.id || typeof draft.id!=="string"
+          || !Number.isSafeInteger(draft.lockVersion) || !/^[a-f0-9]{64}$/.test(draft.contentHash))) throw Error("文字起こしの下書きが確定本文と一致しません。");
+        if (draft) canonicalPayload(draft.payload);
+        queue.load(draft); setDraftError("");
+        sourceWritable.current=true; setReadOnly(false);
+        analysisLoaded.current?.(!!base,false);
+      } catch(cause) {
+        queue.load(null); setDraftError(String(cause));
+      }
+    })();
     return()=>{disposed=true;};
-  },[refreshKey,meetingId,analysis,queue,loading,busy,locked,visible,snapshot.draft,snapshot.payload,snapshot.dirty,snapshot.saving,snapshot.error,texts,nameEditor,adding,assignmentEditor,structureEditor]);
+  },[refreshKey,meetingId,queue,busy,visible,snapshot.draft,snapshot.payload,snapshot.dirty,snapshot.saving,snapshot.error,texts,nameEditor,adding,assignmentEditor,structureEditor]);
   const rowActions = useRef<TranscriptRowActions>(null!);
   rowActions.current = {
     play: (utterance, toggle) => {
-      if (disabled || running.current || !visible || !audio?.canPlay || audio.locked) return;
+      if (viewDisabled || running.current || !visible || !audio?.canPlay || audio.locked) return;
       if (toggle && audio.selected === utterance.id && audio.available && !audio.atEnd) audio.toggle();
       else play(utterance);
     },
@@ -340,7 +400,13 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
     {actionsHost ? createPortal(editorActions, actionsHost) : <div className="transcript-actions">{editorActions}</div>}
     <ToastNotice scope={meetingId} type="transcript-copy" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />
     {loading && <p className="transcript-state" role="status">文字起こしを読み込んでいます。</p>}
-    {!loading && !analysis && !error && <p className="transcript-state">文字起こしはまだありません。</p>}
+    {!loading && !analysis && !analysisError && !draftError && <p className="transcript-state">文字起こしはまだありません。</p>}
+    {analysisError && <p className="transcript-state meeting-document-notice" role="status">保存済みの文字起こしを確認できませんでした。{review && (review.complete ? "読み取れた本文を閲覧専用で表示しています。" : "読み取れた発言だけを閲覧専用で表示しています。")}</p>}
+    {draftError && <p className="transcript-state meeting-document-notice" role="status">文字起こしの下書きを確認できません。{analysis ? "確定した文字起こしを閲覧専用で表示しています。" : "閲覧できる確定本文はありません。"}編集中の内容は表示できません。</p>}
+    {(analysisError || draftError) && <div className="transcript-feedback"><IconButton label="文字起こしを再読込" icon="refresh" disabled={viewDisabled} onClick={() => void reloadVoice()} /></div>}
+    <ToastNotice scope={meetingId} type="transcript-integrity" level="warning" meetingId={meetingId} historyOnly
+      message={analysisError ? "文字起こしの保存状態に確認が必要です。" : draftError ? "文字起こしの下書きに確認が必要です。" : ""} />
+    {review && <pre className="transcript-state transcript-review-text" aria-label="確認用の文字起こし本文" tabIndex={0}>{review.text}</pre>}
     {analysis && <TranscriptSplit active={visible} speakers={<WorkspacePanel content={speakerMount} label="話者一覧" active={visible} query="(max-width: 760px)" />}>
       {createPortal(<>
         <div className="speaker-heading"><h3>話者</h3><IconButton label="話者を追加" icon="plus" disabled={!editable || speakers.length >= 100} onClick={event => { addOpener.current = event.currentTarget; setNewName(""); setAdding(true); }} /></div>
@@ -368,22 +434,23 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, locked = false, v
         {!!analysis.reviewRanges?.length && <section className="recognition-review" aria-label="文字起こしの要確認区間">
           <p role="status">完了・要確認あり（{analysis.reviewRanges.length}区間）{!analysis.utterances.length && "。認識できた本文はありません。"}</p>
           <ul>{analysis.reviewRanges.map((range,index)=><li key={`${range.trackId}:${range.startUs}:${index}`}>
-            <button type="button" className="utterance-stamp" disabled={disabled||!audio?.canPlay||audio.locked||audio.durationUs===null} onClick={()=>void audio?.playReference({kind:"interval",startUs:range.startUs,endUs:range.endUs,expectedDurationUs:audio.durationUs!})}>{timeLabel(range.startUs)}–{timeLabel(range.endUs)}</button> 認識できませんでした
+            <button type="button" className="utterance-stamp" disabled={viewDisabled||!audio?.canPlay||audio.locked||audio.durationUs===null} onClick={()=>void audio?.playReference({kind:"interval",startUs:range.startUs,endUs:range.endUs,expectedDurationUs:audio.durationUs!})}>{timeLabel(range.startUs)}–{timeLabel(range.endUs)}</button> 認識できませんでした
           </li>)}</ul>
         </section>}
 
-        <div className="transcript-actions transcript-search"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" disabled={disabled} value={query} onChange={event => setQuery(event.target.value)} maxLength={1000} /></label><span>{filtered.length} / {view?.utterances.length ?? 0} 発言</span></div>
-        {view && <TranscriptScrollRegion view={view} rows={shown} filterKey={JSON.stringify([speakerFilter, query])} disabled={disabled}>
+        <div className="transcript-actions transcript-search"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" disabled={viewDisabled} value={query} onChange={event => setQuery(event.target.value)} maxLength={1000} /></label><span>{filtered.length} / {view?.utterances.length ?? 0} 発言</span></div>
+        {view && filtered.length > 0 ? <TranscriptScrollRegion view={view} rows={shown} filterKey={JSON.stringify([speakerFilter, query])} disabled={viewDisabled}>
           <TranscriptRows rows={shown} texts={texts} playingIds={playingIds} meetingId={meetingId} speakers={speakers}
             colorKeys={view?.speakerColorKeys}
-            canPlay={!!audio?.canPlay} saveFailed={!!snapshot.error} dirty={snapshot.dirty} actions={rowActions} />
-        </TranscriptScrollRegion>}
-        {!filtered.length && <p>条件に一致する発言はありません。</p>}
+            canPlay={!!audio?.canPlay} editable={rowsEditable} saveFailed={!!snapshot.error} dirty={snapshot.dirty} actions={rowActions} />
+        </TranscriptScrollRegion> : <p className="transcript-empty-results">条件に一致する発言はありません。</p>}
     </TranscriptSplit>}
     <IssueNotice scope={meetingId} type="transcript-consolidation" label="発言の統合" message={consolidationError}/>
-    {consolidationError&&<button type="button" className="small-secondary" disabled={disabled} onClick={()=>setConsolidationRetry(value=>value+1)}>発言統合を再試行</button>}
     <IssueNotice scope={meetingId} type="transcript-save" label="文字起こしの保存" message={snapshot.error || error} action={snapshot.error ? { kind: "retry", label: "文字起こし保存を再試行", disabled, run: retry } : undefined} />
-    {snapshot.error && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void retry()}>保存を再試行</button>}
+    {(consolidationError || snapshot.error) && <div className="transcript-feedback">
+      {consolidationError && <button type="button" className="small-secondary" disabled={disabled} onClick={() => setConsolidationRetry(value => value + 1)}>発言統合を再試行</button>}
+      {snapshot.error && <button type="button" className="small-secondary" disabled={disabled} onClick={() => void retry()}>保存を再試行</button>}
+    </div>}
     <SpeakerStructureDialog edit={visible?structureEditor:null} speakers={speakers} disabled={disabled} issue={snapshot.error||error} saveFailed={!!snapshot.error} onChange={edit=>setStructureEditor(edit.kind==="merge"?{...edit,affected:view?.utterances.filter(u=>u.speakerIds.includes(edit.sourceId)).length??0}:edit)} onSave={retry=>void run(()=>saveStructure(retry))} onDismiss={()=>setStructureEditor(null)} restoreTarget={()=>structureOpener.current} onPlay={()=>{if(structureRef.current?.kind==="split")play(structureRef.current.utterance);}} playing={!!audio?.playing} onPause={()=>audio?.toggle()} canPlay={!!audio?.canPlay&&!audio.locked&&!audio.preparing}/>
     <CommonModal portal open={visible && !!assignmentEditor} blocked={disabled || !!snapshot.error} onDismiss={() => setAssignmentEditor(null)} restoreTarget={() => assignmentOpener.current} dismissLabel="閉じる" className="speaker-assignment-dialog" aria-label={timeLabel(assignmentEditor?.startUs ?? 0) + "の話者を変更"}>
       <h2>{timeLabel(assignmentEditor?.startUs ?? 0)}の話者を変更</h2>

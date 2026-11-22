@@ -1,0 +1,8 @@
+/* Reuse .data-updated's established warning background and left border. */
+.data-updated.callout { padding:16px; }
+.callout { display:grid; gap:12px; min-width:0; margin-block:0; overflow-wrap:anywhere; font-size:13px; line-height:1.65; }
+.callout-body { min-width:0; }
+.callout-body > :first-child { margin-block-start:0; }
+.callout-body > :last-child { margin-block-end:0; }
+.callout-body > p { margin-block:0; }
+.callout-body > p + p { margin-block-start:12px; }

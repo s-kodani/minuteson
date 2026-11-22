@@ -13,6 +13,22 @@ fn bytes(record: &PlacementRecord) -> Result<(String, String), String> {
     Ok((json, hash))
 }
 
+#[cfg(any(unix, windows))]
+pub(super) fn insert_salvaged(
+    db: &Connection,
+    record: &PlacementRecord,
+    file_id: &impl Fn(&str) -> String,
+) -> Result<(), String> {
+    let (json, hash) = bytes(record)?;
+    let engine = serde_json::to_value(record.manifest.engine).map_err(|e| e.to_string())?;
+    db.execute("INSERT INTO model_packages(id,engine,model_name,model_version,quantization,source_type,manifest_json,manifest_hash,license_ref,state) VALUES(?1,?2,?3,?4,?5,?9,?6,?7,?8,'unavailable')",params![record.package_id,engine.as_str(),record.manifest.model_name,record.manifest.model_version,record.manifest.quantization,json,hash,record.manifest.license_ref,record.source_type()]).map_err(|e|e.to_string())?;
+    for (declared, actual) in record.manifest.files.iter().zip(&record.files) {
+        let role = serde_json::to_value(actual.role).map_err(|e| e.to_string())?;
+        db.execute("INSERT INTO model_files(id,package_id,relative_path,role,expected_size,actual_size,expected_hash,actual_hash,state) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'ready')",params![file_id(&actual.relative_path),record.package_id,actual.relative_path,role.as_str(),declared.expected_size.map(|n|n as i64),actual.actual_size as i64,declared.expected_hash,actual.actual_hash]).map_err(|e|e.to_string())?;
+    }
+    Ok(())
+}
+
 pub(super) fn unused_identity(db: &Connection, id: &str) -> Result<bool, String> {
     // Canonical native schema identifiers are quoted, values stay parameters.
     // Reserve IDs across domains and pending additive-restore mappings too.
@@ -255,6 +271,7 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())
     }
     pub(crate) fn list_model_placements(&self) -> Result<Vec<CatalogEntry>, String> {
+        self.require_model_storage()?;
         let db = self
             .connection
             .lock()

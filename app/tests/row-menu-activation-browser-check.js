@@ -43,14 +43,22 @@ async (page, capturePath, detailUI) => {
   results.push("delete opens one confirmation and cancellation restores the ellipsis without deleting");
 
   await show(); await open().click();
+  // The detail header can open its menu before the lazy transcript workspace settles.
+  await page.getByText("文字起こしはまだありません。", { exact: true }).waitFor();
   const detailTrigger=page.getByRole("button",{name:"会議の操作",exact:true});
-  await detailTrigger.click();
   const detailMenu=page.getByRole("menu",{name:"会議の操作",exact:true});
-  await detailMenu.getByRole("menuitem",{name:"既存会議を削除",exact:true}).click();await dialog().waitFor();
+  const detailRemove = detailMenu.getByRole("menuitem", { name: "既存会議を削除", exact: true });
+  const reviewDetailDeletion = async () => {
+    await detailTrigger.click();
+    await detailRemove.and(page.locator(":enabled")).waitFor();
+    await detailRemove.click();
+    await dialog().waitFor();
+  };
+  await reviewDetailDeletion();
   await dialog().getByRole("button",{name:"キャンセル",exact:true}).click();await dialog().waitFor({state:"hidden"});
   check(await page.getByRole("tab",{name:"文字起こし",exact:true}).isVisible()&&await detailTrigger.evaluate(e=>e===document.activeElement),"detail delete cancellation left the meeting or lost its opener");
   results.push("detail delete cancellation preserves the meeting and restores its popup trigger");
-  await detailTrigger.click();await detailMenu.getByRole("menuitem",{name:"既存会議を削除",exact:true}).click();await dialog().waitFor();
+  await reviewDetailDeletion();
   await dialog().getByText("削除対象フォルダー", { exact: true }).waitFor();
   await page.screenshot({ path: capturePath("row-menu-delete-confirmation.png") });
   await dialog().getByRole("button", { name: "削除", exact: true }).click();

@@ -49,6 +49,15 @@ export function assertDataJobs(value: unknown): asserts value is DataJob[] {
 }
 export type DataAvailabilityReasonCode = "recording_active" | "import_active" | "operation_active" | "relocation_restart_required" | "meeting_deletion_pending";
 export interface DataAvailability { available: boolean; reason: string | null; reasonCode: DataAvailabilityReasonCode | null; deletionAvailable: boolean; deletionReason: string | null; deletionReasonCode: DataAvailabilityReasonCode | null }
+export interface StorageWriteState { readOnly: boolean; reasons: string[]; salvageAvailable: boolean }
+export function checkedStorageWriteState(input: unknown): StorageWriteState {
+  const value = input as Partial<StorageWriteState> | null;
+  if (!value || typeof value.readOnly !== "boolean" || !Array.isArray(value.reasons)
+    || value.reasons.some(reason => typeof reason !== "string" || !reason)
+    || Object.hasOwn(value, "salvageAvailable") && typeof value.salvageAvailable !== "boolean"
+    || value.salvageAvailable === true && !value.readOnly) throw Error("保存先にデータを保存できるか確認できませんでした。");
+  return { readOnly: value.readOnly, reasons: value.reasons, salvageAvailable: Object.hasOwn(value, "salvageAvailable") && value.salvageAvailable === true };
+}
 export function assertDataAvailability(value: DataAvailability): void {
   const codes = ["recording_active", "import_active", "operation_active", "relocation_restart_required", "meeting_deletion_pending"];
   if (!value || typeof value.available !== "boolean" || !(value.reason === null || typeof value.reason === "string") || value.available !== (value.reason === null)) throw Error("利用可能状態を確認できません。");
@@ -197,4 +206,4 @@ export function dataRequest(s: DataSnapshot, action: DataRequest["action"]): Dat
   if (action === "publish" && s.kind === "relocation" && (s.phase !== "ready" || !s.relocationPreview?.resumeAllowed || s.relocationPreview.availableBytes < s.relocationPreview.requiredBytes)) throw Error("保存先と容量を再確認してください。");
   return { token: s.token, confirmationId: id, action };
 }
-export const dataPhaseLabel = (phase: string) => ({ idle: "操作を選択", choosing: "ファイル・フォルダー選択中", reading: "バックアップを読み込み中", verifying: "内容と容量を検証中", reconstructing: "追加する会議を検証中", copying: "会議DBと管理音声をコピー中", handoff: "回復履歴と所有台帳を検証中", switching: "保存先を切替中", ready: "確認待ち", publishing: "保存を確定中", completed: "完了", failed: "要対応", cancelling: "安全に取消中", cancelled: "取消済み", discarding: "確認用コピーを整理中", attention: "保存結果の確認が必要" } as Record<string, string>)[phase] ?? phase;
+export const dataPhaseLabel = (phase: string) => ({ idle: "操作を選択", choosing: "ファイル・フォルダー選択中", reading: "バックアップを読み込み中", verifying: "内容と空き容量を確認中", reconstructing: "追加する会議を確認中", copying: "会議データと音声をコピー中", handoff: "新しい保存先に切り替えられるか確認中", switching: "保存先を切替中", ready: "確認待ち", publishing: "保存を確定中", completed: "完了", failed: "要対応", cancelling: "安全に取消中", cancelled: "取消済み", discarding: "確認用コピーを整理中", attention: "保存結果の確認が必要" } as Record<string, string>)[phase] ?? phase;

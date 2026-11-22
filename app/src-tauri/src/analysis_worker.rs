@@ -538,13 +538,21 @@ impl AnalysisController {
     }
 
     pub fn shutdown(app: &AppHandle) -> Result<(), String> {
+        Self::shutdown_inner(app, false)
+    }
+
+    pub(crate) fn shutdown_for_salvage(app: &AppHandle) -> Result<(), String> {
+        Self::shutdown_inner(app, true)
+    }
+
+    fn shutdown_inner(app: &AppHandle, preserve_source: bool) -> Result<(), String> {
         let controller = app.state::<Self>();
         {
             let state = controller
                 .state
                 .lock()
                 .map_err(|_| "解析ロックを取得できません")?;
-            if !app.state::<Storage>().data_write_blocked() {
+            if !preserve_source && !app.state::<Storage>().data_write_blocked() {
                 app.state::<Storage>().pause_for_exit()?;
             }
             controller.shutdown.store(true, Ordering::SeqCst);

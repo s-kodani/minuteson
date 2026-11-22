@@ -554,7 +554,9 @@ fn ancestral_remaining_path(long: bool) {
     assert_eq!(f.original(&op), original);
     f.audio = f.audio.reopen();
     f.controller = DataController::default();
-    f.analysis.require_storage_restart();
+    if f.audio.storage.deletion_resume_restart_required() {
+        f.analysis.require_storage_restart();
+    }
     let pending = f.pending(&op);
     assert_eq!(
         pending
@@ -667,7 +669,10 @@ fn audio_controller_remaining_consent_uses_new_choice_and_cold_resumes_same_oper
     assert_eq!(f.original(&operation), original);
     f.audio = f.audio.reopen();
     f.controller = DataController::default();
-    f.analysis.require_storage_restart();
+    let restart = f.audio.storage.deletion_resume_restart_required();
+    if restart {
+        f.analysis.require_storage_restart();
+    }
     let pending = f.pending(&operation);
     let p = pending.audio_deletion_preview.as_ref().unwrap();
     assert_eq!(p.include_unregistered_recorded, Some(true));
@@ -678,7 +683,7 @@ fn audio_controller_remaining_consent_uses_new_choice_and_cold_resumes_same_oper
         .is_err());
     let done = f.run(&pending, Action::Publish);
     assert_eq!(done.phase, "completed", "{:?}", done.error_message);
-    assert!(done.restart_required);
+    assert_eq!(done.restart_required, restart);
     assert_eq!(done.audio_deletion_receipt.unwrap().operation_id, operation);
     assert_eq!(f.count(), 2);
     assert_eq!(f.original(&operation), original);
@@ -775,23 +780,20 @@ fn audio_controller_remaining_availability_reappearance_and_unsafe_links() {
 }
 
 #[test]
-fn audio_controller_cold_restart_keep_requires_native_admission_and_another_restart() {
+fn audio_controller_cold_restart_keeps_audio_protected_until_native_keep() {
     let mut f = Fixture::new();
     let stopped = f.stop_at(&f.ready(), Action::Publish, "audio_delete_scope_fixed");
     let operation = stopped.audio_deletion_preview.unwrap().operation_id;
     f.audio = f.audio.reopen();
     f.controller = DataController::default();
-    f.analysis.require_storage_restart();
-    assert!(f.audio.storage.data_write_blocked());
-    assert!(f
-        .analysis
-        .begin_data_maintenance(false, false, &crate::test_support::never_cancelled)
-        .is_err());
+    assert!(!f.audio.storage.data_write_blocked());
+    f.audio.storage.create_meeting("UNRELATED DRAFT").unwrap();
+    assert!(f.audio.storage.require_global_data_writable().is_err());
     let pending = f.pending(&operation);
     assert!(pending.audio_deletion_preview.as_ref().unwrap().pending);
     let done = f.run(&pending, Action::Keep);
-    assert!(done.restart_required && done.audio_deletion_receipt.unwrap().retained);
-    assert!(f.audio.path.exists() && f.audio.storage.restart_required());
+    assert!(!done.restart_required && done.audio_deletion_receipt.unwrap().retained);
+    assert!(f.audio.path.exists() && !f.audio.storage.restart_required());
     f.audio = f.audio.reopen();
     assert!(!f.audio.storage.restart_required() && !f.audio.storage.data_write_blocked());
     assert!(f.audio.path.exists());
@@ -808,7 +810,6 @@ fn audio_controller_cold_restart_continues_saved_audio_policy_without_reacceptin
     let operation = stopped.audio_deletion_preview.unwrap().operation_id;
     f.audio = f.audio.reopen();
     f.controller = DataController::default();
-    f.analysis.require_storage_restart();
     let pending = f.pending(&operation);
     assert_eq!(
         pending
@@ -823,7 +824,7 @@ fn audio_controller_cold_restart_continues_saved_audio_policy_without_reacceptin
         .begin_request(f.request(&pending, Action::DeleteIncludingUnregistered))
         .is_err());
     let done = f.run(&pending, Action::Publish);
-    assert!(done.restart_required && done.audio_deletion_receipt.unwrap().audio_deleted);
+    assert!(!done.restart_required && done.audio_deletion_receipt.unwrap().audio_deleted);
     assert!(!f.audio.path.exists() && !leftover.exists());
     assert_eq!(f.count(), 1);
     f.audio = f.audio.reopen();

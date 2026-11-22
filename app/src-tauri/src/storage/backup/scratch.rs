@@ -786,29 +786,39 @@ impl Registry {
         if pending.len() > LIMIT {
             return Err("一時領域の回収件数が安全上限を超えています".into());
         }
+        let mut first_error = None;
         for (id, path) in pending {
-            let intent = self.scratch_evidence(&id)?;
-            if self.retained("scratch", &id, &intent.intent_hash)? {
-                continue;
-            }
-            if let Err(error) = self.cleanup(&id, &self.root.join(path)) {
-                // Ownership uncertainty is non-blocking only after its durable
-                // attention record succeeds. Never swallow journal I/O failure.
-                let db = self
-                    .db
-                    .lock()
-                    .map_err(|_| "一時領域台帳ロックを取得できません")?;
-                let retained: bool = db
-                    .query_row(
-                        "SELECT state='attention' AND error=?1 FROM areas WHERE id=?2",
-                        params![error, id],
-                        |r| r.get(0),
-                    )
-                    .map_err(|e| e.to_string())?;
-                if !retained {
-                    return Err(error);
+            let result = (|| {
+                let intent = self.scratch_evidence(&id)?;
+                if self.retained("scratch", &id, &intent.intent_hash)? {
+                    return Ok(());
                 }
+                if let Err(error) = self.cleanup(&id, &self.root.join(path)) {
+                    // A malformed entry stays in place. Other entries still
+                    // require their own durable proof before cleanup.
+                    let db = self
+                        .db
+                        .lock()
+                        .map_err(|_| "一時領域台帳ロックを取得できません")?;
+                    let retained: bool = db
+                        .query_row(
+                            "SELECT state='attention' AND error=?1 FROM areas WHERE id=?2",
+                            params![error, id],
+                            |r| r.get(0),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    if !retained {
+                        return Err(error);
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
             }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
         }
         Ok(())
     }

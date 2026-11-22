@@ -251,7 +251,9 @@ impl Storage {
             if skip {
                 continue;
             }
-            self.resume_job(&id)?;
+            if let Err(error) = self.resume_job(&id) {
+                crate::internal_logs::report_error("analysis", &error);
+            }
         }
         Ok(())
     }
@@ -268,7 +270,12 @@ impl Storage {
             }
             return Ok(());
         }
-        db.execute("UPDATE processing_jobs SET state = 'pausing', pause_reason = 'exit', updated_at = ?1 WHERE state = 'running'", params![now_ms()?]).map_err(|e| e.to_string())?;
+        if self.data_write_blocked() {
+            return Ok(());
+        }
+        let unreserved = super::meeting_access::unreserved_sql(&db, "meeting_id")?;
+        let audio = unreserved_audio_job_sql(&db, "processing_jobs")?;
+        db.execute(&format!("UPDATE processing_jobs SET state='pausing',pause_reason='exit',updated_at=?1 WHERE state='running'{unreserved}{audio}"),params![now_ms()?]).map_err(|e|e.to_string())?;
         Ok(())
     }
     #[cfg(test)]
@@ -309,6 +316,9 @@ impl Storage {
     pub(crate) fn acquire_owned_inference_job(
         &self,
     ) -> Result<Option<(JobSnapshot, super::meeting_access::MeetingWork)>, String> {
+        if self.require_model_storage().is_err() {
+            return Ok(None);
+        }
         self.acquire_filtered_job(None)
     }
 
@@ -320,20 +330,22 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません".to_string())?;
+        self.require_data_writable()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
-        let unreserved = if super::meeting_access::installed(&transaction)? {
-            " AND meeting_id NOT IN (SELECT meeting_id FROM temp.mon_meeting_deletion_guard)"
-        } else {
-            ""
-        };
+        let unreserved = super::meeting_access::unreserved_sql(&transaction, "meeting_id")?;
+        let recording_allowed = super::deletion::fence::audio_unreserved(
+            &transaction,
+            "recording_sessions.meeting_id",
+        )?;
+        let audio_jobs = unreserved_audio_job_sql(&transaction, "processing_jobs")?;
         let recording_active: bool = transaction.query_row(
-            &format!("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing', 'recording', 'stopping'){unreserved})"),
+            &format!("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE state IN ('preparing', 'recording', 'stopping'){unreserved} AND {recording_allowed})"),
             [], |row| row.get(0),
         ).map_err(|error| error.to_string())?;
         let job_active: bool = transaction.query_row(
-            &format!("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running', 'pausing'){unreserved})"),
+            &format!("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('running', 'pausing'){unreserved}{audio_jobs})"),
             [], |row| row.get(0),
         ).map_err(|error| error.to_string())?;
         if recording_active || job_active {
@@ -347,45 +359,69 @@ impl Storage {
                 .map(|kind| format!("'{}'", kind.as_str()))
                 .collect::<Vec<_>>()
                 .join(",");
-            let mut query=transaction.prepare(&format!("SELECT id, meeting_id, input_analysis_id, input_hash,kind FROM processing_jobs WHERE state='queued' AND kind IN ({executable}) AND (?1 IS NULL OR kind=?1) ORDER BY created_at,rowid LIMIT 4097")).map_err(|e|e.to_string())?;
+            let mut query=transaction.prepare(&format!("SELECT id, meeting_id, input_analysis_id, input_hash,kind FROM processing_jobs WHERE state='queued' AND kind IN ({executable}) AND (?1 IS NULL OR kind=?1){unreserved}{audio_jobs} ORDER BY created_at,rowid LIMIT 4097")).map_err(|e|e.to_string())?;
             let mut rows = query
                 .query(params![kind.map(JobKind::as_str)])
                 .map_err(|e| e.to_string())?;
             let mut selected = None;
+            let mut first_error = None;
             let mut count = 0;
             while let Some(row) = rows.next().map_err(|e| e.to_string())? {
                 count += 1;
                 if count > 4096 {
                     return Err("音声利用可否を確認する待機ジョブが安全上限を超えています".into());
                 }
-                let id: String = row.get(0).map_err(|e| e.to_string())?;
-                let meeting: String = row.get(1).map_err(|e| e.to_string())?;
-                if super::meeting_access::reserved(&transaction, &meeting)? {
-                    continue;
-                }
-                let job_kind: String = row.get(4).map_err(|e| e.to_string())?;
-                #[cfg(any(unix, windows))]
-                if job_kind.parse::<JobKind>()?.needs_audio()
-                    && super::deletion::audio::intent::removal::completion::deleted(
+                let candidate = (|| {
+                    let id: String = row.get(0).map_err(|e| e.to_string())?;
+                    let meeting: String = row.get(1).map_err(|e| e.to_string())?;
+                    if super::meeting_access::reserved(&transaction, &meeting)? {
+                        return Ok(None);
+                    }
+                    let job_kind: String = row.get(4).map_err(|e| e.to_string())?;
+                    #[cfg(any(unix, windows))]
+                    if job_kind.parse::<JobKind>()?.needs_audio()
+                        && (super::deletion::fence::audio_pending(&transaction, &meeting)?
+                            || super::deletion::audio::source_deleted(&transaction, &meeting)?
+                            || super::salvage_schema::meeting(&transaction, &meeting)?
+                                .is_some_and(|record| record.audio_unavailable.is_some()))
+                    {
+                        return Ok(None);
+                    }
+                    #[cfg(not(any(unix, windows)))]
+                    let _ = job_kind;
+                    let analysis_id: Option<String> = row.get(2).map_err(|e| e.to_string())?;
+                    let input_hash: String = row.get(3).map_err(|e| e.to_string())?;
+                    validate_job_input(
                         &transaction,
                         &meeting,
-                    )?
-                {
-                    continue;
+                        analysis_id.as_deref(),
+                        &input_hash,
+                    )?;
+                    verify_latest_checkpoint(&transaction, &id)?;
+                    Ok::<_, String>(Some((id, meeting)))
+                })();
+                match candidate {
+                    Ok(Some(item)) => {
+                        selected = Some(item);
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        if let Ok(meeting) = row.get::<_, String>(1) {
+                            self.startup_diagnostic(Some(&meeting), "processing_job", &error);
+                        }
+                        first_error.get_or_insert(error);
+                    }
                 }
-                #[cfg(not(any(unix, windows)))]
-                let _ = job_kind;
-                selected = Some((
-                    id,
-                    meeting,
-                    row.get::<_, Option<String>>(2).map_err(|e| e.to_string())?,
-                    row.get::<_, String>(3).map_err(|e| e.to_string())?,
-                ));
-                break;
+            }
+            if selected.is_none() {
+                if let Some(error) = first_error {
+                    return Err(error);
+                }
             }
             selected
         };
-        let Some((id, meeting_id, analysis_id, input_hash)) = queued else {
+        let Some((id, meeting_id)) = queued else {
             return Ok(None);
         };
         require_audio_source(
@@ -395,13 +431,6 @@ impl Storage {
                 .kind,
             &meeting_id,
         )?;
-        validate_job_input(
-            &transaction,
-            &meeting_id,
-            analysis_id.as_deref(),
-            &input_hash,
-        )?;
-        verify_latest_checkpoint(&transaction, &id)?;
         let owner = self.begin_meeting_work_locked(&transaction, &meeting_id, "job", Some(&id))?;
         let now = now_ms()?;
         transaction.execute(
@@ -416,9 +445,17 @@ impl Storage {
 
     #[allow(dead_code)]
     pub fn request_pause_for_recording(&self) -> Result<bool, String> {
-        let changed = self.connection.lock().map_err(|_| "DBロックを取得できません".to_string())?
-            .execute("UPDATE processing_jobs SET state = 'pausing', pause_reason = 'recording', updated_at = ?1 WHERE state = 'running'", params![now_ms()?])
-            .map_err(|error| error.to_string())?;
+        let db = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        self.require_data_writable()?;
+        let unreserved = super::meeting_access::unreserved_sql(&db, "meeting_id")?;
+        let audio = unreserved_audio_job_sql(&db, "processing_jobs")?;
+        let changed = db.execute(
+            &format!("UPDATE processing_jobs SET state='pausing',pause_reason='recording',updated_at=?1 WHERE state='running'{unreserved}{audio}"),
+            params![now_ms()?],
+        ).map_err(|e| e.to_string())?;
         Ok(changed > 0)
     }
 
@@ -506,6 +543,7 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません".to_string())?;
+        self.require_data_writable()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
@@ -514,6 +552,9 @@ impl Storage {
             params![job_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         ).optional().map_err(|error| error.to_string())?;
         let (state, meeting_id, analysis_id, input_hash) = current.ok_or("処理が見つかりません")?;
+        if super::meeting_access::reserved(&transaction, &meeting_id)? {
+            return Err("この会議は削除の確認・処理中です".into());
+        }
         require_audio_source(
             &transaction,
             &load_job(&transaction, job_id)?
@@ -619,6 +660,20 @@ impl Storage {
         let mut job = load_job(&connection, job_id)?.ok_or("処理が見つかりません")?;
         self.decorate_execution_progress(&mut job);
         Ok(job)
+    }
+
+    pub(crate) fn job_is_running(&self, job_id: &str) -> Result<bool, String> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "DBロックを取得できません")?;
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE id=?1 AND state='running')",
+                [job_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn list_jobs(&self, meeting_id: &str) -> Result<Vec<JobSnapshot>, String> {
@@ -988,10 +1043,31 @@ fn require_audio_source(db: &Connection, kind: &str, meeting: &str) -> Result<()
     Ok(())
 }
 
+pub(super) fn audio_job_kinds() -> String {
+    JobKind::ALL
+        .iter()
+        .filter(|kind| kind.needs_audio())
+        .map(|kind| format!("'{}'", kind.as_str()))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+pub(super) fn unreserved_audio_job_sql(db: &Connection, table: &str) -> Result<String, String> {
+    let audio_kinds = audio_job_kinds();
+    let column = format!("{table}.meeting_id");
+    let unreserved = super::deletion::fence::audio_unreserved(db, &column)?;
+    Ok(format!(
+        " AND ({table}.kind NOT IN ({audio_kinds}) OR {unreserved})"
+    ))
+}
+
 pub(super) fn enqueue_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     spec: &JobSpec,
 ) -> Result<JobSnapshot, String> {
+    if super::meeting_access::reserved(transaction, &spec.meeting_id)? {
+        return Err("この会議は削除の確認・処理中です".into());
+    }
     crate::current_formats::job(spec.kind.as_str(), &spec.parameters)?;
     require_audio_source(transaction, spec.kind.as_str(), &spec.meeting_id)?;
     if spec.operation_id.trim().is_empty() || spec.operation_id.len() > 128 {
