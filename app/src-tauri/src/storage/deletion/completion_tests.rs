@@ -1038,6 +1038,17 @@ fn compound_deletion_sigkill_at_eight_database_boundaries_reopens_and_finishes_a
         let mut receipt =
             read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
         let pending_at_open = !receipt.completed();
+        let detached_at_open = !matches!(phase, "rowsErased" | "beforeRowsCommit");
+        let restart_required = pending_at_open && detached_at_open;
+        assert_eq!(storage.data_write_blocked(), restart_required);
+        if pending_at_open {
+            assert!(storage.require_global_data_writable().is_err());
+            assert!(storage.begin_meeting_work(&meeting, "job", None).is_err());
+        }
+        assert_eq!(
+            storage.begin_meeting_work(&other, "job", None).is_ok(),
+            !restart_required
+        );
         assert_eq!(
             storage.get_meeting(&meeting).unwrap().is_some(),
             matches!(phase, "rowsErased" | "beforeRowsCommit")
@@ -1057,7 +1068,12 @@ fn compound_deletion_sigkill_at_eight_database_boundaries_reopens_and_finishes_a
             std::fs::read(root.join("models/model.gguf")).unwrap(),
             b"KEEP MODEL"
         );
-        assert_eq!(storage.data_write_blocked(), pending_at_open);
+        if !restart_required {
+            storage.release_meeting_deletion(&meeting).unwrap();
+            storage.require_global_data_writable().unwrap();
+        }
+        assert_eq!(storage.data_write_blocked(), restart_required);
+        assert_eq!(storage.restart_required(), restart_required);
         for name in ["meetings.sqlite3", "meetings.sqlite3-wal"] {
             let file = root.join(name);
             if file.exists() {
