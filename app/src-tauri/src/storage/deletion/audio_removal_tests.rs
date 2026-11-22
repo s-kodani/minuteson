@@ -48,6 +48,17 @@ fn resume(f: &Fixture, op: &str) -> DataMaintenanceLease {
         .unwrap()
 }
 
+fn assert_audio_protected(storage: &Storage, meeting: &str) {
+    // A cold audio-only intent protects audio and whole-store operations,
+    // while transcript/document work remains available.
+    assert!(!storage.data_write_blocked());
+    assert!(storage.require_global_data_writable().is_err());
+    assert!(storage.begin_meeting_work(meeting, "minutes", None).is_ok());
+    assert!(
+        super::super::super::require_source(&storage.connection.lock().unwrap(), meeting).is_err()
+    );
+}
+
 #[test]
 fn flac_workspace_audio_removal_reopens_after_rename_unlink_and_advance_with_fixed_metadata() {
     for boundary in [
@@ -154,7 +165,12 @@ fn flac_workspace_audio_removal_reopens_after_rename_unlink_and_advance_with_fix
             original
         );
         assert!(storage.get_meeting(&meeting).unwrap().is_some());
-        assert!(storage.restart_required());
+        assert!(!storage.restart_required());
+        storage.require_global_data_writable().unwrap();
+        assert!(
+            super::super::super::source_deleted(&storage.connection.lock().unwrap(), &meeting)
+                .unwrap()
+        );
         let restarted_root = storage.root().to_owned();
         drop(lease);
         drop(storage);
@@ -423,7 +439,7 @@ fn audio_removal_cancel_at_each_boundary_resumes_same_receipt_without_deleting_r
         );
         assert!(!f.path.exists());
         assert!(doc.is_file());
-        assert!(f.storage.data_write_blocked());
+        assert_audio_protected(&f.storage, &f.meeting);
     }
 }
 #[test]
@@ -688,7 +704,8 @@ fn audio_removal_corrupt_progress_cursor_subtype_and_held_record_never_grant_a_w
             &crate::test_support::never_cancelled
         )
         .is_err());
-        assert!(f.path.is_file() && f.storage.data_write_blocked());
+        assert!(f.path.is_file());
+        assert_audio_protected(&f.storage, &f.meeting);
     }
 }
 fn resume_attempt(f: &Fixture, op: &str) -> Result<DataMaintenanceLease, String> {
@@ -805,7 +822,13 @@ fn audio_removal_changed_database_text_and_independent_pending_receipt_stop_befo
         )
         .is_err());
         assert_eq!(std::fs::read(&f.path).unwrap(), b"PRIVATE AUDIO BODY");
-        assert!(f.storage.data_write_blocked());
+        assert_eq!(f.storage.data_write_blocked(), other_pending);
+        assert!(f.storage.require_global_data_writable().is_err());
+        assert!(super::super::super::require_source(
+            &f.storage.connection.lock().unwrap(),
+            &f.meeting
+        )
+        .is_err());
         let r = Receipt::load(
             &f.storage.connection.lock().unwrap(),
             &op,
@@ -988,7 +1011,7 @@ fn audio_removal_sigkill_preserves_exact_reserved_audio_and_resumes_every_persis
             .unwrap();
         assert_eq!(status.signal(), Some(libc::SIGKILL), "{boundary}");
         let storage = Storage::open(root).unwrap();
-        assert!(storage.data_write_blocked());
+        assert_audio_protected(&storage, &meeting);
         let c = AnalysisController::default();
         let lease = c
             .begin_audio_deletion_maintenance(
@@ -1002,7 +1025,7 @@ fn audio_removal_sigkill_preserves_exact_reserved_audio_and_resumes_every_persis
         let r = run(&storage, &op, &lease, &crate::test_support::never_cancelled).unwrap();
         assert!(r.files_removed());
         assert!(!path.exists() && doc.is_file());
-        assert!(storage.data_write_blocked());
+        assert_audio_protected(&storage, &meeting);
     }
 }
 #[test]

@@ -503,8 +503,7 @@ fn database_renewal_cancellation_rolls_back_audit_and_plan_at_all_precommit_boun
 }
 
 #[test]
-fn database_renewal_committed_cancel_cold_reopen_retains_stage_and_fence_until_resolution_and_restart(
-) {
+fn database_renewal_committed_cancel_cold_reopen_retains_stage_and_scoped_or_history_fence() {
     for phase in [Phase::RowsPending, Phase::RowsDeleted, Phase::Finished] {
         let f = Fixture::new();
         let original = at_database_phase(&f, phase);
@@ -537,14 +536,21 @@ fn database_renewal_committed_cancel_cold_reopen_retains_stage_and_fence_until_r
         let other = f.f.other.clone();
         drop(f.f.storage);
         let storage = Storage::open(path.clone()).unwrap();
-        assert!(storage.data_write_blocked());
+        let restart_required = phase != Phase::RowsPending;
+        assert_eq!(storage.data_write_blocked(), restart_required);
+        assert!(storage.require_global_data_writable().is_err());
+        assert!(storage.begin_meeting_work(&meeting, "job", None).is_err());
+        assert_eq!(
+            storage.begin_meeting_work(&other, "job", None).is_ok(),
+            !restart_required
+        );
         assert_eq!(operations::listing(&storage).unwrap().items.len(), 1);
         operations::authorize_review(&storage, Some(&operation)).unwrap();
         let mut saved =
             removal::read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(saved.progress.database_phase, Some(phase));
         assert_eq!(saved.progress.confirmation.as_ref().unwrap().generation, 1);
-        assert!(storage.require_data_writable().is_err());
+        assert!(storage.require_global_data_writable().is_err());
         removal::run(&storage, &mut saved, &crate::test_support::never_cancelled).unwrap();
         let mut restored = start(&storage, &saved, &crate::test_support::never_cancelled).unwrap();
         assert_eq!(restored.database_phase(), phase);
@@ -554,8 +560,13 @@ fn database_renewal_committed_cancel_cold_reopen_retains_stage_and_fence_until_r
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-        assert!(storage.require_data_writable().is_err());
-        assert!(storage.restart_required());
+        if !restart_required {
+            storage.release_meeting_deletion(&meeting).unwrap();
+            storage.require_global_data_writable().unwrap();
+        } else {
+            assert!(storage.require_data_writable().is_err());
+        }
+        assert_eq!(storage.restart_required(), restart_required);
         assert!(operations::listing(&storage).unwrap().items.is_empty());
         assert!(storage.get_meeting(&meeting).unwrap().is_none());
         assert!(storage.get_meeting(&other).unwrap().is_some());

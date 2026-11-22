@@ -1781,7 +1781,14 @@ fn real_sigkill_before_and_after_commit_cold_reads_only_the_committed_generation
             .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().unwrap();
         assert_eq!(status.signal(), Some(libc::SIGKILL));
         f.storage = Storage::open(root).unwrap();
-        assert!(f.storage.data_write_blocked() && f.path.exists());
+        assert!(f.path.exists());
+        assert!(!f.storage.data_write_blocked());
+        assert!(f.storage.require_global_data_writable().is_err());
+        assert!(crate::storage::deletion::audio::require_source(
+            &f.storage.connection.lock().unwrap(),
+            &f.meeting
+        )
+        .is_err());
         assert_eq!(fixed(&f, &op), original);
         let saved = Receipt::load(
             &f.storage.connection.lock().unwrap(),

@@ -126,23 +126,16 @@ fn windows_clock_drift_uses_the_single_wav_proofs_and_finalizes_without_rewritin
 }
 
 #[test]
-fn windows_finalization_requires_exact_single_wav_ownership_clock_and_receipt_order() {
+fn windows_finalization_requires_exact_single_wav_ownership_and_verified_receipts() {
     for problem in [
-        "missing_marker",
-        "unknown_marker",
         "missing_receipt",
         "reordered_receipts",
         "wrong_owner",
-        "wrong_tip_frames",
-        "wrong_origin",
-        "wrong_manifest_tip",
-        "wrong_clock_domain",
-        "wrong_capture_end",
         "changed_pcm",
     ] {
         let f = DriftFixture::new();
         let manifest_path = f.directory.join("manifest.json");
-        let mut manifest: serde_json::Value =
+        let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         let first_path = f.directory.join("wav-00000001.json");
         let second_path = f.directory.join("wav-00000002.json");
@@ -151,13 +144,6 @@ fn windows_finalization_requires_exact_single_wav_ownership_clock_and_receipt_or
             "fixture must cross a durability checkpoint"
         );
         match problem {
-            "missing_marker" => {
-                manifest
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("clockMappingSource");
-            }
-            "unknown_marker" => manifest["clockMappingSource"] = serde_json::json!("unknown"),
             "missing_receipt" => fs::remove_file(&first_path).unwrap(),
             "reordered_receipts" => {
                 let first = fs::read(&first_path).unwrap();
@@ -171,28 +157,6 @@ fn windows_finalization_requires_exact_single_wav_ownership_clock_and_receipt_or
                     serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
                 owner["inode"] = serde_json::json!(owner["inode"].as_u64().unwrap() ^ 1);
                 fs::write(path, serde_json::to_vec(&owner).unwrap()).unwrap();
-            }
-            "wrong_tip_frames" | "wrong_origin" => {
-                let path = f.directory.join("single-wav.json");
-                let mut tip: serde_json::Value =
-                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-                let field = if problem == "wrong_origin" {
-                    "captureOriginNanoseconds"
-                } else {
-                    "frames"
-                };
-                tip[field] = serde_json::json!(tip[field].as_u64().unwrap() + 1);
-                fs::write(path, serde_json::to_vec(&tip).unwrap()).unwrap();
-            }
-            "wrong_manifest_tip" => manifest["singleWav"]["frames"] = serde_json::json!(1),
-            "wrong_clock_domain" => {
-                manifest["captureClock"]["domain"] = serde_json::json!("unknown")
-            }
-            "wrong_capture_end" => {
-                let end = manifest["captureEnd"]["endUs"].as_i64().unwrap() + 1000;
-                for field in ["endUs", "microphoneClosedUs", "systemClosedUs"] {
-                    manifest["captureEnd"][field] = serde_json::json!(end);
-                }
             }
             "changed_pcm" => {
                 use std::io::{Seek, SeekFrom, Write};
@@ -227,6 +191,128 @@ fn windows_finalization_requires_exact_single_wav_ownership_clock_and_receipt_or
             f.storage.recorded_audio_plan(&f.meeting).is_err(),
             "{problem}"
         );
+    }
+}
+
+#[test]
+fn windows_finalization_preserves_verified_pcm_when_descriptive_metadata_is_damaged() {
+    use sha2::{Digest, Sha256};
+    for problem in [
+        "missing_marker",
+        "unknown_marker",
+        "wrong_tip_frames",
+        "wrong_origin",
+        "wrong_manifest_tip",
+        "wrong_clock_domain",
+        "wrong_capture_end",
+    ] {
+        let f = DriftFixture::new();
+        let manifest_path = f.directory.join("manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let mut cursor = crate::storage::recordings::wav::Cursor::default();
+        let proven = cursor
+            .read(&f.directory, &f.session, &|| false)
+            .unwrap()
+            .unwrap();
+        assert!(proven.checkpoints >= 2);
+        match problem {
+            "missing_marker" => {
+                manifest
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("clockMappingSource");
+            }
+            "unknown_marker" => manifest["clockMappingSource"] = serde_json::json!("unknown"),
+            "wrong_tip_frames" | "wrong_origin" => {
+                let path = f.directory.join("single-wav.json");
+                let mut tip: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                let field = if problem == "wrong_origin" {
+                    "captureOriginNanoseconds"
+                } else {
+                    "frames"
+                };
+                tip[field] = serde_json::json!(tip[field].as_u64().unwrap() + 1);
+                fs::write(path, serde_json::to_vec(&tip).unwrap()).unwrap();
+            }
+            "wrong_manifest_tip" => manifest["singleWav"]["frames"] = serde_json::json!(1),
+            "wrong_clock_domain" => {
+                manifest["captureClock"]["domain"] = serde_json::json!("unknown")
+            }
+            "wrong_capture_end" => {
+                let end = manifest["captureEnd"]["endUs"].as_i64().unwrap() + 1000;
+                for field in ["endUs", "microphoneClosedUs", "systemClosedUs"] {
+                    manifest["captureEnd"][field] = serde_json::json!(end);
+                }
+            }
+            _ => unreachable!(),
+        }
+        let original_manifest = serde_json::to_vec(&manifest).unwrap();
+        fs::write(&manifest_path, &original_manifest).unwrap();
+        let original_audio = fs::read(f.directory.join("recording.wav")).unwrap();
+        let original_tip = fs::read(f.directory.join("single-wav.json")).unwrap();
+        let saved = f
+            .storage
+            .finalize_recording(&f.session)
+            .unwrap_or_else(|error| panic!("{problem}: {error}"));
+        assert_eq!(
+            saved.duration_us,
+            proven.frames as i64 * 1_000_000 / 16000,
+            "{problem}"
+        );
+        assert_eq!(
+            fs::read(&manifest_path).unwrap(),
+            original_manifest,
+            "{problem}"
+        );
+        assert_eq!(
+            fs::read(f.directory.join("recording.wav")).unwrap(),
+            original_audio,
+            "{problem}"
+        );
+        assert_eq!(
+            fs::read(f.directory.join("single-wav.json")).unwrap(),
+            original_tip,
+            "{problem}"
+        );
+        let canonical: serde_json::Value =
+            serde_json::from_slice(&fs::read(f.directory.join("canonical-wav.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            canonical["clockMappingSource"], "single_wav_v1",
+            "{problem}"
+        );
+        assert_eq!(canonical["singleWav"]["frames"], proven.frames, "{problem}");
+        assert_eq!(
+            canonical["singleWav"]["lastEntrySHA256"],
+            serde_json::to_value(&proven).unwrap()["lastEntrySHA256"],
+            "{problem}"
+        );
+        assert_eq!(
+            canonical["wavPublication"]["sha256"],
+            format!("{:x}", Sha256::digest(&original_audio)),
+            "{problem}"
+        );
+        assert_eq!(canonical["wavRecovery"]["partial"], false, "{problem}");
+        if !matches!(problem, "missing_marker" | "unknown_marker") {
+            assert_eq!(saved.state, "interrupted", "{problem}");
+            assert!(saved.ended_at_utc_ms.is_none(), "{problem}");
+            assert_eq!(
+                canonical["wavPublication"]["acquisitionEndKnown"], false,
+                "{problem}"
+            );
+            assert!(canonical["captureEnd"].is_null(), "{problem}");
+        }
+        let plan = f.storage.recorded_audio_plan(&f.meeting).unwrap();
+        assert_eq!(plan.tracks.len(), 1, "{problem}");
+        assert_eq!(
+            plan.tracks[0].chunks[0].frames as u64, proven.frames,
+            "{problem}"
+        );
+        f.storage
+            .verify_canonical_audio(&f.meeting, &|| false)
+            .unwrap();
     }
 }
 

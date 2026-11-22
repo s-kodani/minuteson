@@ -129,7 +129,7 @@ fn root_renewal_coexisting_current_tree_and_reserved_contents_require_fresh_cons
 }
 
 #[test]
-fn root_renewal_native_cold_review_lists_exact_siblings_and_preserves_restart_fence() {
+fn root_renewal_native_cold_review_lists_exact_siblings_and_preserves_scoped_fence() {
     let f = Fixture::new();
     let (r, reserved) = paused_root(&f, "staged");
     std::fs::write(reserved.join("unknown"), b"COLD RESERVED").unwrap();
@@ -138,7 +138,10 @@ fn root_renewal_native_cold_review_lists_exact_siblings_and_preserves_restart_fe
     drop(r);
     drop(f.storage);
     let storage = Storage::open(path).unwrap();
-    assert!(storage.data_write_blocked());
+    assert!(!storage.data_write_blocked());
+    assert!(storage.require_global_data_writable().is_err());
+    assert!(storage.begin_meeting_work(&f.meeting, "job", None).is_err());
+    assert!(storage.begin_meeting_work(&f.other, "job", None).is_ok());
     let analysis = AnalysisController::default();
     let admitted = analysis
         .begin_deletion_maintenance(
@@ -182,8 +185,9 @@ fn root_renewal_native_cold_review_lists_exact_siblings_and_preserves_restart_fe
             &|_| {},
         )
         .unwrap();
-    assert!(done.deleted && done.restart_required);
-    assert!(storage.require_data_writable().is_err());
+    assert!(done.deleted && !done.restart_required);
+    storage.release_meeting_deletion(&f.meeting).unwrap();
+    storage.require_global_data_writable().unwrap();
     assert!(!reserved.exists());
     assert_eq!(std::fs::read(&f.other_file).unwrap(), b"KEEP OTHER AUDIO");
 }
@@ -247,12 +251,17 @@ fn root_renewal_committed_plan_cold_reopens_without_forgetting_original_reserved
     let mut saved = read(&storage, &operation, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(saved.progress_json().unwrap(), json);
     assert_eq!(saved.manifest.reservation_roots, roots);
-    assert!(storage.data_write_blocked());
+    assert!(!storage.data_write_blocked());
+    assert!(storage.require_global_data_writable().is_err());
+    assert!(storage.begin_meeting_work(&f.meeting, "job", None).is_err());
+    assert!(storage.begin_meeting_work(&f.other, "job", None).is_ok());
     run(&storage, &mut saved, &crate::test_support::never_cancelled).unwrap();
     let mut db =
         completion::start(&storage, &saved, &crate::test_support::never_cancelled).unwrap();
     completion::run(&storage, &mut db, &crate::test_support::never_cancelled).unwrap();
-    assert!(db.completed() && storage.restart_required());
+    assert!(db.completed() && !storage.restart_required());
+    storage.release_meeting_deletion(&f.meeting).unwrap();
+    storage.require_global_data_writable().unwrap();
     assert!(!reserved.exists());
     assert_eq!(std::fs::read(&f.other_file).unwrap(), b"KEEP OTHER AUDIO");
 }

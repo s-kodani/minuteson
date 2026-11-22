@@ -1,5 +1,21 @@
 use super::*;
 
+fn assert_rejected_registry_is_locally_blocked(root: &Path) {
+    let reopened = Storage::open(root.into()).unwrap();
+    assert!(reopened.scratch.is_none());
+    assert!(reopened.scratch_startup_error.is_some());
+    assert_eq!(
+        reopened.backup_stage().err().as_deref(),
+        reopened.scratch_startup_error.as_deref()
+    );
+    // The damaged ancillary registry cannot authorize new scratch ownership,
+    // while unrelated meeting writes remain available.
+    assert!(!reopened.common_write_hold());
+    reopened
+        .create_meeting("unrelated meeting remains writable")
+        .unwrap();
+}
+
 #[test]
 fn restore_rebinding_missing_current_binding_table_is_not_adopted_as_v3_or_recreated() {
     let root = tempfile::tempdir().unwrap();
@@ -11,9 +27,7 @@ fn restore_rebinding_missing_current_binding_table_is_not_adopted_as_v3_or_recre
     db.execute_batch("DROP TRIGGER relocation_restore_binding_fixed; DROP TRIGGER relocation_restore_binding_retained; DROP TABLE relocation_restore_bindings;").unwrap();
     drop(db);
     let before = std::fs::read(&path).unwrap();
-    assert!(Storage::open(root.path().into())
-        .unwrap()
-        .common_write_hold());
+    assert_rejected_registry_is_locally_blocked(root.path());
     assert_eq!(std::fs::read(&path).unwrap(), before);
     let db = Connection::open(root.path().join("meetings.sqlite3")).unwrap();
     assert!(db
@@ -66,9 +80,7 @@ fn old_registry_versions_two_and_three_are_rejected_without_rewriting_keep_recei
         db.pragma_update(None, "user_version", version).unwrap();
         drop(db);
         let before = std::fs::read(&journal).unwrap();
-        assert!(Storage::open(root.path().into())
-            .unwrap()
-            .common_write_hold());
+        assert_rejected_registry_is_locally_blocked(root.path());
         assert_eq!(std::fs::read(&journal).unwrap(), before);
         assert_eq!(
             std::fs::read(path.join("unknown")).unwrap(),
@@ -108,9 +120,7 @@ fn history_install_missing_current_history_is_not_adopted_as_old_schema_or_recre
     drop(s);
     let registry = root.path().join(".mon-scratch.sqlite3");
     let before = std::fs::read(&registry).unwrap();
-    assert!(Storage::open(root.path().into())
-        .unwrap()
-        .common_write_hold());
+    assert_rejected_registry_is_locally_blocked(root.path());
     assert_eq!(std::fs::read(&registry).unwrap(), before);
     let db = Connection::open(&registry).unwrap();
     assert_eq!(

@@ -74,7 +74,15 @@ fn kept_audio_supersession_sigkill_on_both_sides_of_rows_commit_preserves_consen
             Vec<(String, String, String)>,
         ) = serde_json::from_slice(&std::fs::read(&ready).unwrap()).unwrap();
         let storage = Storage::open(root.clone()).unwrap();
-        assert!(storage.data_write_blocked());
+        // Before the row transaction commits only this meeting is reserved.
+        // Detached history still needs the whole-store recovery/restart fence.
+        assert_eq!(storage.data_write_blocked(), phase == "rowsCommitted");
+        assert!(storage.require_global_data_writable().is_err());
+        assert!(storage.begin_meeting_work(&meeting, "job", None).is_err());
+        assert_eq!(
+            storage.begin_meeting_work(&other, "job", None).is_ok(),
+            phase == "beforeRowsCommit"
+        );
         assert_eq!(
             storage.get_meeting(&meeting).unwrap().is_none(),
             phase == "rowsCommitted"

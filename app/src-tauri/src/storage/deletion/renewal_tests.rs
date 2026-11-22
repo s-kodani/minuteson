@@ -340,7 +340,10 @@ fn renewal_multiple_generations_reject_stale_review_and_cold_reload_keeps_linked
     } = f;
     drop(storage);
     let reopened = Storage::open(path).unwrap();
-    assert!(reopened.data_write_blocked());
+    assert!(!reopened.data_write_blocked());
+    assert!(reopened.require_global_data_writable().is_err());
+    assert!(reopened.begin_meeting_work(&meeting, "job", None).is_err());
+    assert!(reopened.begin_meeting_work(&other, "job", None).is_ok());
     let mut cold = read(&reopened, &operation, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(cold.progress_json().unwrap(), expected);
     let f = Fixture {
@@ -354,7 +357,9 @@ fn renewal_multiple_generations_reject_stale_review_and_cold_reload_keeps_linked
         operation,
     };
     finish(&f, &mut cold);
-    assert!(f.storage.restart_required());
+    f.storage.release_meeting_deletion(&f.meeting).unwrap();
+    assert!(!f.storage.restart_required());
+    f.storage.require_global_data_writable().unwrap();
     let mut replay = completion::read(
         &f.storage,
         &f.operation,
@@ -1195,7 +1200,13 @@ fn sigkill_reconfirmation(reserved_root: bool) {
             external,
             operation,
         };
-        assert!(f.storage.data_write_blocked());
+        assert!(!f.storage.data_write_blocked());
+        assert!(f.storage.require_global_data_writable().is_err());
+        assert!(f
+            .storage
+            .begin_meeting_work(&f.meeting, "job", None)
+            .is_err());
+        assert!(f.storage.begin_meeting_work(&f.other, "job", None).is_ok());
         assert!(!f.file.exists());
         assert_eq!(
             std::fs::read(&extra).unwrap(),
@@ -1232,6 +1243,8 @@ fn sigkill_reconfirmation(reserved_root: bool) {
         }
         assert_eq!(snapshot(&f), original);
         assert_eq!(audit_count(&f), 1);
-        assert!(f.storage.restart_required());
+        f.storage.release_meeting_deletion(&f.meeting).unwrap();
+        assert!(!f.storage.restart_required());
+        f.storage.require_global_data_writable().unwrap();
     }
 }

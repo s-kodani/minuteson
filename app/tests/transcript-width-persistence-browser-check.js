@@ -46,12 +46,15 @@ async page => {
   await page.keyboard.press('End');
   check(await width() === 480, 'fixture did not choose wide panel');
   await page.setViewportSize({ width: 800, height: 900 });
-  await settle();
+  // ResizeObserver notifications follow real layout, independently of the
+  // virtual animation frames. Wait for the rendered constraint before checking
+  // that it did not overwrite the user's saved preference.
+  await page.waitForFunction(() => document.querySelector('.transcript-split > .workspace-panel-shell')?.getBoundingClientRect().width < 480);
   check(await width() < 480 && Number(await stored()) === 480, 'viewport constraint overwrote preferred width');
   await reopen();
   check(await width() < 480 && Number(await stored()) === 480, 'narrow restart overwrote preferred width');
   await page.setViewportSize({ width: 1280, height: 900 });
-  await settle();
+  await page.waitForFunction(() => document.querySelector('.transcript-split > .workspace-panel-shell')?.getBoundingClientRect().width === 480);
   check(await width() === 480, 'expanding after restart did not restore preferred width');
   results.push('temporary window constraints preserve the saved preference across reloads');
 
