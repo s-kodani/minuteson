@@ -4,6 +4,37 @@ async (page, capturePath) => {
   const results = [];
   const row = () => page.getByRole("row").filter({ hasText: "議事録UI確認" });
   const notice = () => page.locator(".meeting-detail-content > .workspace-warning");
+  const dismissInitialErrors = async () => {
+    // Recovery can leave a visible Sonner card in its exit animation. It is no
+    // longer actionable; finish that exit before selecting active notices.
+    await page.clock.runFor(500);
+    const active = page.locator('.mon-notification-stack [data-sonner-toast]:not([data-removed=true]) .toast-card')
+      .filter({ has: page.getByRole("button", { name: "エラー通知を閉じる", exact: true }) });
+    for (let i = 0; i < 5; i++) {
+      // Snapshot the current element so a simultaneous source recovery cannot
+      // make a locator wait for an old identity to reappear.
+      const [card] = await active.elementHandles();
+      if (!card) break;
+      const id = await card.getAttribute("data-toast-id");
+      const close = await card.$('button[aria-label="エラー通知を閉じる"]');
+      const stillActive = () => card.evaluate(element => element.isConnected && element.closest("[data-sonner-toast]")?.getAttribute("data-removed") !== "true");
+      // Match the notification-state checks: keyboard activation avoids a
+      // pointer-entry stack expansion. Dedicated toast checks cover clicking.
+      if (close && await stillActive()) {
+        try {
+          await close.focus();
+          await close.press("Enter");
+        } catch (cause) {
+          // A source may resolve the error between binding and activation.
+          // Only a confirmed retired card can finish without an activation.
+          if (await stillActive()) throw cause;
+        }
+      }
+      await page.clock.runFor(500);
+      await page.locator(`.mon-notification-stack .toast-card[data-toast-id=${JSON.stringify(id)}]`).waitFor({ state: "hidden" });
+    }
+    await page.locator('.mon-notification-stack button[aria-label="エラー通知を閉じる"]:visible').first().waitFor({ state: "hidden" });
+  };
   const scenario = async (reasons, label, { waitForTranscript = true } = {}) => {
     await page.setViewportSize({ width: 1360, height: 900 });
     await page.goto("http://127.0.0.1:1420/?resilience=1");
@@ -19,11 +50,7 @@ async (page, capturePath) => {
     check(await row().getByText("要確認", { exact: true }).count() === 0, "vague meeting status remains");
     // The resilience fixture initially fails unrelated model/list reads. Close
     // those notices through the product UI before capturing the status change.
-    const closeError = page.locator('.mon-notification-stack button[aria-label="エラー通知を閉じる"]:visible');
-    for (let i = 0; i < 5 && await closeError.count(); i++) {
-      await closeError.first().click();
-      await page.clock.runFor(500);
-    }
+    await dismissInitialErrors();
     if (reasons.length === 1 && reasons[0] === "audio_missing") {
       await page.screenshot({ path: capturePath("01-meeting-list-audio-missing.png") });
     }
