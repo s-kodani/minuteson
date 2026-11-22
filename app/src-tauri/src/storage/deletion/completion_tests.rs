@@ -1069,7 +1069,9 @@ fn compound_deletion_sigkill_at_eight_database_boundaries_reopens_and_finishes_a
             b"KEEP MODEL"
         );
         if !restart_required {
-            storage.release_meeting_deletion(&meeting).unwrap();
+            if pending_at_open {
+                storage.release_meeting_deletion(&meeting).unwrap();
+            }
             storage.require_global_data_writable().unwrap();
         }
         assert_eq!(storage.data_write_blocked(), restart_required);
