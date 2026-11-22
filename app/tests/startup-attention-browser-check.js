@@ -83,10 +83,81 @@ async (page, capturePath = path => path) => {
   check((await commands()).filter(command => command === "get_startup_report").length === 3, "transient startup reads did not recover automatically");
   results.push("transport failures retry at most three times and a manual read can recover; invalid replies never open normal operations");
 
+  const loadingLayout = () => page.locator(".startup-loading-group:visible").evaluate(group => {
+    const bounds = group.getBoundingClientRect(), label = group.querySelector("p"), track = group.querySelector('[role="progressbar"]');
+    const text = label.getBoundingClientRect(), bar = track.getBoundingClientRect();
+    const range = document.createRange(); range.selectNodeContents(label); const ink = range.getBoundingClientRect();
+    const content = document.querySelector(".windows-desktop-content")?.getBoundingClientRect() ?? { left:0, top:0, width:innerWidth, height:innerHeight };
+    const oneLine = ink.height < parseFloat(getComputedStyle(label).fontSize) * 2;
+    return Math.abs(bounds.left + bounds.width / 2 - content.left - content.width / 2) < 2 &&
+      Math.abs(bounds.top + bounds.height / 2 - content.top - content.height / 2) < 2 &&
+      Math.abs(bar.width - text.width) < 1 && (!oneLine || Math.abs(bar.width - ink.width) < 1.5) &&
+      Math.abs(bar.top - text.bottom - 20) < 1 && bar.height === 6 &&
+      bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight &&
+      document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight &&
+      !track.hasAttribute("aria-valuenow") && !track.textContent.trim();
+  });
+  const waitForProgressFill = () => page.waitForFunction(() => {
+    const track = [...document.querySelectorAll(".startup-loading-progress")].find(element => element.getClientRects().length);
+    if (!track) return false;
+    const bar = track.getBoundingClientRect(), fill = track.querySelector("span").getBoundingClientRect();
+    return Math.min(bar.right, fill.right) - Math.max(bar.left, fill.left) >= bar.width / 4;
+  });
+  for (const [variant, name] of [["starting", "MinutesOn"], ["windows-starting", "MinutesOn QA"]]) {
+    await page.goto(`http://127.0.0.1:1420/?fixture=${variant}&productName=${encodeURIComponent(name)}`);
+    await page.getByRole("status").getByText(`${name}を起動しています…`, { exact:true }).waitFor();
+    const progress = page.getByRole("progressbar", { name:"起動処理中", exact:true });
+    await progress.waitFor();
+    for (const width of [1360, 320, 240]) {
+      await page.setViewportSize({ width, height:800 });
+      check(await loadingLayout(), `startup label/bar lost intrinsic width, center, spacing or viewport fit: ${name}/${width}`);
+    }
+    const fill = progress.locator("span");
+    check(await fill.evaluate(element => getComputedStyle(element).animationName === "startup-loading-sweep"), "indeterminate startup did not use CSS animation");
+    await page.emulateMedia({ reducedMotion:"reduce" });
+    check(await fill.evaluate(element => {
+      const bar = element.parentElement.getBoundingClientRect(), bounds = element.getBoundingClientRect();
+      return getComputedStyle(element).animationName === "none" && bounds.width > 0 && bounds.left >= bar.left && bounds.right <= bar.right;
+    }), "reduced-motion startup has no visible static fill");
+    await page.emulateMedia({ reducedMotion:"no-preference" });
+    await page.setViewportSize({ width:variant === "starting" ? 1360 : 320, height:800 });
+    await waitForProgressFill();
+    await page.screenshot({ path:capturePath(variant === "starting" ? "startup-progress-1360.png" : "startup-progress-qa-320.png") });
+    check((await commands()).every(command => command === "get_startup_report"), "startup progress introduced a native command");
+  }
+  results.push("startup label and CSS progress form one natural-width group at desktop, narrow and small-window widths; QA name and reduced motion remain supported");
+
+  for (const [role, path, width, height] of [["main", "/src/main.tsx", 1360, 900], ["recorder", "/src/recorder-panel.tsx", 227, 101], ["recording-confirmation", "/src/recording-confirmation.tsx", 420, 280]]) {
+    const moduleURL = url => url.pathname === path;
+    const { promise: heldModule, resolve: releaseModule } = Promise.withResolvers();
+    const continuations = [];
+    const holdModule = route => { const continuation = heldModule.then(() => route.continue()); continuations.push(continuation); return continuation; };
+    await page.route(moduleURL, holdModule);
+    try {
+      await page.setViewportSize({ width, height });
+      const requested = page.waitForRequest(request => moduleURL(new URL(request.url())));
+      await page.goto(`http://127.0.0.1:1420/?fixture=windows-starting&window=${role}&productName=MinutesOn%20QA`);
+      await page.waitForFunction(() => !!window.startupFixture);
+      if (role === "main") {
+        await page.evaluate(() => { window.startupFixture.report = { schemaVersion:1, phase:"ready", failure:null, platform:"windows" }; });
+        await page.clock.runFor(250);
+      }
+      await requested;
+      await page.getByRole("progressbar", { name:"起動処理中", exact:true }).waitFor();
+      await page.locator(".startup-loading:visible").getByText("MinutesOn QAを起動しています…", { exact:true }).waitFor();
+      check(await loadingLayout() && await page.locator(".app-layout,.mini-shell").count() === 0, `bootstrap Suspense did not fit its shared startup group: ${role}/${width}x${height}`);
+      if (role === "recorder") { await waitForProgressFill(); await page.screenshot({ path:capturePath("startup-progress-qa-recorder-227.png") }); }
+    } finally {
+      releaseModule(); await Promise.all(continuations); await page.unroute(moduleURL, holdModule);
+      await page.goto("about:blank");
+    }
+  }
+  results.push("bootstrap Suspense retains the shared startup group for real main, 227x101 recorder and 420x280 confirmation module loads");
+
   for (const phase of ["ready", "blocked"]) {
     await page.goto(`http://127.0.0.1:1420/?fixture=transition-${phase}`);
     await page.getByRole("main", { name: "起動確認", exact: true }).waitFor();
-    const center = await page.getByRole("status").evaluate(element => {
+    const center = await page.locator(".startup-loading-group:visible").evaluate(element => {
       const bounds = element.getBoundingClientRect();
       return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2, width: innerWidth, height: innerHeight };
     });
@@ -98,6 +169,7 @@ async (page, capturePath = path => path) => {
       "workspace mounted before confirmed admission");
     if (phase === "ready") await page.getByRole("main", { name: "通常画面", exact: true }).waitFor();
     else { await quit().waitFor(); await noWorkspace(); }
+    check(await page.getByRole("progressbar", { name:"起動処理中", exact:true }).count() === 0, "startup progress remained after ready/blocked settled");
     const settled = (await commands()).length;
     await page.clock.runFor(450);
     check((await commands()).length === settled && settled >= 2,

@@ -1,7 +1,14 @@
 @import "./scrollbars.css";
 
 /* Presentation tokens apply to every window, dialog and editor. */
-.startup-loading{display:grid;place-items:center;width:100%;min-height:100dvh;padding:24px;box-sizing:border-box;text-align:center}.startup-loading p{margin:0}
+.startup-loading { display:grid; grid-template-columns:minmax(0,1fr); place-items:center; width:100%; min-height:100dvh; padding:24px; box-sizing:border-box; text-align:center; }
+.startup-loading-group { display:grid; width:max-content; max-width:100%; min-width:0; gap:20px; }
+.startup-loading p { min-width:0; margin:0; overflow-wrap:anywhere; }
+.startup-loading-progress { width:100%; min-width:0; height:6px; overflow:hidden; border-radius:999px; background:var(--border); }
+.startup-loading-progress > span { display:block; width:40%; height:100%; border-radius:inherit; background:var(--primary); animation:startup-loading-sweep 1.4s ease-in-out infinite; }
+@keyframes startup-loading-sweep { from { transform:translateX(-100%); } to { transform:translateX(250%); } }
+@media(prefers-reduced-motion:reduce) { .startup-loading-progress > span { animation:none; transform:translateX(75%); } }
+@media(max-height:160px) { .startup-loading { padding-block:8px; } }
 .startup-attention-lead { margin:0; font-size:15px; font-weight:500; }
 .startup-attention-error { color:var(--danger-text); }
 .startup-status-reload { display:inline-flex; align-items:center; gap:6px; margin-block-start:12px; white-space:nowrap; }

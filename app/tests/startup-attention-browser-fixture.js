@@ -28,7 +28,8 @@ if (variant === "legacy-salvage-field") delete f.report.failure.salvageAvailable
 if (variant === "malformed-salvage-field") f.report.failure.salvageAvailable = "true";
 if (variant === "blocked-clean") f.report.failure.message = "会議データベースの破損を確認しました。\n保存先: /safe/会議アーカイブ\n元の会議データと音声ファイルを保持しています。";
 if (variant === "ready") f.report = { schemaVersion: 1, phase: "ready", failure: null };
-if (variant === "starting" || variant.startsWith("transition-")) f.report = { schemaVersion: 1, phase: "starting", failure: null };
+if (variant === "starting" || variant === "windows-starting" || variant.startsWith("transition-")) f.report = { schemaVersion: 1, phase: "starting", failure: null,
+  ...(variant === "windows-starting" ? { platform: "windows" } : {}) };
 if (variant === "selection") f.report.failure = { ...report.failure, stage: "storage_selection", message: "起動設定にアクセスできませんでした。読み取り権限を確認してください。", meetingRoot: null, salvageAvailable: false };
 if (variant === "replaced-registration") f.report.failure = { ...report.failure, stage: "storage_selection", message: "登録したフォルダーまたは会議データのファイルが現在のものと一致しません。保存先を確認してください。", salvageAvailable: false };
 if (variant === "invalid") f.report = { schemaVersion: 1, phase: "ready", failure: report.failure };
