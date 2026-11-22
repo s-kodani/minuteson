@@ -64,6 +64,8 @@ PRは変更した経路の検査だけを実行します。最終ゲートは常
 
 通常Rustはライブラリのテストを最大2プロセス×4スレッドで実行します。0件のバイナリテスト・doctestのための追加コンパイルを省き、実行ファイルのリンクは正式パッケージ生成で確認します。全件検証のスレッド設定は維持します。
 
+通常ネイティブ検証でも、macOSのSwift検査とWindowsの録音ヘルパーのCMake・CTestを実行します。WindowsのBluetooth再接続・停止待ち・単一WAVの回帰検査はPR段階で必須とし、推論資材やインストーラーを準備する全件検証まで先送りしません。
+
 mainのコード変更は[Main build](../../.github/workflows/release-build.yml)に集約し、全件Rust・Swift／Windows連携・実モデル・フロントエンド・セキュリティと最終パッケージ生成を一度実行します。EXEとMSIXは、資材を準備した同じWindows jobで順に作ります。macOSは検証jobで最終アプリを準備し、資格情報を持つ別jobで署名・公証します。文書だけの変更では軽い検査だけを行い、配布物を生成しません。
 
 同じSHAに対する日次ネイティブ全件実行は廃止し、[Desktop full validation](../../.github/workflows/desktop-daily.yml)の手動実行を残します。[Security validation](../../.github/workflows/security.yml)の日次検査は毎日09:30（日本時間）に継続します。公開時にテストやビルドを再実行しません。

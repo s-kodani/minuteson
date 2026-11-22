@@ -342,7 +342,7 @@ class DesktopWorkflowTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn('incorrectly continued', result.stdout)
 
-    def test_pr_and_main_keep_quick_rust_and_validate_macos_capture(self):
+    def test_pr_and_main_keep_quick_rust_and_validate_native_capture_on_both_platforms(self):
         for event in ("pull_request", "push"):
             for operating_system in ("Windows", "macOS"):
                 with self.subTest(event=event, os=operating_system):
@@ -350,7 +350,7 @@ class DesktopWorkflowTests(unittest.TestCase):
                     self.assertIn("--suite quick --processes 2 --threads 4", commands)
                     self.assertIn("--timings-json", commands)
                     for excluded in ("tauri:windows:qa:build", "tauri:windows:store:build", "--swift-fixture",
-                                     "ctest --test-dir", "--suite full"):
+                                     "--suite full"):
                         self.assertNotIn(excluded, commands)
                     # Quick Rust tests cannot compile or exercise Swift capture.
                     # Keep installer/resource packaging separate while requiring
@@ -362,6 +362,13 @@ class DesktopWorkflowTests(unittest.TestCase):
                             self.assertNotIn(capture, commands)
                     if operating_system == "macOS":
                         self.assertLess(commands.index("swift test"), commands.index("--suite quick"))
+                        self.assertNotIn("ctest --test-dir", commands)
+                    else:
+                        self.assertIn("mon_windows_capture_dependencies.py", commands)
+                        self.assertIn("-DBUILD_TESTING=ON", commands)
+                        self.assertIn("cmake --build probes/windows-capture/build --config Release", commands)
+                        self.assertEqual(commands.count("ctest --test-dir"), 1)
+                        self.assertIn("--output-on-failure --no-tests=error", commands)
 
     def test_reusable_full_and_manual_default_keep_packaging_and_native_checks(self):
         dispatch = self.events["workflow_dispatch"]["inputs"]["suite"]

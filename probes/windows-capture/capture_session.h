@@ -148,8 +148,8 @@ struct CaptureSession {
           if(system.binding.state=="connected"){
             std::vector<float> signal(packet.frames*2,0.25f);
             synthetic_mixer.add(synthetic_primary,first,packet.frames,signal.data(),packet.flags,packet.arrival,emit_synthetic);
-            // After one durable checkpoint, inject a truly late native packet.
-            // The production path must fail without shifting it into output.
+            // After one durable checkpoint, inject a late native packet.
+            // Preserve its complete PCM with an explicit estimated clock map.
             if(s.scenario=="endpoint-switch-late"&&packet.position>=4800*45){
               try{synthetic_mixer.add(synthetic_delayed,first-24000,packet.frames,signal.data(),packet.flags,packet.arrival,emit_synthetic);}
               catch(...){system.previous_alignment=synthetic_mixer.diagnostics();throw;}
@@ -244,8 +244,7 @@ struct CaptureSession {
     if(synthetic_endpoints){synthetic_mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit_synthetic);system.previous_alignment=synthetic_mixer.diagnostics();}
     if(selection_preparation)selection_preparation->cancel();
     // Stop both native owners before draining or waiting for any disk job.
-    mic.cancel_preparation();system.cancel_preparation();
-    if(mic.reader)mic.reader->stop();if(system.reader)system.reader->stop();
+    mic.stop_acquisition();system.stop_acquisition();
     mic.close();auto mic_closed=std::max(qpc(),mic.clock.parts.empty()?0ULL:mic.clock.parts.back().last_end);system.close();auto closed=std::max(qpc(),system.clock.parts.empty()?0ULL:system.clock.parts.back().last_end);closed=std::max(closed,mic_closed);
     // Preserve the buffered tail even when an unreturned native preparation
     // prevents producer-closure proof. Only finish() may publish closed=true.
@@ -272,7 +271,7 @@ struct CaptureSession {
   }catch(const std::exception& error){
     // Stop every source first. Then preserve accepted queued/tail PCM where the
     // disk owner is still usable; never publish producer closure after failure.
-    for(auto* lane:{mic_lane.get(),system_lane.get()})if(lane){lane->cancel_preparation();if(lane->reader)lane->reader->stop();}
+    for(auto* lane:{mic_lane.get(),system_lane.get()})if(lane){try{lane->stop_acquisition();}catch(...) {}}
     for(auto* lane:{mic_lane.get(),system_lane.get()})if(lane){try{lane->close();}catch(...) {}if(lane->raw){try{lane->raw->drain();lane->raw->seal();}catch(...) {}}}
     if(commits){try{commits->wait();}catch(...) {}}
     if(live_wav){try{live_wav->preserve_prefix();}catch(...) {}}

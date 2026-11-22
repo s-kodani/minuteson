@@ -49,11 +49,35 @@ struct CapturePacket {
   std::uint64_t storage_end=0;
   std::uint64_t sequence=0;
 };
+// Render endpoints have independent native owners, but share one transient
+// ingress allowance. This is not durable-storage credit: a pop releases it.
+class PacketIngressBudget {
+  std::mutex mutex_;
+  std::uint64_t bytes_=0,nanoseconds_=0;
+  std::uint32_t packets_=0;
+ public:
+  void acquire(std::uint64_t bytes,std::uint64_t duration){
+    std::lock_guard lock(mutex_);
+    if(!mon_capture_permits_pending(bytes_,nanoseconds_,packets_,bytes,duration))
+      throw std::runtime_error("PC音声の取得待ちが上限に達しました。確定済み音声は保持しています");
+    bytes_+=bytes;nanoseconds_+=duration;++packets_;
+  }
+  void release(std::uint64_t bytes,std::uint64_t duration,std::uint32_t packets=1){
+    std::lock_guard lock(mutex_);bytes_-=bytes;nanoseconds_-=duration;packets_-=packets;
+  }
+  std::uint64_t pending_nanoseconds(){std::lock_guard lock(mutex_);return nanoseconds_;}
+};
 // At most 20 seconds per lane (11 MiB total PCM for mono + stereo).
 // Never discard old audio to make room; an exhausted writer stops explicitly.
 class PacketQueue {
  public:
   static inline const std::uint64_t max_frames=48000*mon_capture_limit(7)/1000000000;
+  ~PacketQueue(){if(ingress_)ingress_->release(bytes_,nanoseconds_,static_cast<std::uint32_t>(packets_.size()));}
+  void attach_ingress(std::shared_ptr<PacketIngressBudget> budget){
+    std::lock_guard lock(mutex_);
+    if(ingress_||!packets_.empty())throw std::logic_error("transient ingress already active");
+    ingress_=std::move(budget);
+  }
   void push(CapturePacket packet) {
     // Rejection cannot acquire storage credits or contaminate the converter.
     const bool silent=(packet.flags&2)!=0;
@@ -66,9 +90,13 @@ class PacketQueue {
     if(!mon_capture_permits_pending(bytes_,nanoseconds_,
         static_cast<std::uint32_t>(packets_.size()),bytes,duration))
       throw std::runtime_error("音声の保存待ちが上限に達しました。保存先の負荷を確認してください。確定済み音声は保持しています");
-    if(storage_)packet.storage_end=storage_->acquire(lane_,packet.frames);
-    packet.sequence=++sequence_;
-    bytes_+=bytes;nanoseconds_+=duration;frames_+=packet.frames;peak_=std::max(peak_,frames_);packets_.push_back(std::move(packet));
+    if(ingress_)ingress_->acquire(bytes,duration);
+    try{
+      if(storage_)packet.storage_end=storage_->acquire(lane_,packet.frames);
+      const auto frames=packet.frames;packet.sequence=sequence_+1;
+      packets_.push_back(std::move(packet));++sequence_;
+      bytes_+=bytes;nanoseconds_+=duration;frames_+=frames;peak_=std::max(peak_,frames_);
+    }catch(...){if(ingress_)ingress_->release(bytes,duration);throw;}
   }
   // Preparation may be cancelled before adoption, so only product-owned
   // ingress is charged. Stamp the already bounded preparation queue atomically
@@ -83,7 +111,8 @@ class PacketQueue {
   std::optional<CapturePacket> pop() {
     std::lock_guard lock(mutex_);
     if(packets_.empty()){if(failure_)std::rethrow_exception(failure_);return std::nullopt;}
-    auto packet=std::move(packets_.front());packets_.pop_front();frames_-=packet.frames;bytes_-=std::uint64_t(packet.samples.size())*sizeof(float);nanoseconds_-=(std::uint64_t(packet.frames)*1000000000+47999)/48000;return packet;
+    auto packet=std::move(packets_.front());packets_.pop_front();const auto bytes=std::uint64_t(packet.samples.size())*sizeof(float),duration=(std::uint64_t(packet.frames)*1000000000+47999)/48000;
+    frames_-=packet.frames;bytes_-=bytes;nanoseconds_-=duration;if(ingress_)ingress_->release(bytes,duration);return packet;
   }
   // Only the acquisition owner may publish this after draining the native
   // buffers and any adapter-held PCM preceding `through`. It belongs after
@@ -109,6 +138,7 @@ class PacketQueue {
   std::optional<Observation> observation_;
   std::exception_ptr failure_;
   std::shared_ptr<StoragePending> storage_;unsigned lane_=0;
+  std::shared_ptr<PacketIngressBudget> ingress_;
 };
 class CaptureReader {
  public:
