@@ -72,7 +72,7 @@ fn detach_setting(db: &Connection, setting: &mut Setting) -> Result<bool, String
     };
     if changed {
         setting.json = json.map_err(err)?;
-        setting.hash = format!("{:x}", Sha256::digest(setting.json.as_bytes()));
+        setting.hash = mon_core::hash::sha256_hex(setting.json.as_bytes());
     }
     Ok(changed)
 }
@@ -526,7 +526,7 @@ impl<F: Fn() -> bool> Inspection<'_, F> {
         let manifest = Asset {
             id: Uuid::new_v4().to_string(),
             size: contents::manifest_bytes().len() as i64,
-            hash: format!("{:x}", Sha256::digest(contents::manifest_bytes())),
+            hash: mon_core::hash::sha256_hex(contents::manifest_bytes()),
         };
         self.plan.contents.meetings.push(MeetingContents {
             meeting,
@@ -825,7 +825,7 @@ impl<F: Fn() -> bool> Inspection<'_, F> {
                 let source = crate::model_placement::fs::Directory::open_existing(&anchor.path().join(old))?;
                 let json: String = r.get(2).map_err(err)?;
                 let hash: String = r.get(3).map_err(err)?;
-                if json.len() > 65_536 || format!("{:x}", Sha256::digest(json.as_bytes())) != hash {
+                if json.len() > 65_536 || mon_core::hash::sha256_hex(json.as_bytes()) != hash {
                     return Err("モデルの登録情報を確認できません".into());
                 }
                 let mut record: PlacementRecord = serde_json::from_str(&json).map_err(err)?;

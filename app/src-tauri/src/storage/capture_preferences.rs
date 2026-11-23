@@ -19,7 +19,7 @@ pub(super) fn load(db: &Connection) -> Result<(Option<String>, i64), String> {
         return Ok((None, 0));
     };
     let json = json.ok_or("前回のマイク設定が容量上限を超えています")?;
-    if format!("{:x}", Sha256::digest(json.as_bytes())) != hash
+    if mon_core::hash::sha256_hex(json.as_bytes()) != hash
         || !(1..=MAX_VERSION).contains(&version)
     {
         return Err("前回のマイク設定の整合性を確認できません".into());
@@ -49,7 +49,7 @@ pub(super) fn save(tx: &rusqlite::Transaction<'_>, uid: &str) -> Result<(), Stri
         microphone_uid: uid.into(),
     })
     .map_err(|e| e.to_string())?;
-    let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+    let hash = mon_core::hash::sha256_hex(json.as_bytes());
     tx.execute("INSERT INTO app_settings(key,value_json,content_hash,lock_version,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,content_hash=excluded.content_hash,lock_version=excluded.lock_version,updated_at=excluded.updated_at",params![KEY,json,hash,version,now_ms()?]).map_err(|e|e.to_string())?;
     Ok(())
 }

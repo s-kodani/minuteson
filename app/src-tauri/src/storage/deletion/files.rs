@@ -212,7 +212,7 @@ impl LongAudioPaths {
     }
 }
 fn hash(s: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(s))
+    mon_core::hash::sha256_hex(s)
 }
 
 #[derive(Default)]

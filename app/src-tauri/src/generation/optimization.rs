@@ -62,10 +62,7 @@ pub(super) fn select(
     {
         return Ok(Some(Policy::gguf(engine, runtime)));
     }
-    let prompt = format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&(extract, merge)).map_err(|e| e.to_string())?)
-    );
+    let prompt = mon_core::hash::sha256_hex(serde_json::to_vec(&(extract, merge)).map_err(|e| e.to_string())?);
     let entries: Vec<Evidence> = serde_json::from_str(include_str!("optimization-evidence.json"))
         .map_err(|e| e.to_string())?;
     for e in entries {
@@ -79,10 +76,7 @@ pub(super) fn select(
                 version: 1,
                 token_packing: e.token_packing,
                 prefix_reuse: e.prefix_reuse,
-                evidence_hash: format!(
-                    "{:x}",
-                    Sha256::digest(serde_json::to_vec(&e).map_err(|e| e.to_string())?)
-                ),
+                evidence_hash: mon_core::hash::sha256_hex(serde_json::to_vec(&e).map_err(|e| e.to_string())?),
             }));
         }
     }
@@ -101,12 +95,10 @@ impl Policy {
             version: 2,
             token_packing: true,
             prefix_reuse: false,
-            evidence_hash: format!(
-                "{:x}",
-                Sha256::digest(format!(
+            evidence_hash: mon_core::hash::sha256_hex(format!(
                     "gguf-tokenizer-v1:{}:{}",
                     engine.model.sha256, runtime.sha256
-                ))
+                )
             ),
         }
     }
@@ -332,10 +324,7 @@ pub(super) fn fits(system: &str, prompt: &str) -> Option<bool> {
 }
 impl Counter {
     fn count(&mut self, system: &str, prompt: &str) -> Result<u32, String> {
-        let key = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&(system, prompt)).map_err(|e| e.to_string())?)
-        );
+        let key = mon_core::hash::sha256_hex(serde_json::to_vec(&(system, prompt)).map_err(|e| e.to_string())?);
         if let Some(n) = self.cache.get(&key) {
             self.hits += 1;
             return Ok(*n);

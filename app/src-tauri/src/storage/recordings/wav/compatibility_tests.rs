@@ -179,7 +179,7 @@ fn retry_registers_the_exact_raw_bytes_of_a_reformatted_frozen_publication() {
         )
         .unwrap();
     assert_eq!(size, bytes.len() as i64);
-    assert_eq!(hash, format!("{:x}", Sha256::digest(&bytes)));
+    assert_eq!(hash, mon_core::hash::sha256_hex(&bytes));
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     storage
         .verify_meeting_asset_cancellable(

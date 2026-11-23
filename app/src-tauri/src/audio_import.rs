@@ -546,7 +546,7 @@ pub(crate) fn import_configured(
         output.sync_all().map_err(|e| e.to_string())?;
         drop(output);
         watch.verify()?;
-        if size != selected.proof.size || format!("{:x}", hash.finalize()) != selected.proof.sha256
+        if size != selected.proof.size || mon_core::hash::sha256_output_hex(hash.finalize()) != selected.proof.sha256
         {
             return Err("管理コピーのハッシュが元音声と一致しません".into());
         }

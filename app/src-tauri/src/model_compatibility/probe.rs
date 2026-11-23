@@ -129,7 +129,7 @@ fn artifact(
     Ok(Artifact {
         name: name.into(),
         size: count,
-        sha256: format!("{:x}", hash.finalize()),
+        sha256: mon_core::hash::sha256_output_hex(hash.finalize()),
     })
 }
 fn artifacts(

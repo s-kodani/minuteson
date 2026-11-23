@@ -187,7 +187,7 @@ fn observe(
             queue.extend(children);
         }
     }
-    Ok((format!("{:x}", digest.finalize()), count, complete))
+    Ok((mon_core::hash::sha256_output_hex(digest.finalize()), count, complete))
 }
 
 impl Storage {

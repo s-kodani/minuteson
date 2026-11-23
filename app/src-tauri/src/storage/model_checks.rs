@@ -44,7 +44,7 @@ pub(super) fn read(db: &Connection, id: &str) -> Result<Option<SavedCheck>, Stri
                 || finished.is_none()
                 || error.is_some()
                 || hash.as_deref()
-                    != Some(format!("{:x}", Sha256::digest(json.as_bytes())).as_str())
+                    != Some(mon_core::hash::sha256_hex(json.as_bytes()).as_str())
             {
                 return Err("互換性の成功証拠・SHAが一致しません".into());
             }

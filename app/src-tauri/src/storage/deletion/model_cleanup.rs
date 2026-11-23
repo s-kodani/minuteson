@@ -148,7 +148,7 @@ impl Journal {
     }
 }
 fn digest(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    mon_core::hash::sha256_hex(value.as_bytes())
 }
 fn read(db: &Connection, package: &str) -> Result<Option<Journal>, String> {
     let row: Option<(Option<String>, String)> = db.query_row(

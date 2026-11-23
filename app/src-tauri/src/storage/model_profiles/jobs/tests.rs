@@ -232,7 +232,7 @@ fn managed_asr_verification_still_checks_implicit_libraries_and_notices() {
     {
         let bytes = declared.relative_path.as_bytes();
         actual.actual_size = bytes.len() as u64;
-        actual.actual_hash = format!("{:x}", Sha256::digest(bytes));
+        actual.actual_hash = mon_core::hash::sha256_hex(bytes);
         declared.expected_size = Some(actual.actual_size);
         declared.expected_hash = Some(actual.actual_hash.clone());
         let path = directory.join(&declared.relative_path);

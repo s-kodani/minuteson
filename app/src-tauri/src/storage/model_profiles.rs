@@ -171,10 +171,7 @@ impl Settings {
     }
 }
 fn digest<T: Serialize>(value: &T) -> Result<String, String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(value).map_err(|e| e.to_string())?)
-    ))
+    Ok(mon_core::hash::sha256_hex(serde_json::to_vec(value).map_err(|e| e.to_string())?))
 }
 fn hash(value: &str) -> bool {
     value.len() == 64
@@ -348,7 +345,7 @@ fn heads(db: &Connection) -> Result<(Heads, i64), String> {
         }
         return Ok((Heads::default(), 0));
     };
-    if text.len() > 16384 || version < 0 || format!("{:x}", Sha256::digest(text.as_bytes())) != h {
+    if text.len() > 16384 || version < 0 || mon_core::hash::sha256_hex(text.as_bytes()) != h {
         return Err("モデル構成の参照・内容ハッシュが不正です".into());
     }
     let heads: Heads = serde_json::from_str(&text).map_err(|e| e.to_string())?;
@@ -678,7 +675,7 @@ fn persist<T: Serialize>(
     if text.len() > 192 * 1024 {
         return Err("モデル適用後の設定が大きすぎます".into());
     }
-    let hash = format!("{:x}", Sha256::digest(text.as_bytes()));
+    let hash = mon_core::hash::sha256_hex(text.as_bytes());
     db.execute("INSERT INTO app_settings(key,value_json,content_hash,lock_version,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,content_hash=excluded.content_hash,lock_version=excluded.lock_version,updated_at=excluded.updated_at",params![key,text,hash,version,now_ms()?]).map_err(|e|e.to_string())?;
     Ok(())
 }

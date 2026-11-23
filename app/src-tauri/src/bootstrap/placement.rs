@@ -883,7 +883,7 @@ impl Placement<'_> {
             node,
             &crate::native_fs::metadata(&fd).map_err(|e| e.to_string())?,
         )?;
-        if size != node.entry.size || Some(format!("{:x}", sha.finalize())) != node.entry.hash {
+        if size != node.entry.size || Some(mon_core::hash::sha256_output_hex(sha.finalize())) != node.entry.hash {
             return Err("配置済みファイルのサイズ・SHAが一致しません。上書きしません".into());
         }
         Ok(())

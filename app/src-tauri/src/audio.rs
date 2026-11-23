@@ -215,7 +215,7 @@ impl VerifiedAudio {
             }
             hasher.update(&buffer[..count]);
         }
-        if format!("{:x}", hasher.finalize()) != expected_hash {
+        if mon_core::hash::sha256_output_hex(hasher.finalize()) != expected_hash {
             return Err("音声ファイルのハッシュが保存時と一致しません".into());
         }
         file.rewind().map_err(|e| e.to_string())?;
@@ -578,7 +578,7 @@ fn inspect_recorded_pcm(
         position = end;
     }
     if let (Some(expected), Some(pcm)) = (expected_pcm, pcm_hasher) {
-        if format!("{:x}", pcm.finalize()) != expected {
+        if mon_core::hash::sha256_output_hex(pcm.finalize()) != expected {
             return Err("録音WAVの確定PCMと保存内容が一致しません".into());
         }
     }
@@ -590,7 +590,7 @@ fn inspect_recorded_pcm(
     {
         return Err("録音音声が検証中に変更されました".into());
     }
-    Ok((format, size, format!("{:x}", hasher.finalize())))
+    Ok((format, size, mon_core::hash::sha256_output_hex(hasher.finalize())))
 }
 
 fn decode_sample(bytes: &[u8], format: &PcmFormat) -> Result<f32, String> {
@@ -668,7 +668,7 @@ pub(crate) mod tests {
         VerifiedAudio::open(
             file,
             bytes.len() as u64,
-            &format!("{:x}", Sha256::digest(bytes)),
+            &mon_core::hash::sha256_hex(bytes),
         )
     }
 
@@ -704,7 +704,7 @@ pub(crate) mod tests {
                 )
             );
             assert_eq!(size, bytes.len() as u64);
-            assert_eq!(hash, format!("{:x}", Sha256::digest(&bytes)));
+            assert_eq!(hash, mon_core::hash::sha256_hex(&bytes));
             file.rewind().unwrap();
             let mut after = Vec::new();
             file.read_to_end(&mut after).unwrap();
@@ -840,7 +840,7 @@ pub(crate) mod tests {
         let mut audio = VerifiedAudio::open(
             file.try_clone().unwrap(),
             bytes.len() as u64,
-            &format!("{:x}", Sha256::digest(&bytes)),
+            &mon_core::hash::sha256_hex(&bytes),
         )
         .unwrap();
         file.set_len(bytes.len() as u64 - 1).unwrap();
@@ -858,7 +858,7 @@ pub(crate) mod tests {
             let mut audio = VerifiedAudio::open(
                 File::open(path).unwrap(),
                 bytes.len() as u64,
-                &format!("{:x}", Sha256::digest(&bytes)),
+                &mon_core::hash::sha256_hex(&bytes),
             )
             .unwrap();
             assert_eq!(

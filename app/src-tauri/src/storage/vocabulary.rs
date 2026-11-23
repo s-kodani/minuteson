@@ -58,10 +58,7 @@ pub(crate) struct VocabularySnapshot {
 }
 
 fn hash<T: Serialize>(value: &T) -> Result<String, String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(value).map_err(|e| e.to_string())?)
-    ))
+    Ok(mon_core::hash::sha256_hex(serde_json::to_vec(value).map_err(|e| e.to_string())?))
 }
 pub(crate) fn validate(entries: &[VocabularyEntry]) -> Result<(), String> {
     if entries.len() > 500 {

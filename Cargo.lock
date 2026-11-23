@@ -2525,6 +2525,7 @@ dependencies = [
 name = "mon-contracts"
 version = "0.1.0"
 dependencies = [
+ "mon-core",
  "schemars 0.8.22",
  "serde",
  "serde_json",

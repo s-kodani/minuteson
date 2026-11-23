@@ -97,7 +97,17 @@ impl<'a> Session<'a> {
         {
             watched.push(StableFile::watch(f)?);
         }
-        let namespace=format!("{:x}",Sha256::digest(serde_json::to_vec(&serde_json::json!({"version":"speaker-window-pcm16-v1","extractorVersion":crate::voice::EXTRACTOR,"source":source,"engine":engine,"extractor":extractor,"residentRuntime":runtime})).map_err(|e|e.to_string())?));
+        let namespace = mon_core::hash::sha256_hex(
+            serde_json::to_vec(&serde_json::json!({
+                "version": "speaker-window-pcm16-v1",
+                "extractorVersion": crate::voice::EXTRACTOR,
+                "source": source,
+                "engine": engine,
+                "extractor": extractor,
+                "residentRuntime": runtime,
+            }))
+            .map_err(|e| e.to_string())?,
+        );
         let audio = audio::reuse::Scope::enter()?;
         let worker = resident::Scope::enter(storage.root(), runtime)?;
         internal_logs::detail(context.clone(),"preparing","info",Duration::ZERO,&serde_json::json!({"event":"話者特徴セッション開始","warmModel":runtime.is_some(),"audioIndexReuse":true,"featureCache":"memory"}).to_string());

@@ -187,7 +187,7 @@ impl Cursor {
             let mut pcm = vec![0; receipt.frames as usize * 2];
             crate::native_fs::read_exact_at(&file, &mut pcm, 80 + frames * 2)
                 .map_err(|e| e.to_string())?;
-            if format!("{:x}", Sha256::digest(&pcm)) != receipt.pcm_sha256 {
+            if mon_core::hash::sha256_hex(&pcm) != receipt.pcm_sha256 {
                 return Err("録音WAVの確定PCMが変更されています".into());
             }
             let receipt_file = directory.required(&format!("wav-{sequence:08}.json"), false)?;
@@ -198,7 +198,7 @@ impl Cursor {
                 .modified()
                 .ok();
             origin = Some(receipt.capture_origin_nanoseconds);
-            chain = Some(format!("{:x}", Sha256::digest(&bytes)));
+            chain = Some(mon_core::hash::sha256_hex(&bytes));
             frames = end;
             for (lane, count) in receipt.coverage_frames.into_iter().enumerate() {
                 coverage[lane] += count;
@@ -403,11 +403,8 @@ impl Storage {
         let (audio_relative, audio_stamp, hash) = if source.truncated {
             // The only source includes potentially rescuable later audio: retain
             // it byte-for-byte and materialize only the independently proven prefix.
-            let key = format!(
-                "{:x}",
-                Sha256::digest(
+            let key = mon_core::hash::sha256_hex(
                     format!("{}:{}:{}", session.id, tip.frames, source.pcm_hash).as_bytes()
-                )
             );
             let leaf = format!("wav-recovery-{key}");
             let output = if base.join(&leaf).exists() {
@@ -451,10 +448,10 @@ impl Storage {
                 source
                     .stamp
                     .require(&directory.required("recording.wav", false)?)?;
-                if format!("{:x}", pcm_hasher.finalize()) != source.pcm_hash {
+                if mon_core::hash::sha256_output_hex(pcm_hasher.finalize()) != source.pcm_hash {
                     return Err("録音WAVの救出中にPCMが変更されました".into());
                 }
-                Some(format!("{:x}", hasher.finalize()))
+                Some(mon_core::hash::sha256_output_hex(hasher.finalize()))
             } else {
                 None
             };
@@ -506,7 +503,16 @@ impl Storage {
             (relative.join("recording.wav"), stamp, hash)
         };
         crate::operation_observation::stage("verifying_audio", None, "bytes");
-        let key = format!("{:x}",Sha256::digest(serde_json::to_vec(&serde_json::json!({"owner":session.id,"config":config_text,"frames":tip.frames,"lastReceipt":tip.last_entry_sha256,"pcm":source.pcm_hash})).map_err(|error|error.to_string())?));
+        let key = mon_core::hash::sha256_hex(
+            serde_json::to_vec(&serde_json::json!({
+                "owner": session.id,
+                "config": config_text,
+                "frames": tip.frames,
+                "lastReceipt": tip.last_entry_sha256,
+                "pcm": source.pcm_hash,
+            }))
+            .map_err(|error| error.to_string())?,
+        );
         let mut metadata_issues = Vec::new();
         if source_document.is_none() {
             metadata_issues.push("manifest_unavailable");
@@ -596,7 +602,7 @@ impl Storage {
         let proof = CapturedFile {
             relative: relative.join(&manifest_name),
             size_bytes: canonical_bytes.len() as i64,
-            hash: format!("{:x}", Sha256::digest(&canonical_bytes)),
+            hash: mon_core::hash::sha256_hex(&canonical_bytes),
         };
         let audio_proof = CapturedFile {
             relative: audio_relative.clone(),
@@ -735,9 +741,9 @@ mod tests {
             serde_json::to_vec(&owner).unwrap(),
         )
         .unwrap();
-        let entry=serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"ownerId":session.id,"sequence":1,"frameStart":0,"frames":frames,"captureOriginNanoseconds":1_000_000_000_i64,"pcmSHA256":format!("{:x}",Sha256::digest(&pcm)),"previousEntrySHA256":null,"missingRanges":[[16000,32000]],"coverageFrames":[16000,16000]})).unwrap();
+        let entry=serde_json::to_vec(&serde_json::json!({"schemaVersion":1,"ownerId":session.id,"sequence":1,"frameStart":0,"frames":frames,"captureOriginNanoseconds":1_000_000_000_i64,"pcmSHA256":mon_core::hash::sha256_hex(&pcm),"previousEntrySHA256":null,"missingRanges":[[16000,32000]],"coverageFrames":[16000,16000]})).unwrap();
         std::fs::write(base.join("wav-00000001.json"), &entry).unwrap();
-        let tip = serde_json::json!({"schemaVersion":1,"ownerId":session.id,"fileName":"recording.wav","frames":frames,"checkpoints":1,"lastEntrySHA256":format!("{:x}",Sha256::digest(&entry)),"captureOriginNanoseconds":1_000_000_000_i64,"producerClosed":closed});
+        let tip = serde_json::json!({"schemaVersion":1,"ownerId":session.id,"fileName":"recording.wav","frames":frames,"checkpoints":1,"lastEntrySHA256":mon_core::hash::sha256_hex(&entry),"captureOriginNanoseconds":1_000_000_000_i64,"producerClosed":closed});
         std::fs::write(
             base.join("single-wav.json"),
             serde_json::to_vec(&tip).unwrap(),

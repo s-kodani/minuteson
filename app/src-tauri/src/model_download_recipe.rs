@@ -78,10 +78,7 @@ impl RecipeExt for Recipe {
     fn ensure_placement_record_fits(&self) -> Result<(), String> {
         // Expected metadata for a byte-size budget ONLY, never observed file
         // evidence, a stored intent, a download receipt or execution permission.
-        let manifest_hash = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&self.manifest).map_err(|e| e.to_string())?)
-        );
+        let manifest_hash = mon_core::hash::sha256_hex(serde_json::to_vec(&self.manifest).map_err(|e| e.to_string())?);
         let files = self
             .manifest
             .files
@@ -136,7 +133,7 @@ impl RecipeExt for Recipe {
         Ok(bytes)
     }
     fn hash(&self) -> Result<String, String> {
-        Ok(format!("{:x}", Sha256::digest(self.bytes()?)))
+        Ok(mon_core::hash::sha256_hex(self.bytes()?))
     }
     fn validate(&self) -> Result<u64, String> {
         self.validate_for(Target::current()?)
@@ -344,7 +341,7 @@ impl DownloadOrigin {
         recipe.validate_for(manifest.target)?;
         let canonical = serde_json::to_vec(manifest).map_err(|e| e.to_string())?;
         if recipe.hash()? != self.recipe_hash
-            || format!("{:x}", Sha256::digest(canonical)) != manifest_hash
+            || mon_core::hash::sha256_hex(canonical) != manifest_hash
         {
             return Err("ダウンロード由来の定義・manifest・SHAが一致しません".into());
         }

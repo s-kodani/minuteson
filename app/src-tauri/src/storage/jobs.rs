@@ -1280,7 +1280,7 @@ pub(super) fn hash_bytes(domain: &[u8], bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(domain);
     hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    mon_core::hash::sha256_output_hex(hasher.finalize())
 }
 
 pub(super) fn checkpoint_hash(spec_hash: &str, units: i64, json: &str) -> String {
@@ -1289,7 +1289,7 @@ pub(super) fn checkpoint_hash(spec_hash: &str, units: i64, json: &str) -> String
     hasher.update(spec_hash.as_bytes());
     hasher.update(units.to_be_bytes());
     hasher.update(json.as_bytes());
-    format!("{:x}", hasher.finalize())
+    mon_core::hash::sha256_output_hex(hasher.finalize())
 }
 
 #[cfg(test)]

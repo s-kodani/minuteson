@@ -108,7 +108,7 @@ impl Pending {
             }
             hash.update(&bytes[..n]);
         }
-        if format!("{:x}", hash.finalize()) != expected {
+        if mon_core::hash::sha256_output_hex(hash.finalize()) != expected {
             return Err("保存WAVのPCMチェックサムが一致しません".into());
         }
         stamp.require(file)?;
@@ -185,7 +185,7 @@ mod tests {
         file.sync_all().unwrap();
         drop(file);
         pending
-            .complete(format!("{:x}", Sha256::digest(&bytes)))
+            .complete(mon_core::hash::sha256_hex(&bytes))
             .unwrap();
         (root, pending, bytes)
     }
