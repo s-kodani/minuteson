@@ -71,6 +71,8 @@ Rust workspaceと`Cargo.lock`をルートで共有します。録音・解析・
 
 録音ヘルパー内では、取得、正規化・時刻整列・合成、同期保存を分離します。Swift／C++の取得処理は接続世代・連番とPCMを順序付きで渡し、共通Rustミキサーが単一の16 kHz・モノラル・PCM16 WAVを作ります。保存ワーカーの同期・読戻し・確定記録公開は取得コールバックを待たせません。アプリ本体はヘルパー終了後に同じWAVと証拠を検証してDBへ登録し、停止後に全体を再ミックスしません。
 
+Windows・macOS固有の取得と時計補正、同じRustを使う変換・合成、OS別の保存I/Oは[録音データフロー設計図](recording.md#図の共通部分とosごとの差)にまとめています。[編集用draw.io](../diagrams/current-recording.drawio)は両OSと共通部分を含む1ページです。
+
 録音manifestはversion 5、取り込みmanifestはversion 4を使い、録音FFIは既存ABI 1への関数追加で共有します。旧CAF・FLACの未完了処理は専用の救出入口へ隔離し、新規録音・取り込みの保存経路へ中間音声を増やしません。互換性の方向と保持条件は[保存仕様](storage.md#107との互換性)、判断理由は[ADR 0014](../adr/0014-direct-wav-recording.md)を参照してください。
 
 ## 処理の流れ

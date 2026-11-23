@@ -213,24 +213,28 @@ class Lane {
     return Json{{"latePackets",value.late_packets},{"lateFrames",value.late_frames},{"retimedPackets",value.retimed_packets},{"retimedFrames",value.retimed_frames},{"clockAdjustmentFrames",value.clock_adjustment_frames},{"pressureFlushes",value.pressure_flushes},{"discardedFrames",0},{"capacityFrames",value.capacity_frames},{"resyncFrames",value.reset_frames},{"ranges",losses},{"rangesTruncated",value.truncated}};
   }
   Lane(fs::path output,UINT32 count,bool bounded=false):path(std::move(output)),channels(count),clock(bounded?PacketClock::bounded_capacity:PacketClock::recording_capacity){}
-  ~Lane(){if(reader)reader->stop();}
+  ~Lane(){try{stop_acquisition();}catch(...) {}}
   void cancel_preparation(){if(preparation){preparation->cancel();preparation_schedule.cancel();}}
   bool is_recording()const{return raw||(wav&&wav->pending());}
-  void adopt(PreparedInput input){if(reader||retirement||retiring_reader)throw std::logic_error("input handoff overlaps owned retirement");if(raw)input.reader->queue.attach_storage(raw->writer->pending(),raw->lane_index);else if(wav&&wav->pending())input.reader->queue.attach_storage(wav->pending(),wav->lane_index());clock.begin_stream(input.matching_position_rate);admitted_sequence=0;reader=std::move(input.reader);started=true;binding.connected();preparation_schedule.accept();}
-  void detach(const char* reason,bool unavailable=false){
+  void adopt(PreparedInput input){if(reader||retirement||retiring_reader)throw std::logic_error("input handoff overlaps owned retirement");if(wav)wav->drain_converter();if(raw)input.reader->queue.attach_storage(raw->writer->pending(),raw->lane_index);else if(wav&&wav->pending())input.reader->queue.attach_storage(wav->pending(),wav->lane_index());clock.begin_stream(input.matching_position_rate);admitted_sequence=0;reader=std::move(input.reader);started=true;binding.connected();preparation_schedule.accept();}
+  void stop_acquisition(bool input_fault=false){
     cancel_preparation();
-    if(started)std::cerr<<"mon_capture_reconnect: lane="<<(channels==1?"microphone":"system")<<" reason="<<reason<<std::endl;
-    started=false;window_frames=0;binding.lost(reason,unavailable);
+    started=false;
     if(reader){
       if(retirement||retiring_reader)throw std::logic_error("overlapping input retirement");
       retiring_reader=std::shared_ptr<CaptureReader>(std::move(reader));
       retirement_queue_ended=false;retirement_wait_expired=false;
-      retirement_fault_reported=std::string_view(reason)=="invalid_audio_data";
+      retirement_fault_reported=input_fault;
       // Stop/COM cleanup may wait for a Bluetooth profile. The control thread
       // keeps pumping accepted PCM and publishing both inputs while this one
       // owned worker waits. It never opens a replacement before real closure.
       retirement=std::make_unique<NativeRetirement>([source=retiring_reader](auto){source->stop();return source;});
     }
+  }
+  void detach(const char* reason,bool unavailable=false){
+    if(started)std::cerr<<"mon_capture_reconnect: lane="<<(channels==1?"microphone":"system")<<" reason="<<reason<<std::endl;
+    window_frames=0;binding.lost(reason,unavailable);
+    stop_acquisition(std::string_view(reason)=="invalid_audio_data");
   }
   void poll_retirement(){
     if(!retirement)return;
@@ -275,7 +279,8 @@ class Lane {
     auto previous=recent.empty()?Json(nullptr):recent.back()["rawQpc100ns"];
     auto previous_position=recent.empty()?Json(nullptr):recent.back()["devicePositionFrames"];
     auto previous_end=recent.empty()?Json(nullptr):recent.back()["mappedEnd100ns"];
-    const auto packet=clock.observe(count,raw,position,flags,arrival);
+    const auto minimum_start=wav?wav->minimum_start_100ns():0;
+    const auto packet=clock.observe(count,raw,position,flags,arrival,minimum_start);
     auto time=packet.start;const auto original_count=count;UINT32 skipped=0;
     if(window_end){
       if(wav){
@@ -295,9 +300,9 @@ class Lane {
         count=UINT32(std::min<std::uint64_t>(count,(window_end-time)*48000/10000000));
       }
     }
-    Json entry={{"packet",++observed},{"streamEpoch",clock.stream_epoch},{"rawQpc100ns",raw},{"previousRawQpc100ns",previous},{"devicePositionFrames",position},{"previousDevicePositionFrames",previous_position},{"previousMappedEnd100ns",previous_end},{"flags",flags},{"arrivalQpc100ns",arrival},{"packetFrames",original_count},{"mappedStart100ns",packet.start},{"mappedEnd100ns",packet.end},{"source",packet.source},{"reason",packet.reason},{"selectedFrames",count},{"skippedFrames",skipped}};
+    Json entry={{"packet",++observed},{"streamEpoch",clock.stream_epoch},{"rawQpc100ns",raw},{"previousRawQpc100ns",previous},{"devicePositionFrames",position},{"previousDevicePositionFrames",previous_position},{"previousMappedEnd100ns",previous_end},{"flags",flags},{"arrivalQpc100ns",arrival},{"packetFrames",original_count},{"minimumMappedStart100ns",minimum_start},{"beforeFrontierStart100ns",packet.before_frontier},{"mappedStart100ns",packet.start},{"mappedEnd100ns",packet.end},{"frontierAdjustment100ns",packet.frontier_adjustment},{"correctionReason",packet.correction},{"source",packet.source},{"reason",packet.reason},{"selectedFrames",count},{"skippedFrames",skipped}};
     if(recent.size()==32)recent.erase(recent.begin());recent.push_back(entry);
-    if(std::string_view(packet.reason)!="none"&&anomalies.size()<16)anomalies.push_back(entry);
+    if((std::string_view(packet.reason)!="none"||packet.frontier_adjustment!=0)&&anomalies.size()<16)anomalies.push_back(entry);
     if(!count)return;if(!first)first=time;if(!this->raw&&!wav&&file.value==INVALID_HANDLE_VALUE)begin_file();
     std::vector<float> zeros;if(silent){zeros.assign(std::size_t(count)*channels,0);samples=zeros.data();}
     double sum=0,maximum=0;for(std::size_t i=0;i<std::size_t(count)*channels;++i){if(!std::isfinite(samples[i])||std::abs(samples[i])>16)throw std::runtime_error("invalid captured PCM amplitude");sum+=double(samples[i])*samples[i];maximum=std::max(maximum,double(std::abs(samples[i])));}
@@ -314,26 +319,34 @@ class Lane {
   bool queued(){return (reader&&reader->queue.pending_frames()!=0)||(retiring_reader&&retiring_reader->queue.pending_frames()!=0);}
   std::optional<std::uint64_t> idle_frontier(std::uint64_t no_source_through){
     auto* source=reader?reader.get():retiring_reader.get();
-    if(source)return source->queue.observed_through(admitted_sequence);
+    if(source){
+      // An empty WASAPI queue is not proof that a Bluetooth microphone's next
+      // packet starts at the host timer. Keep its accepted PCM/converter tail
+      // as the frontier until the packet watchdog retires this native owner.
+      if(started&&channels==1)return std::nullopt;
+      return source->queue.observed_through(admitted_sequence);
+    }
     // An uncancelled preparation may already hold PCM which will be admitted
     // on adoption. A canceled result is never adopted; no producer remains.
     if(preparation&&!preparation_schedule.cancelled)return std::nullopt;
     return no_source_through;
   }
-  Json diagnostics(){return Json{{"observedPackets",observed},{"savedFrames",frames},{"discontinuityPackets",discontinuities},{"acquisitionQueuePeakFrames",std::max(peak_queued_frames,reader?reader->queue.peak():0ULL)},{"acquisitionQueueLimitFrames",PacketQueue::max_frames},{"equalTimestampPackets",clock.equal_timestamps},{"reversedTimestampPackets",clock.reversed_timestamps},{"timestampErrorPackets",clock.timestamp_errors},{"devicePositionFallbackPackets",clock.device_fallbacks},{"sampleCountFallbackPackets",clock.frame_fallbacks},{"estimatedPackets",clock.estimated_packets},{"timingEstimated",clock.estimated_packets!=0},{"firstAnomalies",anomalies},{"recentPackets",recent}};}
-  void close(){cancel_preparation();
-    const auto deadline=GetTickCount64()+PreparationSchedule::timeout_ms;
-    while(retirement){
-      poll_retirement();if(!retirement)break;
+  Json diagnostics(){return Json{{"observedPackets",observed},{"savedFrames",frames},{"discontinuityPackets",discontinuities},{"acquisitionQueuePeakFrames",std::max(peak_queued_frames,reader?reader->queue.peak():0ULL)},{"acquisitionQueueLimitFrames",PacketQueue::max_frames},{"equalTimestampPackets",clock.equal_timestamps},{"reversedTimestampPackets",clock.reversed_timestamps},{"timestampErrorPackets",clock.timestamp_errors},{"devicePositionFallbackPackets",clock.device_fallbacks},{"sampleCountFallbackPackets",clock.frame_fallbacks},{"estimatedPackets",clock.estimated_packets},{"wavFrontierRebases",clock.frontier_rebases},{"maxWavFrontierAdjustment100ns",clock.max_frontier_adjustment_ticks},{"timingEstimated",clock.estimated_packets!=0},{"firstAnomalies",anomalies},{"recentPackets",recent}};}
+  void close(std::uint64_t wait_ms=PreparationSchedule::timeout_ms){stop_acquisition();
+    const auto deadline=GetTickCount64()+wait_ms;
+    while(retirement||(preparation&&!preparation->finished())){
+      poll_retirement();if(!retirement&&(!preparation||preparation->finished()))break;
       if(retirement_wait_expired||GetTickCount64()>=deadline){
         retirement_wait_expired=true;
-        try{while(retiring_reader->queue.pending_frames())pump(std::numeric_limits<std::uint64_t>::max());}
+        try{while(retiring_reader&&retiring_reader->queue.pending_frames())pump(std::numeric_limits<std::uint64_t>::max());}
         catch(const InputFailure&){}catch(const InputDataFault&){if(!is_recording())throw;}
-        throw std::runtime_error("input retirement is still pending; recording closure is unproven");
+        if(raw)raw->drain();if(wav)wav->drain_converter();
+        throw std::runtime_error("input retirement or preparation is still pending; recording closure is unproven");
       }
       Sleep(1);
     }
-    if(reader){reader->stop();peak_queued_frames=std::max(peak_queued_frames,reader->queue.peak());}if(started){try{pump(std::numeric_limits<std::uint64_t>::max());}catch(const InputFailure&){}catch(const InputDataFault&){if(!is_recording())throw;}started=false;}if(raw)raw->drain();if(wav)wav->finish();if(file.value!=INVALID_HANDLE_VALUE){auto length=frames*channels*4+4;BYTE size[8];for(int i=0;i<8;++i)size[i]=BYTE(length>>(56-i*8));LARGE_INTEGER offset;offset.QuadPart=56;if(!SetFilePointerEx(file.value,offset,nullptr,FILE_BEGIN))throw std::runtime_error("CAF finalization seek failed");write_all(file.value,size,8);if(!capture_flush(file.value,"caf_finalize_sync"))throw std::runtime_error("CAF finalization flush failed");CloseHandle(file.value);file.value=INVALID_HANDLE_VALUE;}}
+    if(preparation)preparation.reset();
+    if(raw)raw->drain();if(wav)wav->finish();if(file.value!=INVALID_HANDLE_VALUE){auto length=frames*channels*4+4;BYTE size[8];for(int i=0;i<8;++i)size[i]=BYTE(length>>(56-i*8));LARGE_INTEGER offset;offset.QuadPart=56;if(!SetFilePointerEx(file.value,offset,nullptr,FILE_BEGIN))throw std::runtime_error("CAF finalization seek failed");write_all(file.value,size,8);if(!capture_flush(file.value,"caf_finalize_sync"))throw std::runtime_error("CAF finalization flush failed");CloseHandle(file.value);file.value=INVALID_HANDLE_VALUE;}}
   bool acquisition_closed() const{return (!preparation||preparation->finished())&&(!retirement||retirement->finished());}
   Json track(std::uint64_t origin){Json segments=Json::array();for(auto& p:clock.parts)segments.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});if(raw)segments=raw->timeline(origin);if(wav)segments=wav->timeline(origin);const auto stored=raw?raw->stored_frames():wav?wav->frames:frames;return Json{{"frames",stored},{"sampleRate",stored?Json(raw||wav?16000:48000):Json(nullptr)},{"channels",stored?Json(raw||wav?1:channels):Json(nullptr)},{"appendFailures",0},{"callbackCount",packets},{"clockSegments",segments},{"clockBoundaryAdjustments",clock.boundary_adjustments},{"maxClockBoundaryAdjustmentNs",clock.max_boundary_adjustment_ticks*100},{"auxiliaryClockFailure",wav&&!wav->clock_error().empty()?Json(wav->clock_error()):Json(nullptr)}};}
   Json level(){if(!window_frames)return Json{{"state","waiting"},{"windowFrames",nullptr},{"ageMs",nullptr},{"rms",nullptr},{"peak",nullptr}};return Json{{"state","measured"},{"windowFrames",window_frames},{"ageMs",(qpc()-measured)/10000},{"rms",rms},{"peak",peak}};}

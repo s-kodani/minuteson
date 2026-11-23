@@ -83,6 +83,33 @@ int main() {
     different_rate.observe(480,start,0,0,start+100000);
     auto different=different_rate.observe(480,start,960,0,start+200000);
     require(different.start==start+100000&&std::string(different.source)=="sample_count","native counter at a different rate invented a gap");
+    PacketClock frontier;
+    frontier.begin_stream();
+    auto opening=frontier.observe(480,start,0,0,start+100000);
+    frontier.append(0,480,opening.start,opening.boundary);
+    // The stream already uses sample fallback, then resumes after 880 ms with
+    // a silent/discontinuous packet and a reset device counter (real QA case).
+    auto estimated=frontier.observe(480,start+100000,480,4,start+200000);
+    frontier.append(480,480,estimated.start,estimated.boundary);
+    const auto mixed=start+8800000;
+    auto late=frontier.observe(480,start+200000,0,3,mixed+100000,mixed);
+    require(late.start==mixed&&late.end==mixed+100000&&late.boundary,"same-stream delayed PCM crossed emitted WAV frontier");
+    require(late.frontier_adjustment==mixed-(start+200000)&&std::string(late.correction)=="wav_frontier_rebased","WAV correction lost its measured adjustment");
+    require(std::string(late.reason)=="device_position_uncorrelated"&&std::string(late.source)=="sample_count","WAV correction erased the original clock failure");
+    auto following=frontier.observe(480,start+300000,480,0,mixed+200000,mixed);
+    require(following.start==late.end&&!following.frontier_adjustment,"WAV clock correction was not carried forward exactly once");
+    frontier.append(960,480,late.start,late.boundary);
+    frontier.append(1440,480,following.start,following.boundary);
+    frontier.begin_stream();
+    auto fresh=frontier.observe(480,start+400000,0,0,mixed+300000,mixed+200000);
+    require(fresh.start==mixed+200000&&std::string(fresh.reason)=="stream_restart_behind_wav_frontier","stale new-stream QPC reopened behind the WAV frontier");
+    require(frontier.frontier_rebases==1&&frontier.max_frontier_adjustment_ticks==late.frontier_adjustment,"frontier diagnostics counted a correction twice");
+    PacketClock valid_frontier;
+    valid_frontier.observe(480,start,0,0,start+100000);
+    const auto monotone=valid_frontier.observe(480,start+100000,480,0,mixed+100000,mixed);
+    require(monotone.start==mixed&&monotone.end==mixed+100000&&monotone.boundary,"valid monotone QPC entered an already emitted WAV interval");
+    require(std::string(monotone.reason)=="none"&&std::string(monotone.source)=="wasapi_qpc"&&monotone.before_frontier==start+100000,"frontier correction replaced valid native timing evidence");
+    require(monotone.frontier_adjustment==mixed-(start+100000)&&std::string(monotone.correction)=="wav_frontier_rebased"&&valid_frontier.estimated_packets==1,"valid-QPC correction lacks its explicit estimate");
     for(const auto capacity:{PacketClock::bounded_capacity,PacketClock::recording_capacity}){
       PacketClock bounded(capacity);
       for(std::uint64_t i=0;i<capacity;++i)bounded.append(i*480,480,start+i*400000,true);

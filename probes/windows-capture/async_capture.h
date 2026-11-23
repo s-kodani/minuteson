@@ -53,7 +53,8 @@ class AsyncCapture final : public CaptureReader {
     return received;
   }
  public:
-  AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels,bool microphone=false,std::string uid={},std::shared_ptr<EndpointLifetime> lifetime={}):channels_(channels) {
+  AsyncCapture(ComPtr<IAudioClient> client,UINT32 channels,bool microphone=false,std::string uid={},std::shared_ptr<EndpointLifetime> lifetime={},std::shared_ptr<PacketIngressBudget> ingress={}):channels_(channels) {
+    if(ingress)queue.attach_ingress(std::move(ingress));
     thread_=std::thread([this,client=std::move(client),microphone,uid=std::move(uid),lifetime=std::move(lifetime)]() mutable {
       const auto initialized=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
       DWORD index=0;HANDLE priority=nullptr;

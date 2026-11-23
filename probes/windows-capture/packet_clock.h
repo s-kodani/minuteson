@@ -13,6 +13,9 @@ struct PacketTime {
   const char* source;
   const char* reason;
   bool boundary;
+  std::uint64_t frontier_adjustment=0;
+  std::uint64_t before_frontier=0;
+  const char* correction="none";
 };
 
 // GetBuffer reports the first frame's QPC timestamp in 100 ns units. A
@@ -31,13 +34,15 @@ class PacketClock {
   std::uint64_t boundary_adjustments=0, max_boundary_adjustment_ticks=0;
   std::uint64_t equal_timestamps=0, reversed_timestamps=0, timestamp_errors=0,
     device_fallbacks=0, frame_fallbacks=0, estimated_packets=0, stream_epoch=0;
+  std::uint64_t frontier_rebases=0,max_frontier_adjustment_ticks=0;
 
   // Device positions are correlated only within one uninterrupted stream.
   // Once QPC becomes unreliable, retain a sample-driven clock until reopen;
   // accepting the next raw QPC again could introduce another jump or overlap.
   void begin_stream(bool matching_position_rate=true){have_observation_=false;estimated_=false;remainder_=0;matching_position_rate_=matching_position_rate;++stream_epoch;}
   PacketTime observe(std::uint32_t frames,std::uint64_t raw,
-                     std::uint64_t position,std::uint32_t flags,std::uint64_t arrival) {
+                     std::uint64_t position,std::uint32_t flags,std::uint64_t arrival,
+                     std::uint64_t minimum_start=0) {
     const bool discontinuity=(flags&1)!=0, timestamp_error=(flags&4)!=0;
     const bool equal=have_observation_&&raw==previous_raw_;
     const bool reversed=have_observation_&&raw<previous_raw_;
@@ -46,9 +51,13 @@ class PacketClock {
     // A raw segment can be sealed in the middle of such a packet, so later
     // timestamps must never move behind its already committed fragment.
     const bool overlap=have_observation_&&raw<previous_end_;
-    const bool unusable=timestamp_error||!raw||equal||reversed||overlap||raw>arrival
+    // A reopened endpoint can retain a monotone timestamp from before its
+    // disconnection. It cannot place new PCM behind an already emitted WAV.
+    // Establish one estimated clock for the new stream, retaining every frame.
+    const bool behind_frontier=!have_observation_&&raw<minimum_start;
+    const bool unusable=timestamp_error||!raw||equal||reversed||overlap||raw>arrival||behind_frontier
       ||(!have_observation_&&!parts.empty()&&raw<parts.back().last_end);
-    const char* reason=timestamp_error?"timestamp_error":!raw?"zero_timestamp":equal?"equal_timestamp":reversed?"reversed_timestamp":raw>arrival?"future_timestamp":overlap?"overlapping_timestamp":unusable?"stream_restart_overlap":"none";
+    const char* reason=timestamp_error?"timestamp_error":!raw?"zero_timestamp":equal?"equal_timestamp":reversed?"reversed_timestamp":raw>arrival?"future_timestamp":overlap?"overlapping_timestamp":behind_frontier?"stream_restart_behind_wav_frontier":unusable?"stream_restart_overlap":"none";
     const bool entering=unusable&&!estimated_;estimated_|=unusable;
     std::uint64_t time=raw;
     bool recovered_gap=false;
@@ -73,10 +82,21 @@ class PacketClock {
         source="host_arrival";
       }
     }
+    // A Bluetooth profile can resume on the same native stream after silence
+    // with a discontinuity and an unusable device counter. The sample-clock
+    // fallback then lags WAV output from the other lane. Rebase this complete
+    // packet once, and carry the corrected end into subsequent observations.
+    const auto before_frontier=time;
+    const auto frontier_adjustment=time<minimum_start?minimum_start-time:0;
+    if(frontier_adjustment){
+      if(!estimated_)++estimated_packets;
+      estimated_=true;time=minimum_start;++frontier_rebases;
+      max_frontier_adjustment_ticks=std::max(max_frontier_adjustment_ticks,frontier_adjustment);
+    }
     const auto end=add(time,frame_ticks(frames));
     previous_raw_=raw;previous_position_=position;previous_frames_=frames;
     previous_end_=end;have_observation_=true;
-    return {time,end,source,reason,entering||recovered_gap||(!estimated_&&discontinuity)};
+    return {time,end,source,reason,entering||recovered_gap||frontier_adjustment!=0||(!estimated_&&discontinuity),frontier_adjustment,before_frontier,frontier_adjustment?"wav_frontier_rebased":"none"};
   }
 
   void append(std::uint64_t first_frame, std::uint32_t frames,

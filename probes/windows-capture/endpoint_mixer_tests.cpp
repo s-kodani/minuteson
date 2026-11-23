@@ -1,5 +1,6 @@
 #include "endpoint_mixer.h"
 #include <iostream>
+#include <string_view>
 void require(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
 int main(){
   try{
@@ -107,11 +108,69 @@ int main(){
     require(!ingress.observed_through(preceding->sequence),"frontier overtook buffered PCM after native flush");
     const auto remaining=ingress.pop();require(remaining&&remaining->frames==353&&remaining->position==first+480
       &&ingress.observed_through(remaining->sequence)==EndpointMixer::ticks_at(timer),"ordered frontier lost buffered PCM");
-    bool late_rejected=false;
-    try{observed.add(observed_source,first+353,480,a.data(),0,100000000,admit);}
-    catch(const std::runtime_error&){late_rejected=true;}
-    require(late_rejected&&observed.diagnostics().retimed_frames==0&&!ingress.pop(),
-      "live acquisition retimed a packet behind committed output");
+    const auto recovered=observed.add(observed_source,first+353,480,a.data(),0,100000000,admit);
+    observed.flush(timer+480,100000000,admit);
+    const auto recovered_packet=ingress.pop();
+    require(recovered.accepted==480&&recovered.adjusted&&recovered_packet
+      &&recovered_packet->position==timer&&recovered_packet->frames==480
+      &&(recovered_packet->flags&4)&&!ingress.pop(),
+      "late live acquisition entered the published frontier or lost received PCM");
+    for(float sample:recovered_packet->samples)require(sample==0.25f,"late live PCM waveform changed");
+    const auto& recovered_diagnostics=observed.diagnostics();
+    require(recovered_diagnostics.retimed_frames==480&&recovered_diagnostics.losses.size()==1
+      &&recovered_diagnostics.losses[0].first==first+353
+      &&recovered_diagnostics.losses[0].mapped_first==timer
+      &&recovered_diagnostics.losses[0].frames==480
+      &&std::string_view(recovered_diagnostics.losses[0].reason)=="clock_rebased",
+      "late live acquisition lost its original and corrected clock evidence");
+
+    // Repeated Bluetooth generations may reuse an old QPC origin after an
+    // idle observation has already sealed later audio. Keep all their PCM,
+    // leave earlier output intact, and adjust each new native clock once.
+    EndpointMixer reconnecting(true);EndpointCursor initial;output.clear();
+    reconnecting.add(initial,first,480,a.data(),0,100000000,emit);
+    reconnecting.flush(first+480,100000000,emit);
+    const auto committed=output.front();
+    constexpr unsigned generations=12,packets_per_generation=3;
+    for(unsigned generation=0;generation<generations;++generation){
+      EndpointCursor reconnected;
+      const auto frontier=first+48000ULL*(generation+1);
+      require(reconnecting.observed_through(frontier)==frontier,"empty native frontier did not advance");
+      const auto original=first+240;
+      for(unsigned packet=0;packet<packets_per_generation;++packet){
+        for(unsigned frame=0;frame<480;++frame)for(unsigned channel=0;channel<2;++channel)
+          wave[frame*2+channel]=float(1+generation*packets_per_generation+packet)/64;
+        const auto result=reconnecting.add(reconnected,original+packet*480,480,wave.data(),0,100000000,emit);
+        require(result.accepted==480&&result.adjusted==(packet==0),"reconnection shortened PCM or repeatedly adjusted its clock");
+        reconnecting.flush(frontier+(packet+1)*480,100000000,emit);
+        const auto& saved=output.back();
+        require(saved.position==frontier+packet*480&&saved.frames==480&&(saved.flags&4),
+          "reconnected output crossed its frontier or hid estimated timing");
+        require(saved.samples==wave,"reconnected PCM waveform changed");
+        require(reconnecting.pending_blocks()<=EndpointMixer::max_blocks,"reconnected output exceeded bounded alignment storage");
+      }
+      const auto& correction=reconnecting.diagnostics().losses.back();
+      require(correction.first==original&&correction.mapped_first==frontier&&correction.frames==480,
+        "reconnection diagnostics did not preserve both clock positions");
+      require(reconnected.correction==frontier-original,"reconnection changed the correction after its first packet");
+    }
+    require(output.size()==1+generations*packets_per_generation&&output.front().position==committed.position
+      &&output.front().samples==committed.samples&&output.front().flags==committed.flags,
+      "reconnection rewrote committed output or lost a packet");
+    require(reconnecting.diagnostics().retimed_packets==generations
+      &&reconnecting.diagnostics().retimed_frames==generations*480
+      &&reconnecting.diagnostics().losses.size()==generations
+      &&reconnecting.diagnostics().pressure_flushes==0,
+      "reconnection corrections were not bounded and recorded once per native clock");
+    EndpointCursor invalid_connection;bool invalid_pcm=false,invalid_geometry=false;
+    try{reconnecting.add(invalid_connection,first,480,invalid.data(),0,100000000,emit);}
+    catch(const product::InputDataFault&){invalid_pcm=true;}
+    try{reconnecting.add(invalid_connection,first,48001,a.data(),0,100000000,emit);}
+    catch(const product::InputDataFault&){invalid_geometry=true;}
+    require(invalid_pcm&&invalid_geometry&&reconnecting.pending_blocks()==0
+      &&output.size()==1+generations*packets_per_generation
+      &&reconnecting.diagnostics().retimed_packets==generations,
+      "clock recovery accepted invalid PCM or geometry or changed accepted output");
 
     // An idle peer does not block progress forever. When it returns late, all
     // its received samples are still represented, with explicitly estimated time.

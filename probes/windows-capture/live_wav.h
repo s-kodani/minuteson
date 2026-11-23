@@ -183,6 +183,15 @@ class LiveWav {
   void stop(){{std::lock_guard lock(mutex_);stopping_=true;changed_.notify_all();}if(worker_.joinable())worker_.join();}
   Json status(){std::lock_guard lock(mutex_);return Json::parse(tip(durable_,closed_));}
   std::int64_t origin()const{return has_origin_?origin_:0;}
+  // DSP-owned output includes the active checkpoint, not just durable IO.
+  // A new capture generation must never map PCM behind this boundary.
+  std::int64_t mixed_through()const{
+    if(!has_origin_)return 0;
+    const auto frames=planned_.frames+pcm_.size()/2;
+    if(frames>std::uint64_t((std::numeric_limits<std::int64_t>::max()-origin_)/62500))
+      throw std::runtime_error("recording WAV clock overflow");
+    return origin_+static_cast<std::int64_t>(frames)*62500;
+  }
 };
 
 // Per-input converter/clock; its normalized PCM is sent to the shared mixer.
@@ -233,6 +242,10 @@ class WavInput {
   }
   void finish(){drain_converter();if(test_file_.value!=INVALID_HANDLE_VALUE){auto h=VoicePCM::wave_header(frames);LARGE_INTEGER zero{};if(!SetFilePointerEx(test_file_.value,zero,nullptr,FILE_BEGIN))throw std::runtime_error("テストWAVの確定位置が不正です");write_all(test_file_.value,h.data(),h.size());if(!capture_flush(test_file_.value,"test_wav_sync"))throw std::runtime_error("テストWAVを同期できません");CloseHandle(test_file_.value);test_file_.value=INVALID_HANDLE_VALUE;}}
   std::int64_t normalized_through()const{return last_end_;}
+  std::uint64_t minimum_start_100ns()const{
+    const auto through=std::max(last_end_,recording_?recording_->mixed_through():std::int64_t(0));
+    return static_cast<std::uint64_t>(through/100+(through%100!=0));
+  }
   const std::string& clock_error()const{return clock_error_;}
   Json timeline(std::uint64_t origin)const{Json result=Json::array();if(!clock_error_.empty())return result;for(const auto& p:clock_.parts)result.push_back(Json{{"sourceFrameStart",p.first},{"sourceFrameEnd",p.first+p.frames},{"timelineStartUs",(p.start-origin)/10},{"timelineEndUs",(p.last_end-origin)/10},{"mappingJson","{\"schema_version\":1,\"method\":\"linear\"}"}});return result;}
 };
