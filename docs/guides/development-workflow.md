@@ -60,7 +60,7 @@ PRは変更した経路の検査だけを実行します。最終ゲートは常
 
 文書扱いには、`README.md`・`SECURITY.md`・`AGENTS.md`、`docs/`・`assets/readme/`、`evaluation/`のMarkdown、PRテンプレートを含めます。`.agents/skills/`配下のMarkdownと各スキルの`agents/openai.yaml`も、アプリの検査・ビルドを必要としない作業説明・表示設定として扱います。
 
-音声取り込みfixtureと第三者資料の3ディレクトリ（`model-licenses`・`notices`・`runtime-notices`）の案内用`README.md`、`evaluation/runs/.gitkeep`も軽い検査だけを行います。ライセンス本文・通知index・モデル定義・実行スクリプトまで一括除外せず、未知のファイルは引き続き全経路を検査します。文書とコードが混在する変更はコード側の検査を維持し、手動fullは文書だけでも全件を実行します。
+音声取り込みfixtureと第三者資料の3ディレクトリ（`model-licenses`・`notices`・`runtime-notices`）の案内用`README.md`、`evaluation/runs/.gitkeep`、worktreeの準備設定（ルートの`orca.yaml`・`.worktreeinclude`）も軽い検査だけを行います。ライセンス本文・通知index・モデル定義・実行スクリプトまで一括除外せず、未知のファイルは引き続き全経路を検査します。文書とコードが混在する変更はコード側の検査を維持し、手動fullは文書だけでも全件を実行します。
 
 通常Rustはライブラリのテストを最大2プロセス×4スレッドで実行します。0件のバイナリテスト・doctestのための追加コンパイルを省き、実行ファイルのリンクは正式パッケージ生成で確認します。全件検証のスレッド設定は維持します。
 
