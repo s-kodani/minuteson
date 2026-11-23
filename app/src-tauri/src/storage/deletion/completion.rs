@@ -231,7 +231,7 @@ pub(super) fn start(
     check: &impl Fn() -> bool,
 ) -> Result<Receipt, String> {
     cancel(check)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -250,7 +250,7 @@ pub(super) fn start(
         current.verify_live(storage, &db, check)?;
         return Ok(current);
     }
-    let _writer = super::fence::write_removal(storage, &db, files, check)?;
+    let _writer = super::fence::write_removal(storage, &mut db, files, check)?;
     let finished = files.verify_finished(storage, &db, check)?;
     let progress = Progress {
         version: 1,
@@ -258,7 +258,7 @@ pub(super) fn start(
         database_phase: files.progress.database_phase.unwrap_or(Phase::RowsPending),
     };
     let p = files.confirmed();
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     files.verify_saved(&tx, check)?;
     storage.managed_anchor.verify()?;
@@ -296,23 +296,24 @@ fn run_inner(
     event: &impl Fn(&str),
 ) -> Result<(), String> {
     cancel(check)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
-    run_locked(storage, &db, receipt, check, event)
+    run_locked(storage, &mut db, receipt, check, event)
 }
 fn run_locked(
     storage: &Storage,
-    db: &Connection,
+    db: &mut Connection,
     receipt: &mut Receipt,
     check: &impl Fn() -> bool,
     event: &impl Fn(&str),
 ) -> Result<(), String> {
-    let _writer = super::fence::write_completion(storage, db, receipt, check)?;
+    let writer = super::fence::write_completion(storage, db, receipt, check)?;
+    let result = (|| -> Result<(), String> {
     receipt.verify_live(storage, &db, check)?;
     if receipt.progress.database_phase == Phase::RowsPending {
-        let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         receipt.verify_live(storage, &tx, check)?;
         storage.managed_anchor.verify_current_history()?;
@@ -362,7 +363,7 @@ fn run_locked(
         database::checkpoint(&db)?;
         event("purged");
         receipt.verify_live(storage, &db, check)?;
-        let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         receipt.verify_saved(&tx, check)?;
         let next = save_phase(&tx, receipt, Phase::Finished)?;
@@ -389,6 +390,9 @@ fn run_locked(
     event("ackCheckpointed");
     super::startup::resolve(storage, db, receipt, check)?;
     Ok(())
+    })();
+    writer.finish(db);
+    result
 }
 
 #[cfg(test)]

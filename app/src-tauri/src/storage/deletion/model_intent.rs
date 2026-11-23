@@ -199,7 +199,7 @@ impl Prepared {
             &|| check() || lease.cancelled(),
             self.snapshot.directory_scope,
         )?;
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         self.verify_saved(&db)?;
         super::super::database::stopped_for_model_consent(&db)?;
         if self.kept
@@ -348,7 +348,7 @@ pub(in crate::storage) fn mismatched_schema_header_fixture(db: &Connection, oper
 }
 
 pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     let state: String = db
         .query_row(
             "SELECT state FROM maintenance_operations WHERE id=?1",
@@ -445,7 +445,7 @@ pub(crate) fn prepare_mode(
         }
         snapshot.verify_metadata(storage, &db, root, check)?;
         active(lease, check)?;
-        storage.deletion_fence.arm(&db)?;
+        storage.deletion_fence.arm(&mut db)?;
         return Ok(saved);
     }
     storage.require_data_writable()?;
@@ -500,7 +500,7 @@ pub(crate) fn prepare_mode(
     saved.verify_anchor(storage)?;
     tx.commit().map_err(|e| e.to_string())?;
     // A cancellation racing COMMIT must never leave ordinary writes admitted.
-    storage.deletion_fence.arm(&db)?;
+    storage.deletion_fence.arm(&mut db)?;
     Ok(saved)
 }
 
@@ -513,7 +513,7 @@ pub(crate) fn keep_unstarted(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     active(lease, check)?;
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     let saved = read(&db, operation)?;
     saved.verify_anchor(storage)?;
     if super::super::fence::other_pending(&db, Some(operation))? {
@@ -522,7 +522,7 @@ pub(crate) fn keep_unstarted(
     if saved.kept {
         return active(lease, check);
     }
-    let writer = super::super::fence::write_model_prepared(storage, &db, &saved, lease)?;
+    let writer = super::super::fence::write_model_prepared(storage, &mut db, &saved, lease)?;
     // Writer borrows the Connection; this transaction still owns a proper RAII
     // rollback and we assert autocommit at the writer admission boundary.
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)

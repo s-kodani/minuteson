@@ -600,7 +600,7 @@ pub(super) fn start(
             return Err("削除用予約名が既に存在します".into());
         }
     }
-    let _writer = super::fence::write_prepared(storage, &db, confirmed, check)?;
+    let _writer = super::fence::write_prepared(storage, &mut db, confirmed, check)?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     confirmed.verify_saved(&tx, check)?;
@@ -1043,7 +1043,7 @@ fn save_unlocked(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     let db = crate::operation_observation::lock(&storage.connection)?;
-    let _writer = super::fence::write_removal(storage, &db, receipt, check)?;
+    let _writer = super::fence::write_removal(storage, &mut db, receipt, check)?;
     receipt.save(storage, &db, next, check)
 }
 pub(super) fn run(

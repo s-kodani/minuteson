@@ -136,7 +136,7 @@ impl Drop for Maintenance<'_> {
     fn drop(&mut self) {
         // Normal cancellation/unwinding releases the operation; retirement
         // retains the existing read-only authorizer until this Storage closes.
-        let db = self
+        let mut db = self
             .storage
             .connection
             .lock()
@@ -189,7 +189,7 @@ impl Storage {
         let voice = self.lock_voice_audio()?;
         self.require_data_writable()?;
         self.recover_voice_audio()?;
-        let db = self
+        let mut db = self
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;

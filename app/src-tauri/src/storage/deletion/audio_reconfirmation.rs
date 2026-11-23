@@ -437,7 +437,7 @@ impl Review {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = storage
+        let mut db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
@@ -453,7 +453,7 @@ impl Review {
         active(lease, check)?;
         let cancelled = || check() || lease.cancelled();
         let check = &cancelled;
-        let db = storage
+        let mut db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
@@ -538,7 +538,7 @@ fn accept_inner(
     if !super::super::uuid(operation) || operation == review.source.origin.operation_id {
         return Err("音声再確認には新しい操作IDが必要です".into());
     }
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -558,11 +558,11 @@ fn accept_inner(
             return Err("同じ音声再確認IDへ別の確認を採用しません".into());
         }
         saved.verify_locked(storage, &db, lease, check)?;
-        storage.deletion_fence.arm(&db)?;
+        storage.deletion_fence.arm(&mut db)?;
         return Ok(saved);
     }
     let writer = crate::storage::deletion::fence::write_audio_reconfirmation(
-        storage, &db, review, lease, check,
+        storage, &mut db, review, lease, check,
     )?;
     let bytes = review.snapshot.encode()?;
     let saved = Prepared {
@@ -602,7 +602,7 @@ fn accept_inner(
     event("beforeAudioReconfirmationCommit");
     saved.verify_locked(storage, &tx, lease, check)?;
     tx.commit().map_err(|e| e.to_string())?;
-    storage.deletion_fence.arm(&db)?;
+    storage.deletion_fence.arm(&mut db)?;
     drop(writer);
     event("audioReconfirmationCommitted");
     Ok(saved)
@@ -652,7 +652,7 @@ pub(super) fn clear_resolved_attention(
 // second SQLite connection would conflict with its exclusive locking mode.
 #[cfg(test)]
 pub(crate) fn synthetic_saved(storage: &Storage, operation: &str) -> (String, String) {
-    let db = storage.connection.lock().unwrap();
+    let mut db = storage.connection.lock().unwrap();
     let receipt = Receipt::load(&db, operation, &crate::test_support::never_cancelled).unwrap();
     completion::verify_available_state(&db, &receipt, &crate::test_support::never_cancelled)
         .unwrap();

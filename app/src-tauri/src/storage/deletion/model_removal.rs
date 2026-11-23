@@ -532,7 +532,7 @@ fn save_unlocked(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     let db = crate::operation_observation::lock(&storage.connection)?;
-    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, r, lease)?;
+    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &mut db, r, lease)?;
     r.save(storage, &db, next, lease, check)
 }
 fn resolve_unlocked(
@@ -542,7 +542,7 @@ fn resolve_unlocked(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     let db = crate::operation_observation::lock(&storage.connection)?;
-    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, r, lease)?;
+    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &mut db, r, lease)?;
     super::super::startup::resolve(storage, &db, r, check)
 }
 
@@ -612,7 +612,7 @@ pub(crate) fn start(
         }
     }
     let _writer =
-        crate::storage::deletion::fence::write_model_prepared(storage, &db, &saved, lease)?;
+        crate::storage::deletion::fence::write_model_prepared(storage, &mut db, &saved, lease)?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     saved.verify_saved(&tx)?;

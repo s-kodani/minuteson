@@ -33,9 +33,9 @@ fn schema(db: &Connection) -> Result<Vec<(String, String, String)>, String> {
 // Suppress INSERT triggers only on this locked connection, not via DROP/DDL.
 // The authorizer disallows all UPDATE/DELETE/DDL/ATTACH while that capability is
 // held. Constraints/FKs remain enabled; no INSERT OR REPLACE/IGNORE is used.
-struct AppendOnly<'a>(&'a Connection);
-impl<'a> AppendOnly<'a> {
-    fn begin(db: &'a Connection) -> Result<Self, String> {
+struct AppendOnly;
+impl AppendOnly {
+    fn begin(db: &mut Connection) -> Result<(), String> {
         if !db
             .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
             .map_err(|e| e.to_string())?
@@ -44,7 +44,6 @@ impl<'a> AppendOnly<'a> {
         }
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .map_err(|e| e.to_string())?;
-        let guard = Self(db);
         db.flush_prepared_statement_cache();
         db.authorizer(Some(|context: AuthContext<'_>| match context.action {
             AuthAction::Insert { table_name }
@@ -60,39 +59,21 @@ impl<'a> AppendOnly<'a> {
             _ => Authorization::Deny,
         }))
         .map_err(|e| e.to_string())?;
-        Ok(guard)
+        Ok(())
     }
-    fn finish(self) -> Result<(), String> {
-        self.0
-            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+    fn finish(db: &mut Connection) -> Result<(), String> {
+        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
             .map_err(|e| e.to_string())?;
-        self.0
-            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+        db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
             .map_err(|e| e.to_string())
-    }
-}
-impl Drop for AppendOnly<'_> {
-    fn drop(&mut self) {
-        // Unwinding and all error branches restore the normal guards too.
-        // If enabling triggers fails, retain the append-only authorizer.
-        if self
-            .0
-            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
-            .is_ok()
-        {
-            let _ = self
-                .0
-                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-        }
     }
 }
 
 pub(in crate::storage::backup) fn append(
-    db: &Connection,
+    target: &Connection,
     source: &Connection,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let guard = AppendOnly::begin(db)?;
     for table in portable::tables(source)? {
         check_cancelled(check)?;
         let columns = table
@@ -113,7 +94,7 @@ pub(in crate::storage::backup) fn append(
             ))
             .map_err(|e| e.to_string())?;
         let mut rows = query.query([]).map_err(|e| e.to_string())?;
-        let mut insert = db
+        let mut insert = target
             .prepare(&format!(
                 "INSERT INTO \"{}\"({columns}) VALUES({})",
                 table.name,
@@ -131,8 +112,7 @@ pub(in crate::storage::backup) fn append(
                 .map_err(|e| e.to_string())?;
         }
     }
-    guard.finish()?;
-    super::super::salvage_schema::append_meetings(db, source)
+    super::super::salvage_schema::append_meetings(target, source)
 }
 
 impl Storage {
@@ -249,6 +229,7 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())?;
         let journal = journal::Journal::begin(&db, &self.root, sealed, ids)?;
         let mut installed = Installed::prepare_recorded(&self.root, sealed, journal, check)?;
+        AppendOnly::begin(&mut db)?;
         let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         let operation = (|| {
@@ -320,11 +301,19 @@ impl Storage {
                     maintenance.fail_closed();
                     return Err(format!("追加復元の巻き戻し結果が未確定です。追加物を保持します: {error}; {rollback}"));
                 }
+                if db
+                    .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+                    .is_ok()
+                {
+                    let _ = db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+                }
                 return Err(error);
             }
         };
         match tx.commit() {
-            Ok(()) => {}
+            Ok(()) => {
+                AppendOnly::finish(&mut db)?;
+            }
             Err(error) => {
                 // Never remove assets if COMMIT's result is uncertain. A live
                 // transaction or unreadable terminal state needs reopen/recovery.

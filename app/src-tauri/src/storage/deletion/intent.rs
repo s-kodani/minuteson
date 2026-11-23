@@ -490,7 +490,7 @@ impl Prepared {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         cancel(check)?;
-        let db = storage
+        let mut db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
@@ -693,7 +693,7 @@ pub(super) fn read(
     operation: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Prepared, String> {
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -710,7 +710,7 @@ pub(super) fn read_keepable(
     operation: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Prepared, String> {
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -755,7 +755,7 @@ fn prepare_inner(
     if !db.is_autocommit() {
         return Err("削除確認のトランザクションが既に進行中です".into());
     }
-    let _writer = super::fence::write_fresh(storage, &db)?;
+    let _writer = super::fence::write_fresh(storage, &mut db)?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     intent.validate(&tx)?;
@@ -775,7 +775,7 @@ fn prepare_inner(
         saved.verify_locked(storage, &tx, check)?;
         cancel(check)?;
         tx.commit().map_err(|e| e.to_string())?;
-        storage.deletion_fence.arm(&db)?;
+        storage.deletion_fence.arm(&mut db)?;
         return Ok(saved);
     }
     let pending = super::fence::other_pending(&tx, None)?;
@@ -808,7 +808,7 @@ fn prepare_inner(
     event("beforeCommit");
     cancel(check)?;
     tx.commit().map_err(|e| e.to_string())?;
-    storage.deletion_fence.arm(&db)?;
+    storage.deletion_fence.arm(&mut db)?;
     event("committed");
     Ok(saved)
 }
@@ -848,7 +848,7 @@ fn keep_inner(
         cancel(check)?;
         return Ok(());
     }
-    let writer = super::fence::write_prepared(storage, &db, confirmed, check)?;
+    let writer = super::fence::write_prepared(storage, &mut db, confirmed, check)?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     confirmed.verify_saved(&tx, check)?;

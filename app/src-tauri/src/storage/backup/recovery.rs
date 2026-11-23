@@ -339,7 +339,7 @@ impl Prepared {
                     }
                 }
                 Source::RestoreAddition => {
-                    let db = storage
+                    let mut db = storage
                         .connection
                         .lock()
                         .map_err(|_| "DBロックを取得できません")?;

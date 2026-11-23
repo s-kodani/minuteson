@@ -502,7 +502,7 @@ fn accept_inner(
         }
     }
     let _writer = crate::storage::deletion::fence::write_audio_renewal(
-        storage, &db, review, lease, &cancelled,
+        storage, &mut db, review, lease, &cancelled,
     )?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;

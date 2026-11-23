@@ -309,7 +309,7 @@ fn ancestral_full_meeting_purge(long: bool) {
     );
     assert_eq!(fixed(&f, &parent), parent_record);
     assert_eq!(fixed(&f, &op), child_record);
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     for id in [&parent, &op] {
         assert_eq!(
             db.query_row(
@@ -351,7 +351,7 @@ fn ancestral_full_meeting_purge(long: bool) {
 
 // Canonical corruption of a private fixture. No product permission is relaxed.
 fn rewrite_audit(f: &Fixture, op: &str, mutate: impl FnOnce(&mut Record, &mut audio::Snapshot)) {
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let receipt = Receipt::load(&db, op, &crate::test_support::never_cancelled).unwrap();
     let mut reference = receipt.progress.confirmation.clone().unwrap();
     let mut budget = receipt.saved.header.snapshot_bytes;
@@ -403,7 +403,7 @@ fn rewrite_audit(f: &Fixture, op: &str, mutate: impl FnOnce(&mut Record, &mut au
         true,
     )
     .unwrap();
-    f.storage.deletion_fence.arm(&db).unwrap();
+    f.storage.deletion_fence.arm(&mut db).unwrap();
 }
 
 #[test]
@@ -713,7 +713,7 @@ fn real_lease_and_unchanged_database_metadata_are_required() {
     .is_err());
     assert!(f.path.exists());
     let lease = owner();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     db.authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
         .unwrap();
     db.execute(
@@ -721,7 +721,7 @@ fn real_lease_and_unchanged_database_metadata_are_required() {
         [&f.meeting],
     )
     .unwrap();
-    f.storage.deletion_fence.arm(&db).unwrap();
+    f.storage.deletion_fence.arm(&mut db).unwrap();
     drop(db);
     assert!(accept(
         &f.storage,
@@ -1688,7 +1688,7 @@ fn canonical_oversized_chain_is_rejected_before_reading_its_snapshot_chunks() {
         true,
     )
     .unwrap();
-    f.storage.deletion_fence.arm(&db).unwrap();
+    f.storage.deletion_fence.arm(&mut db).unwrap();
     assert!(
         Receipt::load(&db, &op, &crate::test_support::never_cancelled)
             .unwrap_err()

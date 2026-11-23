@@ -342,7 +342,7 @@ fn finish_inner(
         }
         if crate::storage::deletion::startup::contains(&db, operation)? {
             let _writer = crate::storage::deletion::fence::write_audio_removal(
-                storage, &db, &r, lease, &cancelled,
+                storage, &mut db, &r, lease, &cancelled,
             )?;
             active(lease, check)?;
             r.verify_saved(&db, &cancelled)?;
@@ -358,7 +358,7 @@ fn finish_inner(
         return Err("音声ファイル処理が完了するまで利用不可を確定しません".into());
     }
     let _writer =
-        crate::storage::deletion::fence::write_audio_removal(storage, &db, &r, lease, &cancelled)?;
+        crate::storage::deletion::fence::write_audio_removal(storage, &mut db, &r, lease, &cancelled)?;
     super::verify_remaining(storage, &db, &r, &cancelled)?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;

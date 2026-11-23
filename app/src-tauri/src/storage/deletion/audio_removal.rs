@@ -668,7 +668,7 @@ fn save_unlocked(
 ) -> Result<(), String> {
     let db = crate::operation_observation::lock(&storage.connection)?;
     let _writer =
-        crate::storage::deletion::fence::write_audio_removal(storage, &db, r, lease, check)?;
+        crate::storage::deletion::fence::write_audio_removal(storage, &mut db, r, lease, check)?;
     r.save(storage, &db, next, lease, check)
 }
 fn parent(storage: &Storage, r: &Receipt, path: &str) -> Result<Directory, String> {
@@ -782,7 +782,7 @@ pub(crate) fn start(
         }
     }
     let _writer = crate::storage::deletion::fence::write_audio_prepared(
-        storage, &db, &r.saved, lease, check,
+        storage, &mut db, &r.saved, lease, check,
     )?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;

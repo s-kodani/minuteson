@@ -269,7 +269,7 @@ impl Prepared {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = storage
+        let mut db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
@@ -451,7 +451,7 @@ fn read_snapshot(
 }
 
 pub(crate) fn authorize_review(storage: &Storage, operation: &str) -> Result<(), String> {
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -534,7 +534,7 @@ fn prepare_inner(
             return Err("同じ音声削除操作IDへ別の確認・方針を採用しません".into());
         }
         saved.verify_locked(storage, &db, lease, check)?;
-        storage.deletion_fence.arm(&db)?;
+        storage.deletion_fence.arm(&mut db)?;
         return Ok(saved);
     }
     storage.require_data_writable()?;
@@ -582,7 +582,7 @@ fn prepare_inner(
     saved.verify_locked(storage, &tx, lease, check)?;
     tx.commit().map_err(|e| e.to_string())?;
     // The durable consent wins a racing cancellation; always arm the fence.
-    storage.deletion_fence.arm(&db)?;
+    storage.deletion_fence.arm(&mut db)?;
     event("audioConsentCommitted");
     Ok(saved)
 }
@@ -603,7 +603,7 @@ fn keep_inner(
     event: &impl Fn(&str),
 ) -> Result<(), String> {
     active(lease, check)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -615,7 +615,7 @@ fn keep_inner(
     if saved.kept {
         return active(lease, check);
     }
-    let writer = super::super::fence::write_audio_prepared(storage, &db, &saved, lease, check)?;
+    let writer = super::super::fence::write_audio_prepared(storage, &mut db, &saved, lease, check)?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     saved.verify_saved(&tx, &|| check() || lease.cancelled())?;

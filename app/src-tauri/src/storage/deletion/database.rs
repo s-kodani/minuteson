@@ -4,6 +4,7 @@ use rusqlite::{config::DbConfig, params, types::ValueRef, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::ops::{DerefMut, Deref};
 
 const MAX_ROWS: u64 = 200_000;
 const MAX_CELL: usize = 32 * 1024 * 1024;
@@ -314,7 +315,9 @@ fn table(
     let columns = q.column_count();
     let mut hash = Sha256::new();
     hash.update(name.as_bytes());
-    hash.update(serde_json::to_vec(&q.column_names()).map_err(|e| e.to_string())?);
+    hash.update(
+        serde_json::to_vec(&q.column_names().collect::<Vec<_>>()).map_err(|e| e.to_string())?,
+    );
     let mut rows = if name == "maintenance_operations" {
         q.query(params![meeting, omitted_operation])
     } else {
@@ -391,7 +394,9 @@ pub(super) fn detached_maintenance_hash(
     let fk = q.column_index("meeting_id").map_err(|e| e.to_string())?;
     let mut hash = Sha256::new();
     hash.update(b"maintenance_operations");
-    hash.update(serde_json::to_vec(&q.column_names()).map_err(|e| e.to_string())?);
+    hash.update(
+        serde_json::to_vec(&q.column_names().collect::<Vec<_>>()).map_err(|e| e.to_string())?,
+    );
     let mut seen = std::collections::BTreeSet::new();
     for id in ids {
         cancel(check)?;
@@ -603,24 +608,6 @@ impl Scope {
     }
 }
 
-struct Triggers<'a>(&'a Connection);
-impl Drop for Triggers<'_> {
-    fn drop(&mut self) {
-        if self
-            .0
-            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
-            .is_err()
-        {
-            // Never expose a connection with accidentally disabled protection.
-            let _ = self
-                .0
-                .authorizer(Some(|_: rusqlite::hooks::AuthContext<'_>| {
-                    rusqlite::hooks::Authorization::Deny
-                }));
-        }
-    }
-}
-
 // Internal row phase only. Its caller must hold Storage's connection mutex and
 // maintenance admission, and must have durably completed the fixed file phase.
 // No production entry point calls it yet; the consent/file orchestrator follows.
@@ -649,7 +636,7 @@ pub(super) fn erase_confirmed_rows(
             "確認後に削除対象・依存関係・保守記録が変更されています。再確認してください".into(),
         );
     }
-    let erased = erase_rows(&tx, expected, check)?;
+    let erased = erase_rows(&mut tx, expected, check)?;
     tx.execute("UPDATE maintenance_operations SET progress_json='{\"databaseDeleted\":true}',error_code=NULL,updated_at=?2 WHERE id=?1", params![operation,now_ms()?]).map_err(|e| e.to_string())?;
     cancel(check)?;
     tx.commit().map_err(|e| e.to_string())?;
@@ -659,7 +646,7 @@ pub(super) fn erase_confirmed_rows(
 // The compound receipt owner validates its exact saved scope and file proof
 // while holding the connection mutex, then commits rows and progress together.
 pub(super) fn erase_rows(
-    tx: &Connection,
+    tx: &rusqlite::Transaction<'_>,
     expected: &Scope,
     check: &impl Fn() -> bool,
 ) -> Result<u64, String> {
@@ -667,14 +654,12 @@ pub(super) fn erase_rows(
         return Err("DB行削除には同じ接続の確定トランザクションが必要です".into());
     }
     expected.validate_schema(tx)?;
-    let db = tx;
     cancel(check)?;
     // Keep this enabled on the connection even if cancellation rolls back.
     // WAL pages still need the separately resumable purge below.
-    secure_delete(db)?;
-    db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+    secure_delete(tx)?;
+    tx.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .map_err(|e| e.to_string())?;
-    let triggers = Triggers(db);
     tx.execute(
         "UPDATE meetings SET current_analysis_id=NULL WHERE id=?1",
         params![expected.meeting_id],
@@ -726,8 +711,16 @@ pub(super) fn erase_rows(
     {
         return Err("削除後の参照整合性が不正です。DB削除を巻き戻しました".into());
     }
-    drop(triggers);
-    if !db
+    if !tx
+        .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+        .map_err(|e| e.to_string())
+        .is_err()
+    {
+        let _ = tx.authorizer(Some(|_: rusqlite::hooks::AuthContext<'_>| {
+            rusqlite::hooks::Authorization::Deny
+        }));
+    }
+    if !tx
         .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
         .map_err(|e| e.to_string())?
     {
