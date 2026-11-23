@@ -19,6 +19,9 @@ NATIVE_TOOLS = ("mon_ci_", "mon_rust_", "mon_contracts", "mon_model_catalog",
                 "mon_macos_", "mon_owned_engine", "mon_minutes_models_native")
 DOCUMENTATION_FILES = {
     "README.md", "SECURITY.md", "AGENTS.md", ".github/pull_request_template.md",
+    ".github/ISSUE_TEMPLATE/01-bug-report.yml",
+    ".github/ISSUE_TEMPLATE/02-feature-request.yml",
+    ".github/ISSUE_TEMPLATE/03-task.yml", ".github/ISSUE_TEMPLATE/config.yml",
     "tests/fixtures/audio-import/README.md",
     "third-party/model-licenses/README.md", "third-party/notices/README.md",
     "third-party/runtime-notices/README.md", "evaluation/runs/.gitkeep",

@@ -1,5 +1,11 @@
 # 作業ルール
 
+## Issue・PRの形式
+
+- Issueの形式導入・更新や本文の作成・編集には、[github-issue-workflow](.agents/skills/github-issue-workflow/SKILL.md)を使い、リポジトリのIssueフォームを正本にする。
+- PRの形式導入・更新や本文の作成・編集には、[github-pr-workflow](.agents/skills/github-pr-workflow/SKILL.md)を使い、リポジトリのPRテンプレートを正本にする。
+- 本文は日本語を既定とする。形式導入や下書きの依頼だけでGitHubへ投稿せず、作成・更新の依頼範囲に従う。
+
 ## 検証後の後片付け
 
 - 検証が完了したら、同じ作業内で不要な生成物を削除する。検証用ビルド、そのコピーや圧縮ファイル、合成・一時データ、ログ、レポート、スクリーンショット、トレース、検証用の補助スクリプトを残したままにしない。

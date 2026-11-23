@@ -1,0 +1,71 @@
+name: "不具合報告"
+description: "期待した動作と異なる問題を、再現情報とともに報告します。"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        1つのIssueでは1つの問題を扱い、タイトルには発生条件と問題を簡潔に記載してください。
+        脆弱性の疑いは公開Issueへ書かず、[非公開の報告窓口](https://github.com/s-kodani/minuteson/security/advisories/new)を使用してください。
+        本文・ログ・画像・音声には、秘密情報・個人情報・会議データを含めないでください。再現資料には合成データを使用してください。
+  - type: textarea
+    id: summary
+    attributes:
+      label: "概要"
+      description: "どの操作で何が起き、利用にどのような影響があるかを記載してください。"
+      placeholder: "例: 音声を取り込むと処理が終了せず、会議を開けなくなる。"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: "再現手順"
+      description: "最小限の手順と発生頻度を記載してください。再現条件が不明な場合は、不明であることと発生時の操作を記載してください。"
+      placeholder: |
+        1. …を開く
+        2. …を実行する
+        3. …が発生する
+        発生頻度:
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "期待する動作"
+      description: "正常であれば、どのような結果になるべきかを記載してください。"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: "実際の動作"
+      description: "実際の結果と、表示されたエラー・通知を記載してください。観察した事実と推測は区別してください。"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: "環境・バージョン"
+      description: "アプリの版またはコミット、OSの版・CPU、入手方法を記載してください。AI処理の問題ではモデル・実行方式も含め、不明な項目は不明と記載してください。"
+      placeholder: |
+        MinutesOnの版 / コミット:
+        OSの版 / CPU:
+        入手方法（配布版・ソースビルド等）:
+        関係するモデル・実行方式（該当時）:
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: "補足資料"
+      description: "任意: 個人情報等を除いたログ・画像・合成データ、試した回避策、関連Issueを記載してください。実データやローカルパスの公開に注意してください。"
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: "事前確認"
+      options:
+        - label: "既存Issueを検索し、同じ問題が報告されていないか確認しました。"
+          required: true
+        - label: "本文と添付資料に秘密情報・個人情報・会議データが含まれないことを確認しました。"
+          required: true

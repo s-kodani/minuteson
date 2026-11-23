@@ -1,0 +1,5 @@
+interface:
+  display_name: "Issueの形式と本文を整える"
+  short_description: "Issueフォームを導入・更新し、不具合・改善提案・作業を根拠に沿って記述する"
+policy:
+  allow_implicit_invocation: true

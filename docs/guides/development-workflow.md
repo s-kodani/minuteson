@@ -12,6 +12,8 @@ sources:
   - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/.github/workflows/release-build.yml"
   - resource: "https://github.com/s-kodani/minuteson/blob/bddf5c66505d0d2c097eb55ae05806b9389f306b/tools/mon_release.py"
   - resource: "https://github.com/s-kodani/minuteson/blob/16fc32b82fe1d521acbc691951e4f47a9d1445fd/tools/mon_ci_scope.py"
+  - resource: "https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository"
+  - resource: "https://docs.github.com/en/pull-requests/concepts/helping-others-review-your-changes"
 ---
 
 # GitHubでの開発とリリース
@@ -22,7 +24,7 @@ sources:
 
 1. 目的に対応するブランチを作成します。例は`fix/audio-import`や`perf/ci-artifact-promotion`です。
 2. 実装・必要なテストと、変更した仕様・操作・制約の文書を更新します。
-3. ブランチをpushし、`main`向けPRを作成します。変更後の動作、検査結果、未実施の検証、文書更新先を記載します。
+3. ブランチをpushし、`main`向けPRを[PRテンプレート](../../.github/pull_request_template.md)に沿って作成します。変更後の動作、検査結果、未実施の検証、文書更新先を記載します。
 4. `CI gate`・`Security gate`の成功と差分を確認してマージします。保守担当者1名の運用ではPR承認数を0にし、本人が確認してマージします。
 5. mainの正式ビルドを手元で検証してからReleaseを下書きします。mainへのマージでは公開しません。
 
@@ -43,6 +45,36 @@ flowchart TD
     store --> poll[提出IDでGET状況照会]
 ```
 
+## Issue・PRの形式
+
+本文は日本語を既定とし、1つの目的に絞ります。大きな変更は先にIssueで課題・目的・範囲を共有し、PRには関連Issueを記載します。
+
+### Issue
+
+GitHubのIssue作成画面で、次のフォームを選択します。重複するIssueを検索してから作成し、既存Issueで同じ問題を扱っている場合は、そのIssueへの追記を検討します。
+
+| 種類 | 記載する情報 | 正本 |
+| --- | --- | --- |
+| 不具合報告 | 概要、再現手順、期待する動作、実際の動作、環境・バージョン、補足資料 | [不具合フォーム](../../.github/ISSUE_TEMPLATE/01-bug-report.yml) |
+| 機能・改善提案 | 解決したい課題、利用場面、提案内容、期待効果・受け入れ条件、代替案、関連Issue・補足資料 | [提案フォーム](../../.github/ISSUE_TEMPLATE/02-feature-request.yml) |
+| 開発・保守作業 | 目的、対象範囲、実施内容、完了条件、検証方法、関連Issue | [作業フォーム](../../.github/ISSUE_TEMPLATE/03-task.yml) |
+
+重要項目はフォームで必須とし、補足資料や代替案等は任意です。不明な条件は不明と記載し、推測で補いません。本文・ログ・画像・音声には秘密情報・個人情報・会議データを含めず、再現には合成データを使用します。脆弱性の疑いは[セキュリティ方針](../../SECURITY.md)に従って非公開で報告します。[選択画面の設定](../../.github/ISSUE_TEMPLATE/config.yml)で通常の空白Issueを無効にし、非公開報告窓口を案内します。
+
+### PR
+
+[PRテンプレート](../../.github/pull_request_template.md)に沿って、目的・概要・関連Issue、ふるまい・I/F・例外それぞれの追加／変更／削除、性能・セキュリティへの考慮、検証、文書更新、初期設定・運用への影響を記載します。変更は変更前と変更後が分かるように説明します。
+
+I/FはAPI・IPC・公開型・CLI・保存形式などの関係する契約を含みます。例外は例外型・エラー応答だけでなく、異常条件・通知・復旧・再試行の変更も含みます。「該当なし」には理由を書き、未確認の内容と区別します。検査結果には対象環境を添え、未実施の検証・性能測定には理由を記載します。互換性・データ移行・設定・運用手順に影響する場合も明示します。
+
+解決して閉じるIssueには`Closes #番号`を使い、関連するだけなら`Refs #番号`を使います。追加コミットや範囲変更の後は、タイトルと本文を最終差分に合わせて更新します。PR本文の形式を理由に失敗させるCIゲートは設けず、テンプレートとスキルで統一します。
+
+### Codexで作成・整備する
+
+[github-issue-workflow](../../.agents/skills/github-issue-workflow/SKILL.md)と[github-pr-workflow](../../.agents/skills/github-pr-workflow/SKILL.md)は、それぞれ形式の導入・更新と本文の作成・編集に使用します。たとえば「`$github-issue-workflow`でこの不具合のIssue本文を下書きして」「`$github-pr-workflow`で現在の差分からPR本文を作成して」と依頼できます。
+
+スキルは既存規約とテンプレートを確認し、GitHubツール経由の本文も同じ項目に揃えます。形式導入や下書きだけの依頼では投稿せず、実際の作成・更新は依頼範囲に従います。フォーム・テンプレートはデフォルトブランチへの反映後にGitHubの作成画面へ適用され、既存Issue・PRの本文は一括変更しません。
+
 ## PR・日次・リリース前の検証
 
 PRは変更した経路の検査だけを実行します。最終ゲートは常に完了し、実行予定の失敗・取消・省略、変更範囲の判定失敗を拒否します。
@@ -58,7 +90,7 @@ PRは変更した経路の検査だけを実行します。最終ゲートは常
 
 正本は[変更範囲判定](../../tools/mon_ci_scope.py)です。削除を含め、renameは削除＋追加として両方を判定します。アプリ同梱Markdown、第三者通知は文書だけの変更に分類しません。
 
-文書扱いには、`README.md`・`SECURITY.md`・`AGENTS.md`、`docs/`・`assets/readme/`、`evaluation/`のMarkdown、PRテンプレートを含めます。`.agents/skills/`配下のMarkdownと各スキルの`agents/openai.yaml`も、アプリの検査・ビルドを必要としない作業説明・表示設定として扱います。
+文書扱いには、`README.md`・`SECURITY.md`・`AGENTS.md`、`docs/`・`assets/readme/`、`evaluation/`のMarkdown、PRテンプレート、Issueフォーム3種類と選択画面の設定を含めます。Issue用ディレクトリ全体を除外せず、登録した4ファイルだけを対象にします。`.agents/skills/`配下のMarkdownと各スキルの`agents/openai.yaml`も、アプリの検査・ビルドを必要としない作業説明・表示設定として扱います。
 
 音声取り込みfixtureと第三者資料の3ディレクトリ（`model-licenses`・`notices`・`runtime-notices`）の案内用`README.md`、`evaluation/runs/.gitkeep`、worktreeの準備設定（ルートの`orca.yaml`・`.worktreeinclude`）も軽い検査だけを行います。ライセンス本文・通知index・モデル定義・実行スクリプトまで一括除外せず、未知のファイルは引き続き全経路を検査します。文書とコードが混在する変更はコード側の検査を維持し、手動fullは文書だけでも全件を実行します。
 
@@ -77,6 +109,8 @@ Actionsの**Desktop platform validation → Run workflow**では`quick`／`full`
 開発フローの正本はこの文書、資格情報とGitHub設定の正本は[DevSecOps運用](devsecops.md)です。OS固有の配布処理は各配布ガイドを参照します。PRに更新先または不要の理由を書きます。CIはOKF形式、リンク・アンカー、参照先、目次到達性を検査し、実装との意味の一致は担当者が確認します。
 
 ## Releases画面でバージョンタグを管理する
+
+[リリースノートのskill](../../.agents/skills/github-release-notes/SKILL.md)に従い、主な変更内容、ユーザー目線で変わる部分、互換ブレーク内容、対応PRを簡潔にまとめます。検証の詳細は対象のActionsや配布マニフェストへリンクし、更新判断に必要な注意事項は本文に残します。
 
 [初期設定](devsecops.md#自動配布の初期設定)後、次の手順で公開します。
 
