@@ -63,7 +63,7 @@ impl Reviewed {
         include_unregistered: bool,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         prepared.verify_saved(&db, check)?;
         prepared.verify_locked(storage, &db, check)?;
         let capture = if prepared.manifest().directory_scope() {
@@ -319,7 +319,7 @@ impl Receipt {
         storage: &Storage,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         preflight(storage, &db, self, check)
     }
     pub(super) fn processed_paths(&self) -> usize {
@@ -547,7 +547,7 @@ pub(super) fn verify_reservation_names(
     Ok(())
 }
 pub(super) fn is_database_files(storage: &Storage, operation: &str) -> Result<bool, String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     db.query_row("SELECT json_extract(progress_json,'$.version')=4 FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'", params![operation], |r|r.get::<_, Option<bool>>(0)).map(|v|v.unwrap_or(false)).map_err(|e|e.to_string())
 }
 pub(super) fn read(
@@ -555,7 +555,7 @@ pub(super) fn read(
     operation: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Receipt, String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     storage.managed_anchor.verify()?;
     Receipt::load(&db, operation, check)
 }
@@ -569,7 +569,7 @@ pub(super) fn start(
     if confirmed.manifest() != &reviewed.manifest || confirmed.scope() != &reviewed.scope {
         return Err("削除可能範囲の確認対象が一致しません".into());
     }
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     confirmed.verify_saved(&db, check)?;
     confirmed.verify_locked(storage, &db, check)?;
     let progress = Progress {
@@ -994,12 +994,12 @@ fn verify_unlocked(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     if receipt.manifest.directory_scope() {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         return verify_directory(storage, &db, receipt, check);
     }
     let p = &receipt.confirmed;
     let roots = {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         receipt.verify_saved(&db, check)?;
         if super::fence::other_pending(&db, Some(p.operation()))? {
             return Err("別の保守操作があります".into());
@@ -1033,7 +1033,7 @@ fn verify_unlocked(
         )?
     };
     compare_census(storage, receipt, current)?;
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     receipt.verify_saved(&db, check)
 }
 fn save_unlocked(
@@ -1042,7 +1042,7 @@ fn save_unlocked(
     next: Progress,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     let _writer = super::fence::write_removal(storage, &mut db, receipt, check)?;
     receipt.save(storage, &db, next, check)
 }

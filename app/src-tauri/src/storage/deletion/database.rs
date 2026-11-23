@@ -711,14 +711,12 @@ pub(super) fn erase_rows(
     {
         return Err("削除後の参照整合性が不正です。DB削除を巻き戻しました".into());
     }
-    if !tx
+    if tx
         .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
         .map_err(|e| e.to_string())
         .is_err()
     {
-        let _ = tx.authorizer(Some(|_: rusqlite::hooks::AuthContext<'_>| {
-            rusqlite::hooks::Authorization::Deny
-        }));
+        return Err("削除後の保護制約を再有効化できません".into());
     }
     if !tx
         .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)

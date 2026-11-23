@@ -232,7 +232,7 @@ impl Storage {
             self.deletion_fence.fail_closed(&mut db);
             return Err(error);
         }
-        self.deletion_fence.scoped_update(&mut db, || {
+        self.deletion_fence.scoped_update(&mut db, |db| {
             db.execute("INSERT OR IGNORE INTO temp.mon_meeting_deletion_guard(meeting_id,bypass) VALUES(?1,0)", [meeting]).map_err(|e|e.to_string())?;
             Ok(())
         })
@@ -242,8 +242,8 @@ impl Storage {
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
-        self.deletion_fence.scoped_update(&mut db, || {
-            let predicate = super::deletion::fence::predicate(&db)?;
+        self.deletion_fence.scoped_update(&mut db, |db| {
+            let predicate = super::deletion::fence::predicate(db)?;
             let pending: bool = db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE kind='delete_meeting' AND (meeting_id=?1 OR {}=?1) AND {predicate})", super::deletion::fence::MANIFEST_MEETING), [meeting], |r|r.get(0)).map_err(|e|e.to_string())?;
             if pending {
                 return Ok(());

@@ -406,7 +406,7 @@ impl Fence {
     pub(in crate::storage) fn scoped_update(
         &self,
         db: &mut Connection,
-        action: impl FnOnce() -> Result<(), String>,
+        action: impl FnOnce(&mut Connection) -> Result<(), String>,
     ) -> Result<(), String> {
         if self.startup_deferred {
             return Err("再起動後の削除は専用の回復操作で確認してください".into());
@@ -414,7 +414,7 @@ impl Fence {
         db.flush_prepared_statement_cache();
         db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
             .map_err(|e| e.to_string())?;
-        let result = action();
+        let result = action(db);
         if result.is_err() {
             self.fail_closed(db);
             return result;
@@ -533,7 +533,7 @@ impl Writer<'_> {
         })
     }
 
-    pub(super) fn finish(self, db: &mut Connection) {
+    pub(super) fn finish(self, mut db: &mut Connection) {
         let fence = &self.storage.deletion_fence;
         if connection_identity(db) != self.connection_identity {
             fence.scoped.store(false, Ordering::Release);

@@ -328,7 +328,7 @@ fn finish_inner(
     event: &impl Fn(&str),
 ) -> Result<Receipt, String> {
     active(lease, check)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;

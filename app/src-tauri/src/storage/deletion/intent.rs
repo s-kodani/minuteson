@@ -829,7 +829,7 @@ fn keep_inner(
     event: &impl Fn(&str),
 ) -> Result<(), String> {
     cancel(check)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;

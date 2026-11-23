@@ -123,7 +123,7 @@ impl Receipt {
         &self,
         storage: &Storage,
     ) -> Result<bool, String> {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         self.verify_saved(&db)?;
         renewal::recorded_policy(&db, &self.saved, &self.progress)
     }
@@ -153,7 +153,7 @@ impl Receipt {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         verify_remaining(storage, &db, self, &|| check() || lease.cancelled())?;
         active(lease, check)
     }
@@ -520,7 +520,7 @@ fn verify_unlocked(
     Ok(models)
 }
 fn check_metadata(storage: &Storage, r: &Receipt) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     r.verify_saved(&db)?;
     r.metadata(storage, &db)
 }
@@ -531,7 +531,7 @@ fn save_unlocked(
     lease: &DataMaintenanceLease,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     let _writer = crate::storage::deletion::fence::write_model_removal(storage, &mut db, r, lease)?;
     r.save(storage, &db, next, lease, check)
 }
@@ -541,7 +541,7 @@ fn resolve_unlocked(
     lease: &DataMaintenanceLease,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     let _writer = crate::storage::deletion::fence::write_model_removal(storage, &mut db, r, lease)?;
     super::super::startup::resolve(storage, &db, r, check)
 }
@@ -554,7 +554,7 @@ pub(crate) fn start(
 ) -> Result<Receipt, String> {
     active(lease, check)?;
     let saved = {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         super::read(&db, operation)?
     };
     let current = super::super::capture_mode(
@@ -565,7 +565,7 @@ pub(crate) fn start(
         &|| check() || lease.cancelled(),
         saved.snapshot.directory_scope,
     )?;
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     saved.verify_saved(&db)?;
     saved
         .snapshot
@@ -708,7 +708,7 @@ fn run_inner(
 ) -> Result<Receipt, String> {
     active(lease, check)?;
     let mut r = {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         Receipt::load(&db, operation)?
     };
     if r.saved.snapshot.directory_scope {

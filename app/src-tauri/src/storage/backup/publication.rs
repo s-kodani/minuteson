@@ -227,8 +227,10 @@ impl Storage {
         // Persist stable IDs before installing files. Per-path ownership records
         // must be durable outside the later atomic publication transaction.
         tx.commit().map_err(|e| e.to_string())?;
-        let journal = journal::Journal::begin(&db, &self.root, sealed, ids)?;
-        let mut installed = Installed::prepare_recorded(&self.root, sealed, journal, check)?;
+        let mut installed = {
+            let journal = journal::Journal::begin(&db, &self.root, sealed, ids)?;
+            Installed::prepare_recorded(&self.root, sealed, journal, &db, check)?
+        };
         AppendOnly::begin(&mut db)?;
         let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;

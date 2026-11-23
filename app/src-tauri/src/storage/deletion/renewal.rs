@@ -323,7 +323,7 @@ impl Source<'_> {
     fn writer<'a>(
         &self,
         storage: &'a Storage,
-        db: &'a mut Connection,
+        db: &mut Connection,
         check: &impl Fn() -> bool,
     ) -> Result<super::fence::Writer<'a>, String> {
         match self {

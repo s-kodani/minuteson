@@ -339,7 +339,7 @@ impl Review {
     ) -> Result<Self, String> {
         active(lease, check)?;
         let cancelled = || check() || lease.cancelled();
-        let db = storage
+        let mut db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
@@ -371,7 +371,7 @@ impl Review {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = storage
+        let mut db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
@@ -414,7 +414,7 @@ fn accept_inner(
         retain_unclassified: true,
     };
     policy_valid(&review.snapshot, &policy)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
