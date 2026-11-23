@@ -25,6 +25,8 @@ DOCUMENTATION_FILES = {
     "tests/fixtures/audio-import/README.md",
     "third-party/model-licenses/README.md", "third-party/notices/README.md",
     "third-party/runtime-notices/README.md", "evaluation/runs/.gitkeep",
+    # Local worktree setup only; neither CI nor the app reads these files.
+    "orca.yaml", ".worktreeinclude",
 }
 
 

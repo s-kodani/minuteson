@@ -1,0 +1,20 @@
+scripts:
+  # 新しいworktreeで依存を取得し、mainチェックアウトの固定ランタイムを複製する。
+  # ランタイム準備ツールはリンクされたキャッシュを拒否するため、APFSクローン（cp -c）で複製する。
+  setup: |
+    set -eu
+    root=$(git rev-parse --show-toplevel)
+    main=$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd -P)
+    npm ci --prefix "$root/app"
+    cargo fetch --locked --manifest-path "$root/Cargo.toml"
+    if [ "$root" != "$main" ]; then
+      mkdir -p "$root/.cache"
+      for name in whisper-metal-runtime inference-runtime third-party-notices \
+          security-tools node24 python build-python uv; do
+        if [ -d "$main/.cache/$name" ] && [ ! -e "$root/.cache/$name" ]; then
+          cp -cRp "$main/.cache/$name" "$root/.cache/$name"
+        fi
+      done
+    fi
+
+setupAgentStartupPolicy: wait-for-setup

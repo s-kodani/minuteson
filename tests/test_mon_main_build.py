@@ -100,6 +100,7 @@ class ScopeTests(unittest.TestCase):
             'third-party/notices/README.md',
             'third-party/runtime-notices/README.md',
             'evaluation/runs/.gitkeep',
+            'orca.yaml', '.worktreeinclude',
         )
         for path in paths:
             for on_main in (False, True):
@@ -124,6 +125,7 @@ class ScopeTests(unittest.TestCase):
             'third-party/notices/index.json', 'third-party/runtime-notices/index.json',
             'third-party/model-licenses/model.txt',
             'third-party/new-materials/README.md', 'unknown/AGENTS.md',
+            'app/orca.yaml', 'tools/.worktreeinclude',
             'evaluation/config.toml',
         )
         for path in paths:
