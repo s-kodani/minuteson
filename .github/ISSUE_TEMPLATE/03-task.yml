@@ -1,0 +1,63 @@
+name: "開発・保守作業"
+description: "調査・リファクタリング・文書整備などの作業を整理します。"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        1つのIssueでは1つの目的を扱い、タイトルには作業と達成したい結果を簡潔に記載してください。
+        不具合の報告や機能提案には、それぞれの専用フォームを使用してください。
+        脆弱性の疑いは[非公開の報告窓口](https://github.com/s-kodani/minuteson/security/advisories/new)へ報告し、公開本文・添付資料には秘密情報・個人情報・会議データを含めないでください。
+  - type: textarea
+    id: purpose
+    attributes:
+      label: "目的"
+      description: "現状の課題と、この作業が必要な理由を記載してください。"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: "対象範囲"
+      description: "対象となる機能・文書・環境と、対象外にする内容があれば記載してください。"
+    validations:
+      required: true
+  - type: textarea
+    id: work
+    attributes:
+      label: "実施内容"
+      description: "必要な作業を記載してください。調査で決める内容は未決定と分かるようにしてください。"
+    validations:
+      required: true
+  - type: textarea
+    id: completion
+    attributes:
+      label: "完了条件"
+      description: "作業が完了したと判断できる成果・状態を記載してください。"
+      placeholder: |
+        - [ ] …が整備されていること
+        - [ ] …を確認できること
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: "検証方法"
+      description: "完了条件をどう確かめるかを記載してください。方法が未定なら、未定である理由と決めるための調査を記載してください。"
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: "関連Issue"
+      description: "任意: 関連Issue・PR、依存する作業や参考資料を記載してください。"
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: "事前確認"
+      options:
+        - label: "既存Issueを検索し、同じ作業が登録されていないか確認しました。"
+          required: true
+        - label: "本文と添付資料に秘密情報・個人情報・会議データが含まれないことを確認しました。"
+          required: true

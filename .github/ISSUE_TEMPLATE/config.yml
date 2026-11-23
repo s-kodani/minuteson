@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "セキュリティ上の問題を非公開で報告"
+    url: "https://github.com/s-kodani/minuteson/security/advisories/new"
+    about: "脆弱性の疑いは、公開Issueではなくこちらから報告してください。"
