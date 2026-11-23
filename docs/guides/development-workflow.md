@@ -78,6 +78,8 @@ Actionsの**Desktop platform validation → Run workflow**では`quick`／`full`
 
 ## Releases画面でバージョンタグを管理する
 
+[リリースノートのskill](../../.agents/skills/github-release-notes/SKILL.md)に従い、主な変更内容、ユーザー目線で変わる部分、互換ブレーク内容、対応PRを簡潔にまとめます。検証の詳細は対象のActionsや配布マニフェストへリンクし、更新判断に必要な注意事項は本文に残します。
+
 [初期設定](devsecops.md#自動配布の初期設定)後、次の手順で公開します。
 
 1. `app/package.json`、同ロックファイルのルート版、Tauri設定、Rustの`mon-desktop`の版を揃えたPRをmainへマージします。例は`1.2.3`です。
