@@ -524,13 +524,13 @@ fn deletion_wrong_kind_corrupt_receipt_and_other_pending_operation_never_grant_a
     assert!(authorize_review(&f.storage, None).is_err());
     assert!(authorize_review(&f.storage, Some("bad")).is_err());
     assert!(authorize_review(&f.storage, Some(&id)).is_ok());
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let Target::Unstarted(ref saved) = p.target else {
         unreachable!()
     };
     let _writer = super::super::fence::write_prepared(
         &f.storage,
-        &db,
+        &mut db,
         saved,
         &crate::test_support::never_cancelled,
     )
@@ -551,13 +551,13 @@ fn deletion_other_pending_kind_is_not_a_deletion_admission_or_silently_ignored()
     let f = Fixture::new();
     let p = f.pending();
     let other = Uuid::new_v4().to_string();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let Target::Unstarted(ref saved) = p.target else {
         unreachable!()
     };
     let writer = super::super::fence::write_prepared(
         &f.storage,
-        &db,
+        &mut db,
         saved,
         &crate::test_support::never_cancelled,
     )
@@ -607,7 +607,7 @@ fn deletion_matching_database_copy_cannot_adopt_original_storage_confirmation() 
     let destination = tempfile::tempdir().unwrap();
     let mut copy = rusqlite::Connection::open(destination.path().join("meetings.sqlite3")).unwrap();
     {
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         rusqlite::backup::Backup::new(&db, &mut copy)
             .unwrap()
             .run_to_completion(32, std::time::Duration::from_millis(1), None)
@@ -704,7 +704,7 @@ fn directory_request_removes_changed_unknown_files_without_content_reads_or_vacu
     assert!(f.storage.get_meeting(&f.meeting).unwrap().is_none());
     f.unaffected();
     assert_eq!(crate::operation_observation::measurements(), (0, 0));
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     assert_eq!(
         db.query_row("PRAGMA secure_delete", [], |r| r.get::<_, i64>(0))
             .unwrap(),

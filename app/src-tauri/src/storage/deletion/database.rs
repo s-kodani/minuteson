@@ -636,7 +636,7 @@ pub(super) fn erase_confirmed_rows(
             "確認後に削除対象・依存関係・保守記録が変更されています。再確認してください".into(),
         );
     }
-    let erased = erase_rows(&mut tx, expected, check)?;
+    let erased = erase_rows(&tx, expected, check)?;
     tx.execute("UPDATE maintenance_operations SET progress_json='{\"databaseDeleted\":true}',error_code=NULL,updated_at=?2 WHERE id=?1", params![operation,now_ms()?]).map_err(|e| e.to_string())?;
     cancel(check)?;
     tx.commit().map_err(|e| e.to_string())?;

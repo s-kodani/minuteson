@@ -368,17 +368,18 @@ fn state(db: &Connection, batch: &str) -> String {
     )
     .unwrap()
 }
-fn recorded<'a>(
+fn recorded(
     f: &super::super::tests::Fixture,
-    db: &'a Connection,
+    db: &Connection,
     sealed: &SealedWorkspace,
     ids: &RestoreIds<'_>,
-) -> Installed<'a> {
+) -> Installed {
     let journal = Journal::begin(db, &f.target.root, sealed, ids).unwrap();
     Installed::prepare_recorded(
         &f.target.root,
         sealed,
         journal,
+        db,
         &crate::test_support::never_cancelled,
     )
     .unwrap()
@@ -481,7 +482,8 @@ fn restore_journal_partial_copy_and_repeated_cleanup_remove_only_registered_owne
     let root = f.target.root.clone();
     {
         let db = f.target.connection.lock().unwrap();
-        let journal = Journal::begin(&db, &root, &sealed, &ids).unwrap();
+        let conn: &Connection = &db;
+        let journal = Journal::begin(conn, &root, &sealed, &ids).unwrap();
         let target = targets(&sealed)
             .unwrap()
             .into_iter()
@@ -500,12 +502,12 @@ fn restore_journal_partial_copy_and_repeated_cleanup_remove_only_registered_owne
             }
             builder.create(folder).unwrap();
             journal
-                .record(folder, &crate::native_fs::symlink_metadata(folder).unwrap())
+                .record(conn, folder, &crate::native_fs::symlink_metadata(folder).unwrap())
                 .unwrap();
         }
         let mut file = private_file(&path).unwrap();
         journal
-            .record(&path, &crate::native_fs::metadata(&file).unwrap())
+            .record(conn, &path, &crate::native_fs::metadata(&file).unwrap())
             .unwrap();
         file.write_all(b"partial").unwrap();
         file.sync_all().unwrap();
@@ -731,7 +733,7 @@ fn restore_journal_cleanup_commit_failure_retains_markers_and_replays_missing_pa
     let sealed = sealed(&f, &ids);
     let root = f.target.root.clone();
     {
-        let db = f.target.connection.lock().unwrap();
+        let mut db = f.target.connection.lock().unwrap();
         let install = recorded(&f, &db, &sealed, &ids);
         db.commit_hook(Some(|| true)).unwrap();
         drop(install);
@@ -764,7 +766,7 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
     let ids = ids(&f, &batch);
     let sealed = sealed(&f, &ids);
     {
-        let db = f.target.connection.lock().unwrap();
+        let mut db = f.target.connection.lock().unwrap();
         drop(recorded(&f, &db, &sealed, &ids));
         assert_eq!(state(&db, &batch), "recovered");
         db.authorizer(Some(|context: AuthContext<'_>| match context.action {

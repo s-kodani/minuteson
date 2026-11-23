@@ -101,7 +101,7 @@ impl Fixture {
 fn file_removal_erases_fixed_tree_replays_and_refuses_recreated_content() {
     let f = Fixture::new();
     let mut receipt = f.begin(false);
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let original:(String,String,i64,i64)=db.query_row("SELECT target_manifest_json,target_hash,consent_at,(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1) FROM maintenance_operations WHERE id=?1",params![f.operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
     drop(db);
     run(
@@ -116,7 +116,7 @@ fn file_removal_erases_fixed_tree_replays_and_refuses_recreated_content() {
         .root()
         .join(format!("meetings/{}", f.meeting))
         .exists());
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let after:(String,String,i64,i64)=db.query_row("SELECT target_manifest_json,target_hash,consent_at,(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1) FROM maintenance_operations WHERE id=?1",params![f.operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
     assert_eq!(original, after);
     drop(db);
@@ -180,7 +180,7 @@ fn file_removal_empty_draft_completes_without_creating_a_meeting_folder() {
 fn file_removal_unregistered_objects_require_explicit_review_not_producer_hints() {
     let f = Fixture::new();
     let session = uuid::Uuid::new_v4().to_string();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     db.execute(
         "UPDATE meetings SET source_type='recording' WHERE id=?1",
         params![f.meeting],
@@ -271,10 +271,10 @@ fn file_removal_refuses_another_pending_operation_before_resuming_file_io() {
     for state in ["prepared", "installing", "cleanup", "attention"] {
         let f = Fixture::new();
         let mut receipt = f.begin(false);
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         let _writer = super::super::fence::write_removal(
             &f.storage,
-            &db,
+            &mut db,
             &receipt,
             &crate::test_support::never_cancelled,
         )
@@ -518,10 +518,10 @@ fn file_removal_progress_corruption_and_skipped_cursor_never_grant_removal() {
     ] {
         let f = Fixture::new();
         let r = f.begin(false);
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         let _writer = super::super::fence::write_removal(
             &f.storage,
-            &db,
+            &mut db,
             &r,
             &crate::test_support::never_cancelled,
         )
@@ -546,10 +546,10 @@ fn file_removal_progress_corruption_and_skipped_cursor_never_grant_removal() {
     }
     let f = Fixture::new();
     let r = f.begin(false);
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let _writer = super::super::fence::write_removal(
         &f.storage,
-        &db,
+        &mut db,
         &r,
         &crate::test_support::never_cancelled,
     )

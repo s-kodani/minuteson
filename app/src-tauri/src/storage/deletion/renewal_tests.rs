@@ -12,7 +12,7 @@ fn lease() -> DataMaintenanceLease {
         .unwrap()
 }
 fn snapshot(f: &Fixture) -> (String, String, i64, String) {
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let (json, hash, consent): (String, String, i64) = db.query_row(
         "SELECT target_manifest_json,target_hash,consent_at FROM maintenance_operations WHERE id=?1",
         params![f.operation], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
@@ -235,7 +235,7 @@ fn renewal_partial_deletion_requires_separate_unknown_consent_and_preserves_orig
     assert_eq!(original, snapshot(&f));
     assert!(!f.file.exists());
     assert!(extra.exists()); // Recording renewed consent does not delete anything.
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let audit_id = &r.progress.confirmation.as_ref().unwrap().operation_id;
     let audit: (Option<String>, String, String) = db
         .query_row(
@@ -644,10 +644,10 @@ fn renewal_immutable_audit_targets_and_paths_reject_updates_deletes_or_post_comp
     std::fs::write(&f.file, b"NEW OBSERVATION").unwrap();
     accept(&f, &mut r, false);
     let id = &r.progress.confirmation.as_ref().unwrap().operation_id;
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let writer = crate::storage::deletion::fence::write_removal(
         &f.storage,
-        &db,
+        &mut db,
         &r,
         &crate::test_support::never_cancelled,
     )
@@ -691,10 +691,10 @@ fn renewal_invalid_reference_policy_cursor_or_audit_progress_refuses_loading_and
             .unwrap()
             .operation_id
             .clone();
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         let writer = crate::storage::deletion::fence::write_removal(
             &f.storage,
-            &db,
+            &mut db,
             &r,
             &crate::test_support::never_cancelled,
         )
@@ -818,7 +818,7 @@ fn renewal_many_remaining_files_store_observations_separately_and_keep_cursor_bo
     )
     .unwrap();
     let id = &r.progress.confirmation.as_ref().unwrap().operation_id;
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let (bytes, paths): (i64,i64) = db.query_row("SELECT length(CAST(target_manifest_json AS BLOB)),(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1) FROM maintenance_operations WHERE id=?1",params![id],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
     assert!(bytes < 65536);
     assert_eq!(paths, 203);
@@ -862,10 +862,10 @@ fn renewal_another_pending_kind_blocks_inspection_and_acceptance_without_changin
     let mut r = f.begin(false);
     let v = review(&f, &r);
     let before = r.progress_json().unwrap();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let writer = crate::storage::deletion::fence::write_removal(
         &f.storage,
-        &db,
+        &mut db,
         &r,
         &crate::test_support::never_cancelled,
     )
@@ -990,10 +990,10 @@ fn renewal_cannot_replace_original_database_scope_even_after_a_new_file_review()
     let mut r = f.begin(false);
     let v = review(&f, &r);
     let before = r.progress_json().unwrap();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let writer = crate::storage::deletion::fence::write_removal(
         &f.storage,
-        &db,
+        &mut db,
         &r,
         &crate::test_support::never_cancelled,
     )
@@ -1028,10 +1028,10 @@ fn renewal_cached_builtin_schema_never_adopts_a_changed_live_constraint() {
     let f = Fixture::new();
     let r = f.begin(false); // Warm the fixed built-in reference schema.
     assert!(review(&f, &r).manifest().entries.len() > 1);
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let writer = crate::storage::deletion::fence::write_removal(
         &f.storage,
-        &db,
+        &mut db,
         &r,
         &crate::test_support::never_cancelled,
     )

@@ -38,7 +38,7 @@ fn compound_current_census_keeps_original_scope_and_never_resurrects_deleted_ass
         let receipt = at_database_phase(&f, phase.clone());
         std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
         std::fs::write(&f.file, b"REAPPEARED CURRENT AUDIO").unwrap();
-        let db = f.f.storage.connection.lock().unwrap();
+        let mut db = f.f.storage.connection.lock().unwrap();
         let saved = || {
             db.query_row("SELECT target_manifest_json,target_hash,consent_at,progress_json,updated_at FROM maintenance_operations WHERE id=?1", params![f.operation], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?))).unwrap()
         };
@@ -96,11 +96,11 @@ fn compound_current_census_rejects_changed_rows_and_recreated_deleted_meeting_wi
                 Phase::RowsPending
             },
         );
-        let db = f.f.storage.connection.lock().unwrap();
+        let mut db = f.f.storage.connection.lock().unwrap();
         {
             let _writer = super::super::fence::write_completion(
                 &f.f.storage,
-                &db,
+                &mut db,
                 &receipt,
                 &crate::test_support::never_cancelled,
             )
@@ -163,7 +163,7 @@ fn compound_current_census_retains_reserved_root_and_external_symlink_without_fo
             std::os::unix::fs::symlink(f.outside.path(), &path).unwrap();
             path
         };
-        let db = f.f.storage.connection.lock().unwrap();
+        let mut db = f.f.storage.connection.lock().unwrap();
         let census =
             receipt.review_census(&f.f.storage, &db, &crate::test_support::never_cancelled);
         if reserved {
@@ -203,7 +203,7 @@ fn compound_current_census_rejects_root_reservation_created_during_final_saved_v
         f.f.storage
             .root()
             .join(format!("meetings/.mon-delete-{}-{index}", f.operation));
-    let db = f.f.storage.connection.lock().unwrap();
+    let mut db = f.f.storage.connection.lock().unwrap();
     let calls = Cell::new(0usize);
     receipt
         .review_census(&f.f.storage, &db, &|| {
@@ -240,7 +240,7 @@ fn compound_current_census_cancellation_is_read_only_and_changed_second_inventor
     let receipt = at_database_phase(&f, Phase::RowsDeleted);
     std::fs::create_dir_all(f.file.parent().unwrap()).unwrap();
     std::fs::write(&f.file, b"FIRST CURRENT CONTENT").unwrap();
-    let db = f.f.storage.connection.lock().unwrap();
+    let mut db = f.f.storage.connection.lock().unwrap();
     assert!(receipt.review_census(&f.f.storage, &db, &|| true).is_err());
     let first = receipt
         .review_census(&f.f.storage, &db, &crate::test_support::never_cancelled)
@@ -329,7 +329,7 @@ fn assert_free_pages_zero(bytes: &[u8]) {
 }
 
 fn assert_matching_copy_is_not_a_writer(f: &Fixture, receipt: &Receipt) {
-    let db = f.f.storage.connection.lock().unwrap();
+    let mut db = f.f.storage.connection.lock().unwrap();
     let mut copied = Connection::open_in_memory().unwrap();
     rusqlite::backup::Backup::new(&db, &mut copied)
         .unwrap()
@@ -341,7 +341,7 @@ fn assert_matching_copy_is_not_a_writer(f: &Fixture, receipt: &Receipt) {
         .unwrap();
     assert!(super::super::fence::write_completion(
         &f.f.storage,
-        &copied,
+        &mut copied,
         receipt,
         &crate::test_support::never_cancelled
     )
@@ -406,7 +406,7 @@ impl Fixture {
         std::fs::create_dir_all(model.parent().unwrap()).unwrap();
         std::fs::write(model, b"KEEP MODEL").unwrap();
         let marker = format!("DELETE-PRIVATE-{}-BODY", uuid::Uuid::new_v4());
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         // The legacy minutes-only fixture used a non-UUID synthetic path.
         // Keep its asset ID/FKs, but make this end-to-end fixture a valid
         // meeting-scoped missing asset, not a production validation exception.
@@ -488,7 +488,7 @@ impl Fixture {
             b"KEEP MODEL"
         );
         assert!(self.f.storage.get_meeting(&self.f.other).unwrap().is_some());
-        let db = self.f.storage.connection.lock().unwrap();
+        let mut db = self.f.storage.connection.lock().unwrap();
         assert_eq!(saved_settings(&db), self.settings);
         assert_eq!(
             db.query_row("SELECT count(*) FROM model_packages", [], |r| r
@@ -532,7 +532,7 @@ fn compound_deletion_requires_files_then_purges_fixed_rows_replays_and_refuses_r
     let mut r = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
     let replay = start(&f.f.storage, &files, &crate::test_support::never_cancelled).unwrap();
     assert_eq!(r.progress, replay.progress);
-    let db = f.f.storage.connection.lock().unwrap();
+    let mut db = f.f.storage.connection.lock().unwrap();
     let original:(String,String,i64,i64)=db.query_row("SELECT target_manifest_json,target_hash,consent_at,(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1) FROM maintenance_operations WHERE id=?1",params![f.operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
     let other =
         database::Scope::capture(&db, &f.f.other, "", &crate::test_support::never_cancelled)
@@ -542,7 +542,7 @@ fn compound_deletion_requires_files_then_purges_fixed_rows_replays_and_refuses_r
     assert!(r.completed());
     assert!(!f.file.exists());
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
-    let db = f.f.storage.connection.lock().unwrap();
+    let mut db = f.f.storage.connection.lock().unwrap();
     let after:(String,String,i64,i64)=db.query_row("SELECT target_manifest_json,target_hash,consent_at,(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1) FROM maintenance_operations WHERE id=?1",params![f.operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
     assert_eq!(original, after);
     assert!(!original.0.contains(&f.marker));
@@ -676,10 +676,10 @@ fn compound_deletion_refuses_changed_database_scope_and_recreated_file_tree_befo
         let f = Fixture::new();
         let mut r = f.begin();
         if change == "scope" {
-            let db = f.f.storage.connection.lock().unwrap();
+            let mut db = f.f.storage.connection.lock().unwrap();
             let _writer = super::super::fence::write_completion(
                 &f.f.storage,
-                &db,
+                &mut db,
                 &r,
                 &crate::test_support::never_cancelled,
             )
@@ -703,10 +703,10 @@ fn compound_deletion_rejects_corrupt_phase_file_proof_and_foreign_progress() {
     for change in ["version", "phase", "files", "unknown"] {
         let f = Fixture::new();
         let r = f.begin();
-        let db = f.f.storage.connection.lock().unwrap();
+        let mut db = f.f.storage.connection.lock().unwrap();
         let _writer = super::super::fence::write_completion(
             &f.f.storage,
-            &db,
+            &mut db,
             &r,
             &crate::test_support::never_cancelled,
         )
@@ -740,10 +740,10 @@ fn compound_deletion_foreign_connection_and_other_pending_operation_cannot_mutat
     let f = Fixture::new();
     let mut r = f.begin();
     assert_matching_copy_is_not_a_writer(&f, &r);
-    let db = f.f.storage.connection.lock().unwrap();
+    let mut db = f.f.storage.connection.lock().unwrap();
     let _writer = super::super::fence::write_completion(
         &f.f.storage,
-        &db,
+        &mut db,
         &r,
         &crate::test_support::never_cancelled,
     )
@@ -762,21 +762,21 @@ fn compound_deletion_foreign_connection_and_other_pending_operation_cannot_mutat
 fn compound_deletion_blocked_wal_checkpoint_retains_cleanup_then_retries_after_reader_releases() {
     let f = Fixture::new();
     let mut r = f.begin();
-    let db = f.f.storage.connection.lock().unwrap();
-    let mut statement = db.prepare("SELECT id FROM model_packages").unwrap();
-    let mut rows = statement.query([]).unwrap();
-    assert!(rows.next().unwrap().is_some());
+    let mut db = f.f.storage.connection.lock().unwrap();
+    {
+        let mut statement = db.prepare("SELECT id FROM model_packages").unwrap();
+        let mut rows = statement.query([]).unwrap();
+        assert!(rows.next().unwrap().is_some());
+    }
     assert!(run_locked(
         &f.f.storage,
-        &db,
+        &mut db,
         &mut r,
         &crate::test_support::never_cancelled,
         &|_| {}
     )
     .is_err());
     assert_eq!(r.progress.database_phase, Phase::RowsDeleted);
-    drop(rows);
-    drop(statement);
     drop(db);
     assert!(f.f.storage.data_write_blocked());
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
@@ -789,10 +789,10 @@ fn compound_deletion_rejects_claimed_row_completion_when_actual_rows_still_exist
     for phase in [Phase::RowsDeleted, Phase::Finished] {
         let f = Fixture::new();
         let r = f.begin();
-        let db = f.f.storage.connection.lock().unwrap();
+        let mut db = f.f.storage.connection.lock().unwrap();
         let _writer = super::super::fence::write_completion(
             &f.f.storage,
-            &db,
+            &mut db,
             &r,
             &crate::test_support::never_cancelled,
         )

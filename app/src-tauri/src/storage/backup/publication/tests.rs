@@ -360,9 +360,9 @@ fn restore_publication_rejects_wrong_workspace_schema_and_late_json_identity_col
 
 #[test]
 fn restore_append_capability_denies_update_delete_ddl_and_restores_triggers_on_error() {
-    let db = portable::schema().unwrap();
+    let mut db = portable::schema().unwrap();
     {
-        let _guard = AppendOnly::begin(&db).unwrap();
+        let _guard = AppendOnly::begin(&mut db).unwrap();
         for sql in [
             "UPDATE meetings SET title='x'",
             "DELETE FROM meetings",
@@ -523,6 +523,7 @@ fn restore_install_detects_late_links_and_cleanup_preserves_outside_and_unknown_
     let install = Installed::prepare(
         &f.target.root,
         &sealed,
+        &f.target.connection.lock().unwrap(),
         &crate::test_support::never_cancelled,
     )
     .unwrap();
@@ -554,6 +555,7 @@ fn restore_install_detects_late_links_and_cleanup_preserves_outside_and_unknown_
     let install = Installed::prepare(
         &target_storage.root,
         &sealed,
+        &target_storage.connection.lock().unwrap(),
         &crate::test_support::never_cancelled,
     )
     .unwrap();

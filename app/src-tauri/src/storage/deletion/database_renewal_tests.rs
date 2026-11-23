@@ -310,7 +310,7 @@ fn root_json(f: &Fixture) -> String {
         .unwrap()
 }
 fn evidence(f: &Fixture) -> (String, String, i64, Vec<(String, String)>) {
-    let db = f.f.storage.connection.lock().unwrap();
+    let mut db = f.f.storage.connection.lock().unwrap();
     let (json, hash, consent) = db.query_row(
         "SELECT target_manifest_json,target_hash,consent_at FROM maintenance_operations WHERE id=?1",
         params![f.operation], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
@@ -398,7 +398,7 @@ fn database_renewal_all_three_stages_preserve_original_evidence_and_resume_witho
             f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some(),
             !phase.rows_committed()
         );
-        let db = f.f.storage.connection.lock().unwrap();
+        let mut db = f.f.storage.connection.lock().unwrap();
         assert!(fence::has_pending(&db).unwrap());
         assert!(f.f.storage.data_write_blocked());
         assert!(original
@@ -669,10 +669,10 @@ fn database_renewal_rejects_downgraded_or_forgotten_phase_and_does_not_revert_co
     reappear(&f, b"KEEP INVALID PLAN FILE");
     let files = accept(&f, &original);
     let json = root_json(&f);
-    let db = f.f.storage.connection.lock().unwrap();
+    let mut db = f.f.storage.connection.lock().unwrap();
     let _writer = fence::write_removal(
         &f.f.storage,
-        &db,
+        &mut db,
         &files,
         &crate::test_support::never_cancelled,
     )

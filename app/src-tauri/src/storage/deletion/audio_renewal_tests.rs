@@ -1180,7 +1180,7 @@ fn long_audio_forged_canonical_reserved_membership_is_not_a_typed_receipt() {
             .entries
             .sort_by(|a, b| a.path.cmp(&b.path));
         snapshot.historical_audio.insert(path);
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         snapshot.validate(&db).unwrap();
         assert!(crate::storage::deletion::intent::validate_observations(
             &db,
@@ -1398,10 +1398,10 @@ fn corrupted_audit_and_orphan_audit_cannot_unfence_startup() {
         .unwrap();
         let audit = saved.audits[0].clone();
         if orphan {
-            let db = f.storage.connection.lock().unwrap();
+            let mut db = f.storage.connection.lock().unwrap();
             let _writer = crate::storage::deletion::fence::write_audio_removal(
                 &f.storage,
-                &db,
+                &mut db,
                 &saved,
                 &lease,
                 &crate::test_support::never_cancelled,
@@ -1589,11 +1589,11 @@ fn clock_rollback_and_new_reservation_collision_do_not_publish_audit() {
         let op = started(&f, &lease);
         std::fs::write(&f.path, b"NEW").unwrap();
         if future {
-            let db = f.storage.connection.lock().unwrap();
+            let mut db = f.storage.connection.lock().unwrap();
             let saved = Receipt::load(&db, &op, &crate::test_support::never_cancelled).unwrap();
             let _writer = crate::storage::deletion::fence::write_audio_removal(
                 &f.storage,
-                &db,
+                &mut db,
                 &saved,
                 &lease,
                 &crate::test_support::never_cancelled,
@@ -1648,7 +1648,7 @@ fn canonical_oversized_chain_is_rejected_before_reading_its_snapshot_chunks() {
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let reference = saved.progress.confirmation.as_ref().unwrap();
     let mut budget = saved.saved.header.snapshot_bytes;
     let (mut record, _, _) = read_record(

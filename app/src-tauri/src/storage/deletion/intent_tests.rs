@@ -52,7 +52,7 @@ impl Fixture {
         .unwrap()
     }
     fn counts(&self) -> (i64, i64) {
-        let db = self.storage.connection.lock().unwrap();
+        let mut db = self.storage.connection.lock().unwrap();
         (
             db.query_row("SELECT count(*) FROM maintenance_operations", [], |r| {
                 r.get(0)
@@ -73,10 +73,10 @@ impl Fixture {
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-        let db = self.storage.connection.lock().unwrap();
+        let mut db = self.storage.connection.lock().unwrap();
         let _writer = super::fence::write_prepared(
             &self.storage,
-            &db,
+            &mut db,
             &saved,
             &crate::test_support::never_cancelled,
         )
@@ -129,7 +129,7 @@ fn deletion_intent_roundtrips_observations_without_payload_or_other_meeting_targ
     .unwrap();
     assert_eq!(loaded.manifest(), census.manifest());
     assert_eq!(loaded.consent_at(), p.consent_at());
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let json: String = db
         .query_row(
             "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
@@ -490,7 +490,7 @@ fn deletion_intent_saved_rows_reject_missing_extra_hash_content_identity_and_pat
 fn deletion_intent_existing_sql_guards_keep_confirmation_and_paths_immutable() {
     let f = Fixture::new();
     f.prepare();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     for sql in [
         "UPDATE maintenance_operations SET consent_at=consent_at+1 WHERE id=?1",
         "UPDATE maintenance_operations SET target_hash=printf('%064d',0) WHERE id=?1",
@@ -565,10 +565,10 @@ fn deletion_intent_read_rejects_unknown_schema_disabled_guards_and_other_pending
     let f = Fixture::new();
     let p = f.prepare();
     {
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         let _writer = super::fence::write_prepared(
             &f.storage,
-            &db,
+            &mut db,
             &p,
             &crate::test_support::never_cancelled,
         )
@@ -590,10 +590,10 @@ fn deletion_intent_read_rejects_unknown_schema_disabled_guards_and_other_pending
     p.verify_live(&f.storage, &crate::test_support::never_cancelled)
         .unwrap();
     {
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         let _writer = super::fence::write_prepared(
             &f.storage,
-            &db,
+            &mut db,
             &p,
             &crate::test_support::never_cancelled,
         )
@@ -625,10 +625,10 @@ fn deletion_intent_read_validates_manifest_fields_even_when_outer_hash_is_recomp
     ] {
         let f = Fixture::new();
         let p = f.prepare();
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         let writer = super::fence::write_prepared(
             &f.storage,
-            &db,
+            &mut db,
             &p,
             &crate::test_support::never_cancelled,
         )

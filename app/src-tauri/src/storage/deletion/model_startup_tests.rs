@@ -89,7 +89,7 @@ fn accept(f: &Fixture, op: &str, owner: &DataMaintenanceLease) {
     .unwrap();
 }
 fn stale(f: &Fixture) {
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let meeting: String = db
         .query_row("SELECT id FROM meetings LIMIT 1", [], |r| r.get(0))
         .unwrap();
@@ -156,12 +156,13 @@ fn history_model_consent_with_mismatched_schema_is_rejected_without_starting_del
     )
     .unwrap();
     {
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
+        let prepared = intent::read(&db, &op).unwrap();
         // Rehashing a mismatched schema header must not grant deletion access.
         let _writer = crate::storage::deletion::fence::write_model_prepared(
             &f.storage,
-            &db,
-            &intent::read(&db, &op).unwrap(),
+            &mut db,
+            &prepared,
             &owner,
         )
         .unwrap();
@@ -354,7 +355,7 @@ fn model_startup_changed_completed_receipt_never_unlocks_or_rewrites_evidence() 
         let op = finish(&f);
         stale(&f);
         {
-            let db = f.storage.connection.lock().unwrap();
+            let mut db = f.storage.connection.lock().unwrap();
             db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
                 .unwrap();
             db.execute_batch("PRAGMA ignore_check_constraints=ON;")
@@ -446,7 +447,7 @@ fn model_startup_wrong_native_root_never_inspects_saved_foreign_root() {
     let f = Fixture::new();
     let op = finish(&f);
     let foreign = tempfile::tempdir().unwrap();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     assert_eq!(
         inspect(
             &db,
