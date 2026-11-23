@@ -1,0 +1,5 @@
+interface:
+  display_name: "PRの形式と本文を整える"
+  short_description: "PRテンプレートを導入・更新し、差分・契約・例外・検証結果を明確に記述する"
+policy:
+  allow_implicit_invocation: true

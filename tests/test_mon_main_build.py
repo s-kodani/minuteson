@@ -14,6 +14,11 @@ import mon_main_build as main
 import mon_ci_scope as scope
 
 SHA = '1' * 40
+ISSUE_TEMPLATE_FILES = (
+    '.github/ISSUE_TEMPLATE/01-bug-report.yml',
+    '.github/ISSUE_TEMPLATE/02-feature-request.yml',
+    '.github/ISSUE_TEMPLATE/03-task.yml', '.github/ISSUE_TEMPLATE/config.yml',
+)
 
 
 class CandidateTests(unittest.TestCase):
@@ -54,6 +59,7 @@ class CandidateTests(unittest.TestCase):
             'GITHUB_OUTPUT': str(Path(temporary) / 'output'),
         }), patch.object(main, 'changed_paths', return_value=[
             'README.md', 'AGENTS.md', '.github/pull_request_template.md',
+            *ISSUE_TEMPLATE_FILES,
             '.agents/skills/desktop-ui-quality/agents/openai.yaml',
             'third-party/notices/README.md', 'tests/fixtures/audio-import/README.md',
             'evaluation/runs/.gitkeep',
@@ -85,6 +91,7 @@ class ScopeTests(unittest.TestCase):
     def test_development_docs_and_agent_metadata_skip_expensive_pr_and_main_checks(self):
         paths = (
             'AGENTS.md', '.github/pull_request_template.md',
+            *ISSUE_TEMPLATE_FILES,
             '.agents/skills/desktop-ui-quality/SKILL.md',
             '.agents/skills/desktop-app-updates/references/macos.md',
             '.agents/skills/desktop-ui-quality/agents/openai.yaml',
@@ -107,6 +114,9 @@ class ScopeTests(unittest.TestCase):
             '.agents/skills/example/scripts/check.py',
             '.agents/skills/example/agents/settings.yaml',
             '.agents/skills/example/scripts/agents/openai.yaml',
+            '.github/ISSUE_TEMPLATE/04-other.yml',
+            '.github/ISSUE_TEMPLATE/check.py',
+            '.github/ISSUE_TEMPLATE/nested/config.yml',
             '.github/workflows/security.yml', '.github/security-exceptions.json',
             'app/model-catalog/model-license-policy.json', 'app/package-lock.json',
             'tests/fixtures/audio-import/structure-chapter.m4a',
@@ -127,13 +137,17 @@ class ScopeTests(unittest.TestCase):
                 self.assertTrue(scope.select([path])['code'])
 
     def test_docs_do_not_hide_code_changes_or_explicit_full_validation(self):
-        for path in ('app/src/main.tsx', 'app/src-tauri/src/storage.rs',
-                     'tools/mon_ci_scope.py', '.github/workflows/security.yml'):
-            with self.subTest(path=path):
-                self.assertEqual(scope.select(['AGENTS.md', path]), scope.select([path]))
-        result = scope.select(['AGENTS.md'], full=True)
-        self.assertTrue(all(result[key] for key in (*scope.CHECKS, 'code', 'has_codeql')))
-        self.assertEqual(len(result['codeql']['include']), 6)
+        for document in ('AGENTS.md', *ISSUE_TEMPLATE_FILES):
+            for path in ('app/src/main.tsx', 'app/src-tauri/src/storage.rs',
+                         'tools/mon_ci_scope.py', '.github/workflows/security.yml'):
+                for on_main in (False, True):
+                    with self.subTest(document=document, path=path, main=on_main):
+                        self.assertEqual(scope.select([document, path], main=on_main),
+                                         scope.select([path], main=on_main))
+            with self.subTest(document=document, full=True):
+                result = scope.select([document], full=True)
+                self.assertTrue(all(result[key] for key in (*scope.CHECKS, 'code', 'has_codeql')))
+                self.assertEqual(len(result['codeql']['include']), 6)
 
     def test_python_frontend_rust_and_contracts_select_corresponding_languages(self):
         cases = {'tools/mon_release.py': {'python'}, 'app/src/main.tsx': {'javascript-typescript'},

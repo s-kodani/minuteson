@@ -1,0 +1,64 @@
+name: "機能・改善提案"
+description: "解決したい課題と、機能追加・改善の提案を共有します。"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        1つのIssueでは1つの提案を扱い、タイトルには実現したい結果を簡潔に記載してください。
+        脆弱性の疑いは公開Issueへ書かず、[非公開の報告窓口](https://github.com/s-kodani/minuteson/security/advisories/new)を使用してください。
+        本文・添付資料には秘密情報・個人情報・会議データを含めず、例には合成データを使用してください。
+  - type: textarea
+    id: problem
+    attributes:
+      label: "解決したい課題"
+      description: "現状で誰が何に困っているか、既存機能ではなぜ十分でないかを記載してください。"
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: "利用場面"
+      description: "誰が、どのような状況・操作で利用するかを具体的に記載してください。"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: "提案内容"
+      description: "実現したい動作と対象範囲を記載してください。実装方法が未定でも構いません。"
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: "期待効果・受け入れ条件"
+      description: "課題が解決したと判断できる、観察可能な結果を記載してください。"
+      placeholder: |
+        期待する効果:
+        完了を確認できる条件:
+        - [ ] …できること
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "代替案"
+      description: "任意: 試した回避策や別の案、その案では十分でない理由を記載してください。"
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: "関連Issue・補足資料"
+      description: "任意: 関連Issue、参考資料、個人情報等を除いた画像などを記載してください。"
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: "事前確認"
+      options:
+        - label: "既存Issueを検索し、同じ提案が報告されていないか確認しました。"
+          required: true
+        - label: "本文と添付資料に秘密情報・個人情報・会議データが含まれないことを確認しました。"
+          required: true
