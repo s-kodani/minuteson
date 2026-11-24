@@ -18,7 +18,7 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let files: [&[u8]; 2] = [b"fake engine never executed", &model];
-        let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        let hash = |bytes: &[u8]| mon_core::hash::sha256_hex(bytes);
         let recipe: Recipe = serde_json::from_value(serde_json::json!({
             "schemaVersion":4,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"test",
                 "modelName":"move test","modelVersion":"1","quantization":null,"licenseRef":"test",

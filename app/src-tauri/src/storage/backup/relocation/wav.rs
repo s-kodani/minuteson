@@ -16,7 +16,7 @@ const MAX_BYTES: usize = 4 * 1024 * 1024;
 type FileIdentity = (u64, u64, i64);
 
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok_and(|id| id.to_string() == value)

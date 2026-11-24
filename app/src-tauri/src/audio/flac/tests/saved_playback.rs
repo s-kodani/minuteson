@@ -131,7 +131,7 @@ fn long_saved_flac_preparation_benchmark() {
     let path = std::path::PathBuf::from(std::env::var_os("MON_PLAYBACK_BENCH_FLAC").unwrap());
     let bytes = std::fs::read(&path).unwrap();
     let size = bytes.len() as u64;
-    let hash = format!("{:x}", Sha256::digest(&bytes));
+    let hash = mon_core::hash::sha256_hex(&bytes);
     drop(bytes);
     let start = std::time::Instant::now();
     let mut full = VerifiedAudio::open(File::open(&path).unwrap(), size, &hash).unwrap();

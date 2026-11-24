@@ -366,7 +366,7 @@ const SYNTHETIC: &[u8] = b"# MON unit-test engine substitute\n";
 #[cfg(test)]
 pub(super) fn is_synthetic(snapshot: &Snapshot) -> bool {
     use sha2::Digest;
-    snapshot.sha256 == format!("{:x}", sha2::Sha256::digest(SYNTHETIC))
+    snapshot.sha256 == mon_core::hash::sha256_hex(SYNTHETIC)
 }
 #[cfg(test)]
 fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
@@ -378,7 +378,7 @@ fn synthetic(root: &Path, engine: &str) -> Result<Snapshot, String> {
             .map(str::to_owned)
             .unwrap_or_else(|| format!("mon-{engine}-worker")),
         bytes: SYNTHETIC.len() as u64,
-        sha256: format!("{:x}", sha2::Sha256::digest(SYNTHETIC)),
+        sha256: mon_core::hash::sha256_hex(SYNTHETIC),
         gpu: None,
     };
     snapshot.validate()?;
@@ -489,7 +489,7 @@ mod bundled_runtime_tests {
                     engine: engine.into(),
                     name,
                     bytes: bytes.len() as u64,
-                    sha256: format!("{:x}", sha2::Sha256::digest(bytes.as_bytes())),
+                    sha256: mon_core::hash::sha256_hex(bytes.as_bytes()),
                     gpu: None,
                 }
             })
@@ -585,7 +585,7 @@ mod installation_tests {
             engine: "sherpa".into(),
             name: "mon-sherpa-worker".into(),
             bytes: bytes.len() as u64,
-            sha256: format!("{:x}", sha2::Sha256::digest(bytes)),
+            sha256: mon_core::hash::sha256_hex(bytes),
             gpu: None,
         };
         let scope = crate::local_engine::verification::Scope::enter(true).unwrap();

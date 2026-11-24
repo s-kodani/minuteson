@@ -9,7 +9,7 @@ pub(crate) struct Guidance {
 }
 pub(super) fn seed(db: &Connection) -> Result<(), String> {
     let json = r#"{"pending":true}"#;
-    let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+    let hash = mon_core::hash::sha256_hex(json.as_bytes());
     db.execute("INSERT INTO app_settings(key,value_json,content_hash,lock_version,updated_at) VALUES(?1,?2,?3,1,?4)", params![KEY,json,hash,now_ms()?]).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -25,7 +25,7 @@ fn load(db: &Connection) -> Result<Guidance, String> {
     let Some((json, hash)) = row else {
         return Ok(Guidance { pending: false });
     };
-    if json.len() > 128 || format!("{:x}", Sha256::digest(json.as_bytes())) != hash {
+    if json.len() > 128 || mon_core::hash::sha256_hex(json.as_bytes()) != hash {
         return Err("初回モデル案内の保存状態を確認できません".into());
     }
     serde_json::from_str(&json).map_err(|_| "初回モデル案内の保存形式を確認できません".into())
@@ -56,7 +56,7 @@ impl Storage {
         #[cfg(not(any(unix, windows)))]
         let identity = &self.root;
         let key = serde_json::to_vec(&(created, identity)).map_err(|e| e.to_string())?;
-        Ok(Some(format!("{:x}", Sha256::digest(key))))
+        Ok(Some(mon_core::hash::sha256_hex(key)))
     }
 
     pub(crate) fn model_download_guidance(&self) -> Result<Guidance, String> {
@@ -77,7 +77,7 @@ impl Storage {
         let current = load(&tx)?;
         if current.pending {
             let json = r#"{"pending":false}"#;
-            let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+            let hash = mon_core::hash::sha256_hex(json.as_bytes());
             tx.execute("UPDATE app_settings SET value_json=?1,content_hash=?2,lock_version=lock_version+1,updated_at=?3 WHERE key=?4",params![json,hash,now_ms()?,KEY]).map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
