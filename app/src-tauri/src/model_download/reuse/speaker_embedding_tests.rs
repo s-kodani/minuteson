@@ -8,7 +8,7 @@ const SEGMENTATION: &[u8] = b"new segmentation model";
 const ENGINE: &[u8] = b"new diarization runtime";
 
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 
 fn fixture() -> (tempfile::TempDir, PathBuf, CatalogEntry, Recipe) {

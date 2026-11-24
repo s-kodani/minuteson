@@ -49,7 +49,7 @@ impl Fixture {
         ).unwrap()
     }
     pub(crate) fn corrupt_operation_header(&self, operation: &str, header: &str) {
-        let db = self.storage.connection.lock().unwrap();
+        let mut db = self.storage.connection.lock().unwrap();
         // Fault injection on this fixture's private DB only. Restore the real
         // readonly fence before exposing the corrupt record to product code.
         db.authorizer(
@@ -75,7 +75,7 @@ impl Fixture {
             true,
         )
         .unwrap();
-        self.storage.deletion_fence.arm(&db).unwrap();
+        self.storage.deletion_fence.arm(&mut db).unwrap();
     }
     pub(crate) fn reopen(self) -> Self {
         let Self {
@@ -130,7 +130,7 @@ impl Fixture {
             .unwrap()
             .id;
         {
-            let db = storage.connection.lock().unwrap();
+            let mut db = storage.connection.lock().unwrap();
             db.execute("UPDATE meetings SET source_type='recording',lifecycle='recorded',duration_us=1000000 WHERE id=?1",params![meeting]).unwrap();
             db.execute("INSERT INTO recording_sessions(id,meeting_id,state,capture_mode,capture_config_json,start_operation_id,audio_manifest_hash,created_at,updated_at) VALUES(?1,?2,'saved','system','{}',?1,?3,0,0)",params![session,meeting,"a".repeat(64)]).unwrap();
             db.execute("INSERT INTO audio_tracks(id,meeting_id,session_id,kind,format,sample_rate,channels,state,created_at,updated_at) VALUES(?1,?2,?3,'mic','caf',48000,1,'ready',0,0)",params![track,meeting,session]).unwrap();
@@ -197,7 +197,7 @@ impl Fixture {
             .register_ready_meeting_asset(&self.meeting, &relative, "application/json")
             .unwrap();
         {
-            let db = self.storage.connection.lock().unwrap();
+            let mut db = self.storage.connection.lock().unwrap();
             db.execute("UPDATE file_assets SET media_type='audio/wav',size_bytes=?2,content_hash=?3 WHERE id=?1", params![self.asset,bytes,hash]).unwrap();
             db.execute("UPDATE audio_tracks SET kind='processed',format='wav',sample_rate=16000 WHERE id=?1", [&self.track]).unwrap();
             db.execute(
@@ -277,7 +277,7 @@ fn audio_only_deletion_keeps_documents_and_originals_after_reopen() {
     let original = fixture.base.path().join("external-original.wav");
     std::fs::write(&original, b"KEEP EXTERNAL ORIGINAL").unwrap();
     let documents = || {
-        let db = fixture.storage.connection.lock().unwrap();
+        let mut db = fixture.storage.connection.lock().unwrap();
         Scope::capture(&db, &fixture.meeting, "", &|| false)
             .unwrap()
             .tables
@@ -409,7 +409,7 @@ fn audio_only_census_keeps_documents_history_external_originals_and_neighbors_wi
 fn audio_only_census_includes_processed_tracks_and_registered_audio_outside_producer_layout() {
     let f = Fixture::new();
     let file = f.file("arbitrary/nested/processed.flac", Some("audio/flac"));
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let asset: String = db
         .query_row(
             "SELECT id FROM file_assets WHERE relative_path=?1",
@@ -522,7 +522,7 @@ fn audio_only_census_accounts_for_current_import_files_and_retains_unknown_lefto
     // An independent import-source meeting; the external source is not in DB.
     let meeting = f.storage.create_meeting("IMPORT").unwrap().id;
     let import = uuid::Uuid::new_v4().to_string();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     db.execute(
         "UPDATE meetings SET source_type='audio_import',lifecycle='imported' WHERE id=?1",
         params![meeting],

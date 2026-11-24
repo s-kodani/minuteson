@@ -181,7 +181,7 @@ fn wav(directory: &Path) {
     let verified = VerifiedAudio::open(
         file,
         bytes.len() as u64,
-        &format!("{:x}", Sha256::digest(&bytes)),
+        &mon_core::hash::sha256_hex(&bytes),
     )
     .unwrap();
     let mut source = PreparedAudio {

@@ -41,7 +41,7 @@ fn exact_human_bytes_empty_unicode_html_and_interval_have_no_added_metadata() {
         assert_eq!(record.output_size_bytes, text.len() as i64);
         assert_eq!(
             record.output_content_hash,
-            format!("{:x}", Sha256::digest(text.as_bytes()))
+            mon_core::hash::sha256_hex(text.as_bytes())
         );
         assert_eq!(record.exported_content_hash, before.content_hash);
         assert_eq!(record.state, "succeeded");

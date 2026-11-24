@@ -286,7 +286,7 @@ fn written_archive_readback_matches_receipt_and_rejects_changed_payload() {
     let out = tempfile::tempdir().unwrap();
     let (path, receipt) = write(&storage, out.path());
     let mut bytes = std::fs::read(&path).unwrap();
-    assert_eq!(receipt.sha256, format!("{:x}", Sha256::digest(&bytes)));
+    assert_eq!(receipt.sha256, mon_core::hash::sha256_hex(&bytes));
     assert_eq!(receipt.size, bytes.len() as u64);
     let header_size = HEADER_BYTES as usize;
     let manifest_size = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
@@ -332,13 +332,13 @@ fn archive_rejects_wrong_paths_and_audio_even_with_recomputed_hashes() {
         .position(|e| e.asset_id.as_deref() == Some(aid))
         .unwrap();
     data[index][..4].copy_from_slice(b"NOPE");
-    let hash = format!("{:x}", Sha256::digest(&data[index]));
+    let hash = mon_core::hash::sha256_hex(&data[index]);
     m.entries[index].sha256 = hash.clone();
     m.entries[index].source_sha256 = Some(hash.clone());
     contents["meetings"][0]["audio"]["asset"]["hash"] = Value::String(hash);
     data[0] = serde_json::to_vec(&contents).unwrap();
     m.entries[0].size = data[0].len() as u64;
-    m.entries[0].sha256 = format!("{:x}", Sha256::digest(&data[0]));
+    m.entries[0].sha256 = mon_core::hash::sha256_hex(&data[0]);
     let bad = out.path().join("audio.monbackup");
     pack(&bad, &m, &data);
     assert!(read(&mut File::open(bad).unwrap(), out.path(), &|| false).is_err());

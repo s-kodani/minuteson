@@ -2,7 +2,7 @@ use super::*;
 use serde_json::{json, Value};
 
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn fixture() -> (tempfile::TempDir, std::path::PathBuf, Vec<u8>, Value) {
     let temp = tempfile::tempdir().unwrap();

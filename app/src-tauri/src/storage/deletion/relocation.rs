@@ -139,7 +139,7 @@ fn row_hash(row: &OperationRow) -> Result<String, String> {
     let mut h = Sha256::new();
     h.update(b"mon/relocation-deletion-row/v1\0");
     frame(&mut h, row)?;
-    Ok(format!("{:x}", h.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(h.finalize()))
 }
 // FK detachment, progress and updated_at may change only through the typed
 // native completion/reconfirmation readers. Original consent and target do not.
@@ -150,7 +150,7 @@ fn immutable_hash(row: &OperationRow) -> Result<String, String> {
         &mut h,
         &(row.0, &row.1, &row.3, &row.5, &row.6, &row.7, row.8, row.11),
     )?;
-    Ok(format!("{:x}", h.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(h.finalize()))
 }
 fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     if cancelled() {
@@ -192,7 +192,7 @@ fn paths(
         frame(&mut h, &value)?;
         count += 1;
     }
-    Ok((count, format!("{:x}", h.finalize())))
+    Ok((count, mon_core::hash::sha256_output_hex(h.finalize())))
 }
 fn validate_kept(
     storage: &Storage,

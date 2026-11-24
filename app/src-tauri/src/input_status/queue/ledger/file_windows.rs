@@ -34,7 +34,7 @@ fn read(path: &std::path::Path) -> Result<Option<(Stamp, Vec<u8>)>, String> {
         win::identity(&file)?,
         metadata.len(),
         metadata.last_write_time(),
-        format!("{:x}", Sha256::digest(&bytes)),
+        mon_core::hash::sha256_hex(&bytes),
     );
     Ok(Some((stamp, bytes)))
 }

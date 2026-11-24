@@ -162,7 +162,7 @@ pub(crate) fn hash(
         }
         hash.update(&buffer[..n]);
     }
-    let hash = format!("{:x}", hash.finalize());
+    let hash = mon_core::hash::sha256_output_hex(hash.finalize());
     if crate::audio::reuse::stamp(&crate::native_fs::metadata(&file).map_err(|e| e.to_string())?)
         != identity
     {

@@ -842,7 +842,7 @@ mod tests {
         let mut wav = crate::audio::wave::header(4000).unwrap();
         wav.extend([0; 8000]);
         std::io::Write::write_all(&mut directory.create(&leaf).unwrap(), &wav).unwrap();
-        let clip_hash = format!("{:x}", Sha256::digest(&wav));
+        let clip_hash = mon_core::hash::sha256_hex(&wav);
         {
             let db = s.connection.lock().unwrap();
             db.execute(

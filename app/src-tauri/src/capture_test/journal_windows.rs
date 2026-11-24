@@ -15,7 +15,7 @@ use std::{
 };
 const SCHEMA:&str="CREATE TABLE metadata(id INTEGER PRIMARY KEY CHECK(id=1),proof TEXT NOT NULL,hash TEXT NOT NULL); CREATE TABLE runs(id TEXT PRIMARY KEY,proof TEXT NOT NULL,hash TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('allocated','removed'))); CREATE TRIGGER metadata_fixed BEFORE UPDATE ON metadata BEGIN SELECT RAISE(ABORT,'immutable root'); END; CREATE TRIGGER metadata_retained BEFORE DELETE ON metadata BEGIN SELECT RAISE(ABORT,'retained root'); END; CREATE TRIGGER runs_fixed BEFORE UPDATE ON runs WHEN NEW.id!=OLD.id OR NEW.proof!=OLD.proof OR NEW.hash!=OLD.hash OR (OLD.state='removed' AND NEW.state!='removed') BEGIN SELECT RAISE(ABORT,'immutable ownership'); END; CREATE TRIGGER runs_retained BEFORE DELETE ON runs BEGIN SELECT RAISE(ABORT,'retained ownership'); END;";
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn encode<T: Serialize>(value: &T) -> Result<(String, String), String> {
     let text = serde_json::to_string(value).map_err(|e| e.to_string())?;

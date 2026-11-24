@@ -25,12 +25,12 @@ pub(super) fn chain(base: &Path, owner: &str, auxiliary_invalid: bool) {
         let pcm = &bytes[80 + index * 32000..80 + (index + 1) * 32000];
         let entry = serde_json::json!({"schemaVersion":1,"ownerId":owner,"sequence":index+1,
             "frameStart":index*16000,"frames":16000,"captureOriginNanoseconds":if auxiliary_invalid {serde_json::json!("unknown")}else{serde_json::json!(1_000_000_000)},
-            "pcmSHA256":format!("{:x}",Sha256::digest(pcm)),"previousEntrySHA256":previous,
+            "pcmSHA256":mon_core::hash::sha256_hex(pcm),"previousEntrySHA256":previous,
             "missingRanges":if auxiliary_invalid {serde_json::json!([[90000,1]])}else{serde_json::json!([])},
             "coverageFrames":if auxiliary_invalid {serde_json::json!([16001,0])}else{serde_json::json!([16000,0])}});
         let encoded = serde_json::to_vec(&entry).unwrap();
         json(&base.join(format!("wav-{:08}.json", index + 1)), &entry);
-        previous = format!("{:x}", Sha256::digest(encoded)).into();
+        previous = mon_core::hash::sha256_hex(encoded).into();
     }
     let mut tip = value(&base.join("single-wav.json"));
     tip["checkpoints"] = 3.into();

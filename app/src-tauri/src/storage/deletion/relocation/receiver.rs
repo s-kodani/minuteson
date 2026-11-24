@@ -383,7 +383,7 @@ pub(crate) fn inspect(
         .execute_batch("PRAGMA query_only=ON;")
         .map_err(|e| e.to_string())?;
     let (local, hash, control, native): (String, String, String, String) = registry.query_row("SELECT local_json,local_hash,control_hash,native_hash FROM relocation_history WHERE operation_id=?1 AND length(CAST(local_json AS BLOB))<=67108864",[&progress.operation_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|e|e.to_string())?;
-    if format!("{:x}", Sha256::digest(local.as_bytes())) != hash
+    if mon_core::hash::sha256_hex(local.as_bytes()) != hash
         || control != installed_hash
         || native != handoff.snapshot().manifest_hash()
     {

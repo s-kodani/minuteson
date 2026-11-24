@@ -62,7 +62,7 @@ fn hash(file: &mut std::fs::File) -> Result<(i64, String), String> {
         size += n as i64;
     }
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    Ok((size, format!("{:x}", h.finalize())))
+    Ok((size, mon_core::hash::sha256_output_hex(h.finalize())))
 }
 #[derive(Debug)]
 pub(super) struct Clip {
@@ -211,7 +211,7 @@ impl Storage {
     pub(in crate::storage) fn recover_voice_audio(&self) -> Result<(), String> {
         self.require_data_writable()?;
         if let Err(error) = self.managed_anchor.verify() {
-            let db = self
+            let mut db = self
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;

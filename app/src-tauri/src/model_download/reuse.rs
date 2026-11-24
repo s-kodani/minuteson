@@ -87,7 +87,7 @@ impl Candidate {
             progress(count);
         }
         source.verify()?;
-        if count != size || format!("{:x}", digest.finalize()) != hash {
+        if count != size || mon_core::hash::sha256_output_hex(digest.finalize()) != hash {
             return Err("再利用するモデルの容量・SHA256が一致しません".into());
         }
         Ok(())
@@ -124,7 +124,7 @@ mod tests {
         std::fs::create_dir_all(package.join("models")).unwrap();
         let weights = b"existing GGML bytes kept across adapter updates";
         let engine = b"new runtime bytes";
-        let sha = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        let sha = |bytes: &[u8]| mon_core::hash::sha256_hex(bytes);
         std::fs::write(package.join("models/model.bin"), weights).unwrap();
         let recipe:super::super::Recipe=serde_json::from_value(serde_json::json!({"schemaVersion":4,"manifest":{
             "schemaVersion":1,"engine":engine_name,"engineVersion":"v1.9.4","modelName":"Whisper test","modelVersion":"unchanged","quantization":null,"target":"macos_aarch64","licenseRef":"test",
@@ -203,7 +203,7 @@ mod tests {
         let path = package.join("models/model.bin");
         let data = b"exact installed ASR weights";
         std::fs::write(&path, data).unwrap();
-        let hash = format!("{:x}", Sha256::digest(data));
+        let hash = mon_core::hash::sha256_hex(data);
         let recipe:super::super::Recipe=serde_json::from_value(serde_json::json!({"schemaVersion":4,"manifest":{"schemaVersion":1,"engine":"whisper.cpp","engineVersion":"v1.9.4","modelName":"test","modelVersion":"fixed","quantization":null,"target":"macos_aarch64","licenseRef":"test","files":[{"relativePath":"models/model.bin","role":"asr","expectedSize":data.len(),"expectedHash":hash}]},"sources":[{"relativePath":"models/model.bin","url":"https://example.com/model"}]})).unwrap();
         let mut entry = CatalogEntry {
             backend_id: None,

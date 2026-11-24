@@ -347,7 +347,7 @@ impl Receipt {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         verify_remaining(storage, &db, self, &|| check() || lease.cancelled())?;
         active(lease, check)
     }
@@ -635,7 +635,7 @@ fn verify_observation(
     r.verify_anchor(storage)
 }
 fn check_unlocked(storage: &Storage, r: &Receipt, check: &impl Fn() -> bool) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     r.verify_saved(&db, check)?;
     r.metadata(storage, &db, check)
 }
@@ -645,7 +645,7 @@ fn verify_unlocked(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     if r.completed() {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         return verify_remaining(storage, &db, r, check);
     }
     check_unlocked(storage, r, check)?;
@@ -666,10 +666,11 @@ fn save_unlocked(
     lease: &DataMaintenanceLease,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
-    let _writer =
-        crate::storage::deletion::fence::write_audio_removal(storage, &db, r, lease, check)?;
-    r.save(storage, &db, next, lease, check)
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
+    let writer =
+        crate::storage::deletion::fence::write_audio_removal(storage, &mut db, r, lease, check)?;
+    let conn = writer.connection();
+    r.save(storage, conn, next, lease, check)
 }
 fn parent(storage: &Storage, r: &Receipt, path: &str) -> Result<Directory, String> {
     let root = storage.managed_anchor.directory_ref()?;
@@ -733,7 +734,7 @@ pub(crate) fn start(
     check: &impl Fn() -> bool,
 ) -> Result<Receipt, String> {
     active(lease, check)?;
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     let saved = super::read(&db, operation, &|| check() || lease.cancelled())?;
     saved.verify_locked(storage, &db, lease, check)?;
     let targets = targets(&saved.snapshot)?;
@@ -781,10 +782,11 @@ pub(crate) fn start(
             return Err("音声削除予約名が既に存在します".into());
         }
     }
-    let _writer = crate::storage::deletion::fence::write_audio_prepared(
-        storage, &db, &r.saved, lease, check,
+    let writer = crate::storage::deletion::fence::write_audio_prepared(
+        storage, &mut db, &r.saved, lease, check,
     )?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let conn = writer.connection();
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     r.saved.verify_saved(&tx, check)?;
     r.saved.verify_locked(storage, &tx, lease, check)?;
@@ -792,7 +794,7 @@ pub(crate) fn start(
     active(lease, check)?;
     r.verify_anchor(storage)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Receipt::load(&db, operation, check)
+    Receipt::load(conn, operation, check)
 }
 pub(crate) fn run(
     storage: &Storage,
@@ -811,7 +813,7 @@ fn run_inner(
 ) -> Result<Receipt, String> {
     active(lease, check)?;
     let mut r = {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         Receipt::load(&db, operation, &|| check() || lease.cancelled())?
     };
     let cancelled = || check() || lease.cancelled();
