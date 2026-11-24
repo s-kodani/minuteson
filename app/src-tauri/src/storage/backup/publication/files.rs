@@ -232,6 +232,30 @@ impl Installed {
             .ok_or("公開する復元回収記録がありません")?
             .completed(db)
     }
+    pub(super) fn undo_publish(&self, db: &Connection) -> Result<(), String> {
+        match &self.journal {
+            Some(journal) => journal.recover(db),
+            None => Ok(()),
+        }
+    }
+    pub(super) fn rollback_installation(&mut self, db: &Connection) -> Result<(), String> {
+        self.undo_publish(db)?;
+        self.journal = None;
+        for entry in self.owned.iter().rev() {
+            if !directory(&self.root).is_ok() {
+                continue;
+            }
+            if entry.directory {
+                let _ = std::fs::remove_dir_all(&entry.path);
+            } else if crate::native_fs::symlink_metadata(&entry.path)
+                .is_ok_and(|m| same_inode(&entry.metadata, &m))
+            {
+                let _ = std::fs::remove_file(&entry.path);
+            }
+        }
+        self.owned.clear();
+        Ok(())
+    }
 }
 impl Drop for Installed {
     fn drop(&mut self) {

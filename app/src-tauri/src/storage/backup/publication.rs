@@ -33,6 +33,11 @@ fn schema(db: &Connection) -> Result<Vec<(String, String, String)>, String> {
 // Suppress INSERT triggers only on this locked connection, not via DROP/DDL.
 // The authorizer disallows all UPDATE/DELETE/DDL/ATTACH while that capability is
 // held. Constraints/FKs remain enabled; no INSERT OR REPLACE/IGNORE is used.
+struct AppendOnlyGuard<'a> {
+    db: &'a mut Connection,
+    finished: bool,
+}
+
 struct AppendOnly;
 impl AppendOnly {
     fn begin(db: &mut Connection) -> Result<(), String> {
@@ -52,20 +57,97 @@ impl AppendOnly {
             {
                 Authorization::Allow
             }
+            AuthAction::Update { table_name, .. }
+                if context.database_name == Some("main")
+                    && matches!(
+                        table_name,
+                        "vocabulary_scopes"
+                            | "vocabulary_entries"
+                            | "restore_batches"
+                            | "maintenance_operations"
+                            | "maintenance_paths"
+                    ) =>
+            {
+                Authorization::Allow
+            }
             AuthAction::Read { .. }
             | AuthAction::Select
             | AuthAction::Function { .. }
+            | AuthAction::Transaction { .. }
+            | AuthAction::Savepoint { .. }
             | AuthAction::Recursive => Authorization::Allow,
+            AuthAction::Pragma {
+                pragma_name,
+                pragma_value: None,
+            } if matches!(
+                pragma_name,
+                "foreign_keys"
+                    | "foreign_key_check"
+                    | "defer_foreign_keys"
+                    | "schema_version"
+                    | "user_version"
+            ) =>
+            {
+                Authorization::Allow
+            }
+            AuthAction::Pragma {
+                pragma_name: "defer_foreign_keys",
+                ..
+            } => Authorization::Allow,
+            AuthAction::Pragma {
+                pragma_name,
+                pragma_value: Some(table),
+            } if matches!(
+                pragma_name,
+                "table_info" | "table_xinfo" | "foreign_key_list" | "index_list" | "index_info"
+            ) && portable::TABLES.contains(&table) =>
+            {
+                Authorization::Allow
+            }
             _ => Authorization::Deny,
         }))
         .map_err(|e| e.to_string())?;
         Ok(())
+    }
+    fn begin_guard(db: &mut Connection) -> Result<AppendOnlyGuard<'_>, String> {
+        Self::begin(db)?;
+        Ok(AppendOnlyGuard {
+            db,
+            finished: false,
+        })
     }
     fn finish(db: &mut Connection) -> Result<(), String> {
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
             .map_err(|e| e.to_string())?;
         db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
             .map_err(|e| e.to_string())
+    }
+}
+
+impl<'a> AppendOnlyGuard<'a> {
+    fn connection(&mut self) -> &mut Connection {
+        self.db
+    }
+    fn finish(mut self) -> Result<(), String> {
+        self.finished = true;
+        AppendOnly::finish(self.db)
+    }
+}
+
+impl Drop for AppendOnlyGuard<'_> {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        if self
+            .db
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+            .is_ok()
+        {
+            let _ = self
+                .db
+                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        }
     }
 }
 
@@ -229,7 +311,13 @@ impl Storage {
         tx.commit().map_err(|e| e.to_string())?;
         let mut installed = {
             let journal = journal::Journal::begin(&db, &self.root, sealed, ids)?;
-            Installed::prepare_recorded(&self.root, sealed, journal, &db, check)?
+            match Installed::prepare_recorded(&self.root, sealed, journal, &db, check) {
+                Ok(installed) => installed,
+                Err(error) => {
+                    let _ = journal::recover_all(&self.root, &db);
+                    return Err(error);
+                }
+            }
         };
         AppendOnly::begin(&mut db)?;
         let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
@@ -256,10 +344,15 @@ impl Storage {
             {
                 return Err("追加復元の参照整合性が不正です".into());
             }
-            if schema(&tx)? != schema(sealed.connection())?
-                || !tx
-                    .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
-                    .map_err(|e| e.to_string())?
+            db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+                .map_err(|e| e.to_string())?;
+            db.flush_prepared_statement_cache();
+            if schema(&tx)? != schema(sealed.connection())? {
+                return Err("追加復元後のDB定義が一致しません".into());
+            }
+            if !tx
+                .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
+                .map_err(|e| e.to_string())?
             {
                 return Err("追加復元後のDB制約が変化しています".into());
             }
@@ -303,12 +396,10 @@ impl Storage {
                     maintenance.fail_closed();
                     return Err(format!("追加復元の巻き戻し結果が未確定です。追加物を保持します: {error}; {rollback}"));
                 }
-                if db
-                    .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
-                    .is_ok()
-                {
-                    let _ = db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-                }
+                let _ = AppendOnly::finish(&mut db);
+                installed
+                    .rollback_installation(&db)
+                    .map_err(|cleanup| format!("{error}; {cleanup}"))?;
                 return Err(error);
             }
         };
@@ -330,7 +421,9 @@ impl Storage {
                     Ok(Some(state)) if state == "published" && db.is_autocommit() => {}
                     Ok(None) if db.is_autocommit() => return Err(error.to_string()),
                     Ok(Some(state)) if state == "prepared" && db.is_autocommit() => {
-                        return Err(error.to_string())
+                        let _ = AppendOnly::finish(&mut db);
+                        let _ = installed.rollback_installation(&db);
+                        return Err(error.to_string());
                     }
                     _ => {
                         installed.keep();
