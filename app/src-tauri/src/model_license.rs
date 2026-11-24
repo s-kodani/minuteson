@@ -142,7 +142,7 @@ struct LicenseReview {
 }
 
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn bounded(text: &str, max: usize) -> bool {
     !text.trim().is_empty() && text.len() <= max

@@ -407,10 +407,10 @@ fn inspect_bytes(
     for source in &sources {
         source.verify()?;
     }
-    let review_hash = review_hash(&manifest, &format!("{:x}", Sha256::digest(&bytes)), &files)?;
+    let review_hash = review_hash(&manifest, &mon_core::hash::sha256_hex(&bytes), &files)?;
     Ok(Report {
         manifest,
-        manifest_hash: format!("{:x}", Sha256::digest(&bytes)),
+        manifest_hash: mon_core::hash::sha256_hex(&bytes),
         files,
         total_bytes: total,
         review_hash,
@@ -430,7 +430,7 @@ pub(crate) fn review_hash(
 ) -> Result<String, String> {
     let bytes =
         serde_json::to_vec(&(1_u32, manifest, manifest_hash, files)).map_err(|e| e.to_string())?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(mon_core::hash::sha256_hex(bytes))
 }
 
 type Active = Option<(String, Arc<AtomicBool>)>;

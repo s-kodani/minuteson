@@ -43,7 +43,7 @@ pub(super) fn read_options(db: &Connection, id: &str) -> Result<ImportOptions, S
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .map_err(|e| e.to_string())?;
-    if json.len() > 1048576 || format!("{:x}", Sha256::digest(json.as_bytes())) != hash {
+    if json.len() > 1048576 || mon_core::hash::sha256_hex(json.as_bytes()) != hash {
         return Err("取り込み条件のハッシュが一致しません".into());
     }
     let options: ImportOptions = serde_json::from_str(&json).map_err(|e| e.to_string())?;
@@ -137,7 +137,7 @@ impl Storage {
             options.expected_global_version,
         )?;
         let options_json = serde_json::to_string(options).map_err(|e| e.to_string())?;
-        let options_hash = format!("{:x}", Sha256::digest(options_json.as_bytes()));
+        let options_hash = mon_core::hash::sha256_hex(options_json.as_bytes());
         tx.execute("INSERT INTO audio_import_options(import_id,options_json,options_hash) VALUES(?1,?2,?3)",params![id,options_json,options_hash]).map_err(|e|e.to_string())?;
         let result = read(&tx, &id)?;
         tx.commit().map_err(|e| e.to_string())?;

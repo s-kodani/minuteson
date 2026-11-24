@@ -93,7 +93,7 @@ pub(super) fn inspect(
     if let Some(aliases) = &storage.wav_history {
         if let Some((device, inode, birth)) = aliases.effective_identity(
             owner,
-            &format!("{:x}", Sha256::digest(&reservation_bytes)),
+            &mon_core::hash::sha256_hex(&reservation_bytes),
             (
                 reservation.device,
                 reservation.inode,
@@ -151,7 +151,7 @@ pub(super) fn inspect(
                 .checked_add(receipt.frames)
                 .filter(|end| *end <= 9_007_199_254_740_991)
                 .ok_or("録音WAVの範囲が大きすぎます")?;
-            let next_hash = format!("{:x}", Sha256::digest(&bytes));
+            let next_hash = mon_core::hash::sha256_hex(&bytes);
             if receipt.schema_version != 1
                 || receipt.owner_id != owner
                 || receipt.sequence != sequence
@@ -168,7 +168,7 @@ pub(super) fn inspect(
             let mut pcm = vec![0; receipt.frames as usize * 2];
             crate::native_fs::read_exact_at(&file, &mut pcm, 80 + frames * 2)
                 .map_err(|error| error.to_string())?;
-            if format!("{:x}", Sha256::digest(&pcm)) != receipt.pcm_sha256 {
+            if mon_core::hash::sha256_hex(&pcm) != receipt.pcm_sha256 {
                 return Err("録音WAVの確定PCMが変更されています".into());
             }
             crate::operation_observation::read(pcm.len());
@@ -258,8 +258,9 @@ pub(super) fn inspect(
         truncated,
         missing,
         diagnostics_known: diagnostics_known && origin.is_some() && claimed_frames == Some(frames),
-        pcm_hash: format!("{:x}", pcm_hash.finalize()),
-        full_hash: (claimed_frames == Some(frames)).then(|| format!("{:x}", full_hash.finalize())),
+        pcm_hash: mon_core::hash::sha256_output_hex(pcm_hash.finalize()),
+        full_hash: (claimed_frames == Some(frames))
+            .then(|| mon_core::hash::sha256_output_hex(full_hash.finalize())),
         fault,
     })
 }

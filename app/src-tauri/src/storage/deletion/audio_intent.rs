@@ -53,7 +53,7 @@ pub(crate) struct Prepared {
     kept: bool,
 }
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn hash_valid(s: &str) -> bool {
     s.len() == 64

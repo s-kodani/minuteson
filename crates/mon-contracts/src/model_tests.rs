@@ -19,7 +19,7 @@ fn recipe_and_manifest_bytes_retain_the_legacy_golden_hashes() {
             vector["name"]
         );
         assert_eq!(
-            format!("{:x}", Sha256::digest(canonical.as_bytes())),
+            mon_core::hash::sha256_hex(canonical.as_bytes()),
             vector["sha256"].as_str().unwrap(),
             "{}",
             vector["name"]
@@ -32,7 +32,7 @@ fn recipe_and_manifest_bytes_retain_the_legacy_golden_hashes() {
             vector["name"]
         );
         assert_eq!(
-            format!("{:x}", Sha256::digest(manifest.as_bytes())),
+            mon_core::hash::sha256_hex(manifest.as_bytes()),
             vector["manifestSha256"].as_str().unwrap(),
             "{}",
             vector["name"]

@@ -145,7 +145,7 @@ pub(super) fn canonical_maps(
 }
 
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn uuid(value: &str) -> bool {
     crate::input_levels::valid_owner(value)

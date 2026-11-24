@@ -314,7 +314,7 @@ mod tests {
                 "clockSegments":[{"sourceFrameStart":0,"sourceFrameEnd":frames,"timelineStartUs":0,
                     "timelineEndUs":frames*1_000_000/16000,"mappingJson":"{\"schema_version\":1,\"method\":\"linear\"}"}],
                 "clockNanoseconds":[{"startNanoseconds":origin,"endNanoseconds":origin+frames as i64*62_500}],
-                "audioBytes":bytes.len(),"audioSHA256":format!("{:x}",Sha256::digest(&bytes)),
+                "audioBytes":bytes.len(),"audioSHA256":mon_core::hash::sha256_hex(&bytes),
                 "previousEntrySHA256":committed.hash()
             })).unwrap();
             save(&format!("raw-microphone-{sequence:08}.json"), &entry);
@@ -371,7 +371,7 @@ mod tests {
                 bytes.extend((index as i16).to_le_bytes());
             }
             std::fs::write(&path, &bytes).unwrap();
-            let hash = format!("{:x}", Sha256::digest(&bytes));
+            let hash = mon_core::hash::sha256_hex(&bytes);
             let audio =
                 VerifiedAudio::open(File::open(&path).unwrap(), bytes.len() as u64, &hash).unwrap();
             spans.push(
