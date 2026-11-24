@@ -608,6 +608,16 @@ impl Scope {
     }
 }
 
+struct TriggerGuard<'a>(&'a rusqlite::Transaction<'a>);
+impl Drop for TriggerGuard<'_> {
+    fn drop(&mut self) {
+        // Connection-local setting; must be restored even when row work errors out.
+        let _ = self
+            .0
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true);
+    }
+}
+
 // Internal row phase only. Its caller must hold Storage's connection mutex and
 // maintenance admission, and must have durably completed the fixed file phase.
 // No production entry point calls it yet; the consent/file orchestrator follows.
@@ -660,6 +670,7 @@ pub(super) fn erase_rows(
     secure_delete(tx)?;
     tx.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
         .map_err(|e| e.to_string())?;
+    let _triggers = TriggerGuard(tx);
     tx.execute(
         "UPDATE meetings SET current_analysis_id=NULL WHERE id=?1",
         params![expected.meeting_id],
@@ -711,13 +722,7 @@ pub(super) fn erase_rows(
     {
         return Err("削除後の参照整合性が不正です。DB削除を巻き戻しました".into());
     }
-    if tx
-        .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
-        .map_err(|e| e.to_string())
-        .is_err()
-    {
-        return Err("削除後の保護制約を再有効化できません".into());
-    }
+    drop(_triggers);
     if !tx
         .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
         .map_err(|e| e.to_string())?
