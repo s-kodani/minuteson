@@ -211,7 +211,7 @@ impl Storage {
     pub(in crate::storage) fn recover_voice_audio(&self) -> Result<(), String> {
         self.require_data_writable()?;
         if let Err(error) = self.managed_anchor.verify() {
-            let db = self
+            let mut db = self
                 .connection
                 .lock()
                 .map_err(|_| "DBロックを取得できません")?;
