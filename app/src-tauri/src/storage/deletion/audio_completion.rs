@@ -357,8 +357,9 @@ fn finish_inner(
     if !r.files_removed() {
         return Err("音声ファイル処理が完了するまで利用不可を確定しません".into());
     }
-    let _writer =
-        crate::storage::deletion::fence::write_audio_removal(storage, &mut db, &r, lease, &cancelled)?;
+    let _writer = crate::storage::deletion::fence::write_audio_removal(
+        storage, &mut db, &r, lease, &cancelled,
+    )?;
     super::verify_remaining(storage, &db, &r, &cancelled)?;
     let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;

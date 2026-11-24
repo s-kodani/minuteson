@@ -311,85 +311,90 @@ fn run_locked(
 ) -> Result<(), String> {
     let writer = super::fence::write_completion(storage, db, receipt, check)?;
     let result = (|| -> Result<(), String> {
-    receipt.verify_live(storage, &db, check)?;
-    if receipt.progress.database_phase == Phase::RowsPending {
-        let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
-        receipt.verify_live(storage, &tx, check)?;
-        storage.managed_anchor.verify_current_history()?;
-        let supersession = super::audio_supersession::retain(
-            &tx,
-            &storage.managed_anchor,
-            &receipt.confirmed,
-            check,
-        )?;
-        database::erase_rows(&tx, receipt.confirmed.scope(), check)?;
-        event("rowsErased");
-        let next = save_phase(&tx, receipt, Phase::RowsDeleted)?;
-        if let Some(operation) = supersession {
-            super::audio_supersession::inspect(&tx, &storage.managed_anchor, &operation, check)?;
+        receipt.verify_live(storage, &db, check)?;
+        if receipt.progress.database_phase == Phase::RowsPending {
+            let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+                .map_err(|e| e.to_string())?;
+            receipt.verify_live(storage, &tx, check)?;
+            storage.managed_anchor.verify_current_history()?;
+            let supersession = super::audio_supersession::retain(
+                &tx,
+                &storage.managed_anchor,
+                &receipt.confirmed,
+                check,
+            )?;
+            database::erase_rows(&tx, receipt.confirmed.scope(), check)?;
+            event("rowsErased");
+            let next = save_phase(&tx, receipt, Phase::RowsDeleted)?;
+            if let Some(operation) = supersession {
+                super::audio_supersession::inspect(
+                    &tx,
+                    &storage.managed_anchor,
+                    &operation,
+                    check,
+                )?;
+            }
+            event("beforeRowsCommit");
+            cancel(check)?;
+            receipt
+                .progress
+                .files
+                .verify_absent(storage, db, &receipt.confirmed)?;
+            tx.commit().map_err(|e| e.to_string())?;
+            receipt.progress = next;
+            event("rowsCommitted");
         }
-        event("beforeRowsCommit");
-        cancel(check)?;
-        receipt
-            .progress
-            .files
-            .verify_absent(storage, db, &receipt.confirmed)?;
-        tx.commit().map_err(|e| e.to_string())?;
-        receipt.progress = next;
-        event("rowsCommitted");
-    }
-    receipt.verify_live(storage, &db, check)?;
-    if receipt.progress.database_phase == Phase::RowsDeleted {
-        let mode: String = db
-            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
-        if mode != "wal" {
-            return Err("DBのWAL設定が想定と異なります".into());
+        receipt.verify_live(storage, &db, check)?;
+        if receipt.progress.database_phase == Phase::RowsDeleted {
+            let mode: String = db
+                .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            if mode != "wal" {
+                return Err("DBのWAL設定が想定と異なります".into());
+            }
+            cancel(check)?;
+            storage.managed_anchor.verify()?;
+            database::secure_delete(&db)?;
+            database::checkpoint(&db)?;
+            event("checkpointed");
+            cancel(check)?;
+            storage.managed_anchor.verify()?;
+            if !receipt.manifest.directory_scope() {
+                db.execute_batch("VACUUM").map_err(|e| e.to_string())?;
+            }
+            event("vacuumed");
+            cancel(check)?;
+            storage.managed_anchor.verify()?;
+            database::checkpoint(&db)?;
+            event("purged");
+            receipt.verify_live(storage, &db, check)?;
+            let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+                .map_err(|e| e.to_string())?;
+            receipt.verify_saved(&tx, check)?;
+            let next = save_phase(&tx, receipt, Phase::Finished)?;
+            event("beforeCompletionCommit");
+            cancel(check)?;
+            receipt
+                .progress
+                .files
+                .verify_absent(storage, db, &receipt.confirmed)?;
+            tx.commit().map_err(|e| e.to_string())?;
+            receipt.progress = next;
+            event("completed");
         }
+        // This WAL contains only the non-text completion receipt. Do not return
+        // success until its final checkpoint succeeds; acknowledgement can replay.
         cancel(check)?;
-        storage.managed_anchor.verify()?;
-        database::secure_delete(&db)?;
-        database::checkpoint(&db)?;
-        event("checkpointed");
-        cancel(check)?;
+        receipt.verify_live(storage, &db, check)?;
         storage.managed_anchor.verify()?;
         if !receipt.manifest.directory_scope() {
-            db.execute_batch("VACUUM").map_err(|e| e.to_string())?;
+            database::compact_receipt_pages(&db)?;
         }
-        event("vacuumed");
         cancel(check)?;
-        storage.managed_anchor.verify()?;
         database::checkpoint(&db)?;
-        event("purged");
-        receipt.verify_live(storage, &db, check)?;
-        let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
-        receipt.verify_saved(&tx, check)?;
-        let next = save_phase(&tx, receipt, Phase::Finished)?;
-        event("beforeCompletionCommit");
-        cancel(check)?;
-        receipt
-            .progress
-            .files
-            .verify_absent(storage, db, &receipt.confirmed)?;
-        tx.commit().map_err(|e| e.to_string())?;
-        receipt.progress = next;
-        event("completed");
-    }
-    // This WAL contains only the non-text completion receipt. Do not return
-    // success until its final checkpoint succeeds; acknowledgement can replay.
-    cancel(check)?;
-    receipt.verify_live(storage, &db, check)?;
-    storage.managed_anchor.verify()?;
-    if !receipt.manifest.directory_scope() {
-        database::compact_receipt_pages(&db)?;
-    }
-    cancel(check)?;
-    database::checkpoint(&db)?;
-    event("ackCheckpointed");
-    super::startup::resolve(storage, db, receipt, check)?;
-    Ok(())
+        event("ackCheckpointed");
+        super::startup::resolve(storage, db, receipt, check)?;
+        Ok(())
     })();
     writer.finish(db);
     result

@@ -599,8 +599,14 @@ impl Drop for Writer<'_> {
                 .deletion_fence
                 .writing
                 .store(false, Ordering::Release);
-            self.storage.deletion_fence.pending.store(true, Ordering::Release);
-            self.storage.deletion_fence.scoped.store(false, Ordering::Release);
+            self.storage
+                .deletion_fence
+                .pending
+                .store(true, Ordering::Release);
+            self.storage
+                .deletion_fence
+                .scoped
+                .store(false, Ordering::Release);
         }
     }
 }

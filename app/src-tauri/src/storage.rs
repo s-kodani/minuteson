@@ -173,7 +173,10 @@ pub struct Storage {
 }
 
 #[cfg(test)]
-pub(crate) fn with_test_database<T>(storage: &Storage, action: impl FnOnce(&mut Connection) -> T) -> T {
+pub(crate) fn with_test_database<T>(
+    storage: &Storage,
+    action: impl FnOnce(&mut Connection) -> T,
+) -> T {
     let mut db = storage.connection.lock().unwrap();
     action(&mut db)
 }

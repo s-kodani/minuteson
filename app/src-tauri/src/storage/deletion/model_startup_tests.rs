@@ -160,10 +160,7 @@ fn history_model_consent_with_mismatched_schema_is_rejected_without_starting_del
         let prepared = intent::read(&db, &op).unwrap();
         // Rehashing a mismatched schema header must not grant deletion access.
         let _writer = crate::storage::deletion::fence::write_model_prepared(
-            &f.storage,
-            &mut db,
-            &prepared,
-            &owner,
+            &f.storage, &mut db, &prepared, &owner,
         )
         .unwrap();
         intent::mismatched_schema_header_fixture(&db, &op);

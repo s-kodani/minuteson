@@ -4,7 +4,7 @@ use rusqlite::{config::DbConfig, params, types::ValueRef, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::ops::{DerefMut, Deref};
+use std::ops::{Deref, DerefMut};
 
 const MAX_ROWS: u64 = 200_000;
 const MAX_CELL: usize = 32 * 1024 * 1024;

@@ -220,8 +220,13 @@ fn deletion_fence_invalidates_cached_writes_at_confirmation_and_writes_prepared_
     assert!(db
         .prepare_cached("UPDATE meetings SET title='should be denied' WHERE id=?1")
         .is_err());
-    let writer =
-        write_prepared(&f.storage, &mut db, &p, &crate::test_support::never_cancelled).unwrap();
+    let writer = write_prepared(
+        &f.storage,
+        &mut db,
+        &p,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     let mut cached = db
         .prepare("UPDATE meetings SET title='escaped write' WHERE id=?1")
         .unwrap();
@@ -243,8 +248,13 @@ fn deletion_fence_writer_rolls_back_open_transaction_and_reinstates_guards_on_dr
     let f = Fixture::new();
     let p = f.prepare();
     let mut db = f.storage.connection.lock().unwrap();
-    let writer =
-        write_prepared(&f.storage, &mut db, &p, &crate::test_support::never_cancelled).unwrap();
+    let writer = write_prepared(
+        &f.storage,
+        &mut db,
+        &p,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
     db.execute_batch("BEGIN IMMEDIATE").unwrap();
     db.execute(
         "UPDATE meetings SET title='uncommitted edit' WHERE id=?1",
@@ -277,8 +287,13 @@ fn deletion_fence_writer_unwind_does_not_leave_connection_writable_or_commit_par
     let p = f.prepare();
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut db = f.storage.connection.lock().unwrap();
-        let _writer =
-            write_prepared(&f.storage, &mut db, &p, &crate::test_support::never_cancelled).unwrap();
+        let _writer = write_prepared(
+            &f.storage,
+            &mut db,
+            &p,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         db.execute_batch("BEGIN IMMEDIATE").unwrap();
         db.execute(
             "UPDATE meetings SET title='uncommitted panic' WHERE id=?1",
@@ -312,8 +327,13 @@ fn deletion_fence_guard_failure_stays_fail_closed_until_reopen() {
     let p = f.prepare();
     {
         let mut db = f.storage.connection.lock().unwrap();
-        let writer =
-            write_prepared(&f.storage, &mut db, &p, &crate::test_support::never_cancelled).unwrap();
+        let writer = write_prepared(
+            &f.storage,
+            &mut db,
+            &p,
+            &crate::test_support::never_cancelled,
+        )
+        .unwrap();
         db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
         drop(writer);
@@ -494,8 +514,13 @@ fn deletion_fence_keep_cannot_resolve_a_started_or_corrupted_receipt() {
         let p = f.prepare();
         {
             let mut db = f.storage.connection.lock().unwrap();
-            let _writer =
-                write_prepared(&f.storage, &mut db, &p, &crate::test_support::never_cancelled).unwrap();
+            let _writer = write_prepared(
+                &f.storage,
+                &mut db,
+                &p,
+                &crate::test_support::never_cancelled,
+            )
+            .unwrap();
             db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
                 .unwrap();
             db.execute(sql, params![f.operation]).unwrap();
@@ -552,9 +577,13 @@ fn deletion_fence_writer_cannot_adopt_another_operation_or_changed_root() {
     std::fs::create_dir(&root).unwrap();
     {
         let mut db = f.storage.connection.lock().unwrap();
-        assert!(
-            write_prepared(&f.storage, &mut db, &p, &crate::test_support::never_cancelled).is_err()
-        );
+        assert!(write_prepared(
+            &f.storage,
+            &mut db,
+            &p,
+            &crate::test_support::never_cancelled
+        )
+        .is_err());
         assert!(db.execute_batch("DELETE FROM meetings WHERE 0").is_err());
     }
     assert!(f.storage.data_write_blocked());
