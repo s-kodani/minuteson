@@ -83,7 +83,7 @@ class SystemCapture final : public CaptureReader {
       if(mapped.boundary)flags|=AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY;
       if(stream.clock.estimated_packets)flags|=AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR;
       const auto result=mixer.add(stream.cursor,first,packet->frames,packet->samples.data(),flags,packet->arrival,
-        [&](CapturePacket mixed){queue.push(std::move(mixed));});
+        [&](CapturePacket mixed){queue.push_wait(std::move(mixed));});
       if(result.adjusted||result.pressure)observe_alignment(mixer);
     }
     return stream.reader->queue.pending_frames()!=0;
@@ -112,7 +112,7 @@ class SystemCapture final : public CaptureReader {
         std::map<std::wstring,Retirement> retirements;
         std::map<std::wstring,MonCaptureInputRetry> retries;
         Devices desired=devices;
-        auto emit=[&](CapturePacket packet){queue.push(std::move(packet));};
+        auto emit=[&](CapturePacket packet){queue.push_wait(std::move(packet));};
         auto failed=[&](const std::wstring& id,const InputFailure& error){
           mon_capture_input_fault(&retries[id],GetTickCount64()*1000000ULL);
           std::cerr<<"mon_capture_endpoint: "+Json{{"event","retry"},{"uid",utf8(id)},{"hresult",static_cast<std::int64_t>(error.result)},{"attempt",retries[id].failures}}.dump()+"\n";
@@ -139,20 +139,39 @@ class SystemCapture final : public CaptureReader {
           bool backlog=false;
           for(auto it=retirements.begin();it!=retirements.end();){
             auto& retiring=it->second;
-            if(!retiring.queue_ended){
+            auto drain_owned=[&]{
               try{backlog|=drain(*retiring.stream,mixer);}
               catch(const InputFailure&){retiring.queue_ended=true;}
               catch(...){if(!closing)throw;remember_failure(std::current_exception());retiring.queue_ended=true;}
-            }
+            };
+            if(!retiring.queue_ended)drain_owned();
             (void)retiring.operation->take();
             if(!retiring.operation->finished()){++it;continue;}
             if(auto error=retiring.operation->error()){if(!closing)std::rethrow_exception(error);remember_failure(error);}
             if(!retiring.queue_ended&&retiring.stream->reader->queue.pending_frames()){++it;continue;}
+            // The final accepted packet is followed by a terminal error, not
+            // by another frame. Observe it after native closure before erase.
+            if(!retiring.queue_ended)drain_owned();
             // stop() joined the native owner, including release of both COM
             // interfaces. Erase its last reader before allowing the same ID.
             it=retirements.erase(it);
           }
           return backlog;
+        };
+        auto flush_ready=[&](bool observe){
+          const auto now=qpc(),frame=EndpointMixer::frame_at(now);
+          auto through=frame>EndpointMixer::latency_frames?frame-EndpointMixer::latency_frames:0;
+          auto constrain=[&](Stream& stream){
+            // After output backpressure, an old arrival time does not grant
+            // permission to flush across this endpoint's unread PCM. Drain
+            // and flush each round, keeping the bounded mixer below capacity.
+            if(stream.reader->queue.pending_frames())through=std::min(through,stream.cursor.next.value_or(0));
+            else through=stream.cursor.safe_through(now,through);
+          };
+          for(auto& [id,stream]:streams)constrain(*stream);
+          for(auto& [id,retiring]:retirements)constrain(*retiring.stream);
+          mixer.flush(through,now,emit);
+          if(observe)queue.observe(EndpointMixer::ticks_at(mixer.observed_through(through)));
         };
         try{
           while(!stopping_.load(std::memory_order_acquire)){
@@ -221,16 +240,9 @@ class SystemCapture final : public CaptureReader {
             }
             if(streams.empty()&&openings.empty()&&retirements.empty()&&!enumeration)throw InputFailure(AUDCLNT_E_DEVICE_INVALIDATED,"PC audio outputs are unavailable");
             for(auto it=retries.begin();it!=retries.end();)if(!desired.count(it->first)&&!streams.count(it->first)&&!openings.count(it->first)&&!retirements.count(it->first))it=retries.erase(it);else ++it;
-            const auto now=qpc(),frame=EndpointMixer::frame_at(now);
-            auto through=frame>EndpointMixer::latency_frames?frame-EndpointMixer::latency_frames:0;
-            for(auto& [id,stream]:streams)through=stream->cursor.safe_through(now,through);
-            for(auto& [id,retiring]:retirements)through=retiring.stream->cursor.safe_through(now,through);
             // An empty observation follows every currently queued endpoint
             // packet. A timer must never overtake a backlog on another peer.
-            if(!backlog){
-              mixer.flush(through,now,emit);
-              queue.observe(EndpointMixer::ticks_at(mixer.observed_through(through)));
-            }
+            flush_ready(!backlog);
             // Round-robin packets keep endpoints fair, but sleeping with a
             // backlog can make a 10 ms stream fall behind the Windows timer.
             if(!backlog)Sleep(1);
@@ -242,19 +254,21 @@ class SystemCapture final : public CaptureReader {
         for(auto& [id,pending]:openings)pending->cancel();
         while(!streams.empty())retire(streams.begin());
         while(enumeration||!openings.empty()||!retirements.empty()){
-          poll_retirements(true);
+          const auto backlog=poll_retirements(true);
+          try{flush_ready(false);}catch(...){remember_failure(std::current_exception());}
           if(enumeration&&enumeration->finished())enumeration.reset();
           for(auto it=openings.begin();it!=openings.end();)if(it->second->finished())it=openings.erase(it);else ++it;
-          Sleep(1);
+          if(!backlog)Sleep(1);
         }
         try{mixer.flush(std::numeric_limits<std::uint64_t>::max(),qpc(),emit);}catch(...){remember_failure(std::current_exception());}
         observe_alignment(mixer);if(failure)std::rethrow_exception(failure);
       }catch(...){auto error=std::current_exception();queue.fail(error);startup(error);}
     });
     std::unique_lock lock(startup_mutex_);startup_changed_.wait(lock,[&]{return startup_finished_;});
-    if(startup_error_){auto error=startup_error_;lock.unlock();if(thread_.joinable())thread_.join();std::rethrow_exception(error);}
+    if(startup_error_){auto error=startup_error_;lock.unlock();queue.discard_waiters();if(thread_.joinable())thread_.join();std::rethrow_exception(error);}
   }
   void stop() override{stopping_.store(true,std::memory_order_release);if(thread_.joinable())thread_.join();}
+  void discard() override{queue.discard_waiters();stop();}
   AlignmentDiagnostics alignment_diagnostics() override{std::lock_guard lock(alignment_mutex_);return alignment_;}
-  ~SystemCapture() override{stop();}
+  ~SystemCapture() override{discard();}
 };

@@ -393,6 +393,85 @@ void endpoint_ingress_has_one_aggregate_budget(){
   }
   require(!budget->pending_nanoseconds(),"cancelled endpoint queue retained shared transient ingress credits");
 }
+void fill_mixed_output(product::SystemCapture& reader){
+  try{for(;;){product::CapturePacket packet;packet.frames=480;packet.flags=AUDCLNT_BUFFERFLAGS_SILENT;reader.queue.push(std::move(packet));}}
+  catch(const product::InputOverload&){}
+  require(reader.queue.pending_frames()>product::PacketQueue::max_frames-480,"output fixture did not reach its unchanged capacity");
+}
+template<class Consume>void stop_while_draining(product::SystemCapture& reader,Consume consume){
+  std::atomic<bool> stopped{false};std::exception_ptr error,consumer_error;
+  std::thread stopper([&]{try{reader.stop();}catch(...){error=std::current_exception();}stopped=true;});
+  const auto deadline=GetTickCount64()+10000;
+  try{while(!stopped&&GetTickCount64()<deadline){consume();Sleep(1);}consume();}
+  catch(...){consumer_error=std::current_exception();}
+  const bool timely=stopped.load();
+  if(!timely||consumer_error)reader.queue.discard_waiters();
+  stopper.join();if(consumer_error)std::rethrow_exception(consumer_error);if(error)std::rethrow_exception(error);
+  require(timely,"mixed output Stop did not complete while the consumer drained");
+}
+void full_mixed_output_preserves_native_tail_and_stop(){
+  auto first=std::make_shared<EndpointStats>(),second=std::make_shared<EndpointStats>();
+  first->continuous=second->continuous=true;first->final_tail=second->final_tail=true;
+  first->normal_sample=second->normal_sample=0;
+  auto devices=Microsoft::WRL::Make<ReplugEnumerator>(first,second);
+  product::SystemCapture reader([devices]{ComPtr<IMMDeviceEnumerator> value;devices.As(&value);return value;});
+  fill_mixed_output(reader);
+  // Wait for actual native delivery past the mixer's alignment window. The
+  // output consumer is still held; a full mixed queue must not retire inputs.
+  wait_for([&]{return first->packets>=100&&second->packets>=100;},"mixed output pressure retired the native inputs");
+  require(!first->stops&&!second->stops,"mixed output pressure became an input fault");
+  unsigned tail_frames=0;
+  const auto consume=[&]{while(auto packet=reader.queue.pop()){
+    for(unsigned frame=0;!packet->samples.empty()&&frame<packet->frames;++frame)
+      if(packet->samples[frame*2]>=0.5f&&packet->samples[frame*2+1]>=0.5f)++tail_frames;
+  }};
+  const auto resumed=first->packets.load()+50;
+  wait_for([&]{consume();return first->packets>=resumed;},"mixed output did not resume without restarting capture");
+  require(!first->stops&&!second->stops,"resuming mixed output restarted its native sources");
+  fill_mixed_output(reader);const auto held=first->packets.load()+100;
+  wait_for([&]{return first->packets>=held;},"stop fixture did not retain native PCM behind full output");
+  stop_while_draining(reader,consume);
+  require(first->tails==1&&second->tails==1&&tail_frames>=480,"full mixed output lost accepted native tail PCM");
+  for(auto stats:{first,second})require(stats->opens==1&&stats->released==1&&!stats->live&&!stats->wrong_thread,"output pressure leaked or restarted a native owner");
+}
+void cancelled_unadopted_full_output_disposes_without_a_consumer(){
+  auto stats=std::make_shared<EndpointStats>();stats->continuous=true;
+  auto devices=Microsoft::WRL::Make<ReplugEnumerator>(stats);
+  auto prepared=std::make_unique<product::PreparedInput>();
+  auto reader=std::make_unique<product::SystemCapture>([devices]{ComPtr<IMMDeviceEnumerator> value;devices.As(&value);return value;});
+  fill_mixed_output(*reader);prepared->reader=std::move(reader);
+  wait_for([&]{return stats->packets>=100;},"cancelled-output fixture did not deliver native PCM");
+  const auto before=GetTickCount64();prepared.reset();
+  require(GetTickCount64()-before<5000&&stats->released==1&&!stats->live&&!stats->wrong_thread,"unadopted output waited for a nonexistent consumer or leaked COM");
+}
+void native_ingress_overload_preserves_every_accepted_sample(){
+  auto first=std::make_shared<EndpointStats>(),second=std::make_shared<EndpointStats>();
+  first->continuous=second->continuous=true;first->normal_sample=0.25f;second->normal_sample=0.125f;
+  auto devices=Microsoft::WRL::Make<ReplugEnumerator>(first,second);
+  product::SystemCapture reader([devices]{ComPtr<IMMDeviceEnumerator> value;devices.As(&value);return value;});
+  // Exercise both real 20-second budgets, with no injected exception or
+  // reduced limit. Output stalls first; native ingress then fills and stops.
+  const auto deadline=GetTickCount64()+45000;
+  while((!first->released||!second->released)&&GetTickCount64()<deadline)Sleep(1);
+  require(first->released&&second->released,"held consumer did not reach the native ingress overload");
+  bool overloaded=false;std::array<std::uint64_t,2> frames{};
+  stop_while_draining(reader,[&]{
+    try{while(auto packet=reader.queue.pop()){
+      require(packet->samples.size()==packet->frames*2,"accepted non-silent endpoint PCM became silence");
+      for(unsigned frame=0;frame<packet->frames;++frame){
+        const auto sample=packet->samples[frame*2];
+        require(sample==packet->samples[frame*2+1]&&(sample==0.125f||sample==0.25f||sample==0.375f),"overload changed exact endpoint samples");
+        frames[0]+=sample==0.25f||sample==0.375f;frames[1]+=sample==0.125f||sample==0.375f;
+      }
+    }}catch(const product::InputOverload&){overloaded=true;}
+  });
+  // Each native source releases one rejected packet after push throws. All
+  // preceding packets were accepted and must appear exactly once per source.
+  if(!overloaded||frames[0]!=(first->packets-1)*480ULL||frames[1]!=(second->packets-1)*480ULL)
+    std::cerr<<"overload_context: "+product::Json{{"overloaded",overloaded},{"savedSourceFrames",frames},{"nativePackets",{first->packets.load(),second->packets.load()}},{"alignment",reader.alignment_diagnostics().retimed_frames}}.dump()+"\n";
+  require(overloaded&&frames[0]==(first->packets-1)*480ULL&&frames[1]==(second->packets-1)*480ULL,"native overload discarded or duplicated accepted endpoint PCM");
+  for(auto stats:{first,second})require(stats->opens==1&&stats->released==1&&!stats->live&&!stats->wrong_thread,"native overload retained a COM owner");
+}
 void fatal_error_is_terminal_only_after_retirement_tail(){
   auto bluetooth=std::make_shared<EndpointStats>(),healthy=std::make_shared<EndpointStats>();
   bluetooth->continuous=healthy->continuous=true;bluetooth->final_tail=true;
@@ -452,6 +531,9 @@ int main(){
     endpoint_failures_retry_without_restarting_the_peer();
     final_stop_waits_for_cancelled_open_disposal();
     endpoint_ingress_has_one_aggregate_budget();
+    full_mixed_output_preserves_native_tail_and_stop();
+    cancelled_unadopted_full_output_disposes_without_a_consumer();
+    native_ingress_overload_preserves_every_accepted_sample();
     fatal_error_is_terminal_only_after_retirement_tail();
     shutdown_storage_failure_supersedes_an_input_fault();
     std::cout<<"same-ID reconnect: repeated gated endpoint retirement, peer continuity, local retry, cancelled-open closure, shared ingress budget and COM owner cleanup passed\n";

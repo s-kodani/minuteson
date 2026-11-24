@@ -46,18 +46,9 @@ class LiveWav {
     LARGE_INTEGER position;position.QuadPart=static_cast<LONGLONG>(offset);
     if(!SetFilePointerEx(file,position,nullptr,FILE_BEGIN))throw std::runtime_error("WAV recording seek failed");
   }
-  static void verify(HANDLE file,std::uint64_t offset,const std::vector<BYTE>& expected){
-    seek(file,offset);std::array<BYTE,65536> bytes{};std::size_t used=0;
-    while(used<expected.size()){
-      DWORD count=0;const auto size=static_cast<DWORD>(std::min(bytes.size(),expected.size()-used));
-      if(!ReadFile(file,bytes.data(),size,&count,nullptr)||count!=size
-        ||!std::equal(bytes.begin(),bytes.begin()+count,expected.begin()+used))
-        throw std::runtime_error("stored WAV PCM differs from accepted audio");
-      used+=count;
-    }
-  }
   void stage(const char* name,const Job& job){if(hook_)hook_(name,job.after.frames);}
   void run(){
+    ScopedAudioPriority priority;
     try{
       // Deny directory replacement while path-based atomic metadata writes
       // accompany the pinned audio handle. Reparse points are never followed.
@@ -69,7 +60,7 @@ class LiveWav {
         ||!(directory_identity.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)
         ||(directory_identity.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))
         throw std::runtime_error("録音先ディレクトリの所有を確認できません");
-      Handle file(CreateFileW((directory_/L"recording.wav").c_str(),GENERIC_READ|GENERIC_WRITE,
+      Handle file(CreateFileW((directory_/L"recording.wav").c_str(),GENERIC_WRITE,
         FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));
       if(file.value==INVALID_HANDLE_VALUE)throw std::runtime_error("録音WAVを新規作成できません");
       BY_HANDLE_FILE_INFORMATION identity{};
@@ -95,7 +86,8 @@ class LiveWav {
           stage("pcm_write",job);seek(file.value,80+job.first*2);write_all(file.value,job.pcm.data(),job.pcm.size());
           stage("pcm_sync",job);
           if(!capture_flush(file.value,"wav_pcm_sync"))throw std::runtime_error("録音WAVを同期できません");
-          stage("pcm_verify",job);verify(file.value,80+job.first*2,job.pcm);
+          // The app independently checks each published range against the
+          // receipt's PCM hash. Avoid a second, cached read on this IO worker.
           std::ostringstream name;name<<"wav-"<<std::setw(8)<<std::setfill('0')<<job.after.checkpoints<<".json";
           stage("receipt",job);atomic_json(directory_/wide(name.str()),Json::parse(job.receipt));
         }

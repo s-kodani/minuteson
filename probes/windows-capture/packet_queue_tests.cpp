@@ -25,12 +25,17 @@ int main(){
     product::PacketQueue bounded;
     for(unsigned i=0;i<10;++i){product::CapturePacket packet;packet.frames=96000;packet.flags=2;bounded.push(std::move(packet));}
     product::CapturePacket extra;extra.frames=1;extra.flags=2;
-    bool overflow=false;try{bounded.push(std::move(extra));}catch(const std::runtime_error&){overflow=true;}
+    bool overflow=false;try{bounded.push(std::move(extra));}catch(const product::InputOverload&){overflow=true;}
     require(overflow&&bounded.pop()->frames==96000,"overflow replaced already captured audio");
+    { // Overload is recoverable per input, unlike storage or disk failures.
+      product::PacketQueue probe;probe.fail(std::make_exception_ptr(product::InputOverload("overload")));
+      bool recoverable=false;try{probe.pop();}catch(const product::InputDataFault&){recoverable=true;}
+      require(recoverable,"queue overload must use the input recovery path");
+    }
     product::PacketQueue bytes;
     for(unsigned i=0;i<8;++i){product::CapturePacket large;large.frames=65536;large.samples.resize(65536*8);bytes.push(std::move(large));}
     product::CapturePacket one;one.frames=1;one.samples.push_back(0.25f);
-    overflow=false;try{bytes.push(std::move(one));}catch(const std::runtime_error&){overflow=true;}
+    overflow=false;try{bytes.push(std::move(one));}catch(const product::InputOverload&){overflow=true;}
     require(overflow&&bytes.pop()->samples.size()==65536*8,"byte overflow discarded accepted audio");
     product::CapturePacket released;released.frames=1;released.samples.push_back(0.5f);bytes.push(std::move(released));
     for(unsigned i=0;i<7;++i)bytes.pop();
@@ -55,6 +60,24 @@ int main(){
     require(!progress.observed_through(1),"old observation overtook newly accepted PCM");
     progress.pop();require(!progress.observed_through(2),"old observation authorized an unobserved sequence");
     progress.observe(3000);require(progress.observed_through(2)==3000,"latest drained observation missing");
+    { // A durable writer failure must interrupt mixed-output backpressure.
+      product::PacketQueue output;auto storage=std::make_shared<product::StoragePending>();output.attach_storage(storage,1);
+      for(unsigned i=0;i<10;++i){product::CapturePacket full;full.frames=96000;full.flags=2;output.push(std::move(full));}
+      constexpr auto marker="mixed-output storage failure";std::exception_ptr error;
+      std::thread writer([&]{try{product::CapturePacket next;next.frames=480;next.flags=2;output.push_wait(std::move(next));}catch(...){error=std::current_exception();}});
+      storage->fail(std::make_exception_ptr(std::runtime_error(marker)));writer.join();
+      bool fatal=false;try{if(error)std::rethrow_exception(error);}catch(const product::InputDataFault&){}catch(const std::runtime_error& failure){fatal=std::string(failure.what())==marker;}
+      require(fatal&&output.pending_frames()==48000*20,"storage failure became overload recovery or replaced accepted output");
+    }
+    { // Disposing the consumer must release a producer blocked on backpressure.
+      product::PacketQueue output;
+      for(unsigned i=0;i<10;++i){product::CapturePacket full;full.frames=96000;full.flags=2;output.push(std::move(full));}
+      std::exception_ptr error;
+      std::thread writer([&]{try{product::CapturePacket next;next.frames=480;next.flags=2;output.push_wait(std::move(next));}catch(...){error=std::current_exception();}});
+      output.discard_waiters();writer.join();
+      bool released=false;try{if(error)std::rethrow_exception(error);}catch(const product::InputDataFault&){}catch(const std::runtime_error&){released=true;}
+      require(released&&output.pending_frames()==48000*20,"discarded consumer left a producer waiting or replaced accepted output");
+    }
     std::cout<<"acquisition queue: delayed storage, exact continuous PCM, ordered drain before failure, and bounded overflow passed\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
