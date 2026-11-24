@@ -533,81 +533,92 @@ impl Writer<'_> {
         })
     }
 
-    pub(super) fn finish(self, mut db: &mut Connection) {
-        let fence = &self.storage.deletion_fence;
-        if connection_identity(db) != self.connection_identity {
-            fence.scoped.store(false, Ordering::Release);
-            fence.pending.store(true, Ordering::Release);
-            fence.writing.store(false, Ordering::Release);
-            return;
-        }
-        // Never hand an uncommitted write transaction back to ordinary callers.
-        let rolled_back = db.is_autocommit() || db.execute_batch("ROLLBACK").is_ok();
-        let guards = db
-            .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
-            .is_ok_and(|enabled| enabled)
-            && db
-                .query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))
-                .is_ok_and(|enabled| enabled);
-        #[cfg(any(unix, windows))]
-        let anchored = self.storage.managed_anchor.verify().is_ok();
-        #[cfg(not(any(unix, windows)))]
-        let anchored = true;
-        let pending = has_pending(&db);
-        let normalized = fence.startup_deferred
-            || fence.startup_audio_scopes.is_empty()
-            || (rolled_back
-                && guards
-                && anchored
-                && pending.is_ok()
-                && (|| -> Result<(), String> {
-                    let tx = db
-                        .unchecked_transaction()
-                        .map_err(|error| error.to_string())?;
-                    for meeting in &fence.startup_audio_scopes {
-                        if !audio_pending(&tx, meeting)?
-                            && !super::super::meeting_access::reserved(&tx, meeting)?
-                        {
-                            super::super::normalize_startup_audio_states(&tx, meeting)?;
-                        }
-                    }
-                    tx.commit().map_err(|error| error.to_string())
-                })()
-                .is_ok());
-        let guarded = super::super::meeting_access::bypass(&mut db, false).is_ok();
-        if !rolled_back || !guards || !anchored || pending.is_err() || !guarded {
-            fence.scoped.store(false, Ordering::Release);
-            fence.pending.store(true, Ordering::Release);
-            let _ = db.authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
-        } else if !normalized {
-            fence.fail_closed(&mut db);
-        } else {
-            fence.pending.store(pending.unwrap(), Ordering::Release);
-            if !fence.startup_deferred {
-                let scoped = fence.scopes_allow_writes(&db).unwrap_or(false);
-                fence.scoped.store(scoped, Ordering::Release);
-            }
-            let _ = fence.install(&mut db);
-        }
-        fence.writing.store(false, Ordering::Release);
+    pub(super) fn finish(self, db: &mut Connection) {
+        release_writer(self.storage, db, self.connection_identity);
     }
+}
+fn release_writer(storage: &Storage, db: &mut Connection, expected_identity: usize) {
+    let fence = &storage.deletion_fence;
+    if !fence.writing.load(Ordering::Acquire) {
+        return;
+    }
+    if connection_identity(db) != expected_identity {
+        fence.scoped.store(false, Ordering::Release);
+        fence.pending.store(true, Ordering::Release);
+        fence.writing.store(false, Ordering::Release);
+        return;
+    }
+    // Never hand an uncommitted write transaction back to ordinary callers.
+    let rolled_back = db.is_autocommit() || db.execute_batch("ROLLBACK").is_ok();
+    let guards = db
+        .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
+        .is_ok_and(|enabled| enabled)
+        && db
+            .query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))
+            .is_ok_and(|enabled| enabled);
+    #[cfg(any(unix, windows))]
+    let anchored = storage.managed_anchor.verify().is_ok();
+    #[cfg(not(any(unix, windows)))]
+    let anchored = true;
+    let pending = has_pending(db);
+    let normalized = fence.startup_deferred
+        || fence.startup_audio_scopes.is_empty()
+        || (rolled_back
+            && guards
+            && anchored
+            && pending.is_ok()
+            && (|| -> Result<(), String> {
+                let tx = db
+                    .unchecked_transaction()
+                    .map_err(|error| error.to_string())?;
+                for meeting in &fence.startup_audio_scopes {
+                    if !audio_pending(&tx, meeting)?
+                        && !super::super::meeting_access::reserved(&tx, meeting)?
+                    {
+                        super::super::normalize_startup_audio_states(&tx, meeting)?;
+                    }
+                }
+                tx.commit().map_err(|error| error.to_string())
+            })()
+            .is_ok());
+    let guarded = super::super::meeting_access::bypass(db, false).is_ok();
+    if !rolled_back || !guards || !anchored || pending.is_err() || !guarded {
+        fence.scoped.store(false, Ordering::Release);
+        fence.pending.store(true, Ordering::Release);
+        let _ = db.authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
+    } else if !normalized {
+        fence.fail_closed(db);
+    } else {
+        fence.pending.store(pending.unwrap(), Ordering::Release);
+        if !fence.startup_deferred {
+            let scoped = fence.scopes_allow_writes(db).unwrap_or(false);
+            fence.scoped.store(scoped, Ordering::Release);
+        }
+        let _ = fence.install(db);
+    }
+    fence.writing.store(false, Ordering::Release);
 }
 impl Drop for Writer<'_> {
     fn drop(&mut self) {
-        if self.storage.deletion_fence.writing.load(Ordering::Acquire) {
-            self.storage
-                .deletion_fence
-                .writing
-                .store(false, Ordering::Release);
-            self.storage
-                .deletion_fence
-                .pending
-                .store(true, Ordering::Release);
-            self.storage
-                .deletion_fence
-                .scoped
-                .store(false, Ordering::Release);
+        if !self.storage.deletion_fence.writing.load(Ordering::Acquire) {
+            return;
         }
+        if let Ok(mut db) = self.storage.connection.lock() {
+            release_writer(self.storage, &mut db, self.connection_identity);
+            return;
+        }
+        self.storage
+            .deletion_fence
+            .writing
+            .store(false, Ordering::Release);
+        self.storage
+            .deletion_fence
+            .pending
+            .store(true, Ordering::Release);
+        self.storage
+            .deletion_fence
+            .scoped
+            .store(false, Ordering::Release);
     }
 }
 
