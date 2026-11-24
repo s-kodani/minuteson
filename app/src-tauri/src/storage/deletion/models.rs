@@ -619,7 +619,7 @@ pub(crate) fn preview(
         inspection_id: inspection.into(),
         package_id: package.into(),
         review_hash: review.into(),
-        census_hash: format!("{:x}", Sha256::digest(json)),
+        census_hash: mon_core::hash::sha256_hex(json),
         model_name: snapshot.record.manifest.model_name,
         model_version: snapshot.record.manifest.model_version,
         models_root: root.to_string_lossy().into(),

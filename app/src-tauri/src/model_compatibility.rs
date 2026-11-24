@@ -136,7 +136,7 @@ impl ProbeReport {
         if json.len() > 65536 {
             return Err("互換性の記録が上限を超えています".into());
         }
-        let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+        let hash = mon_core::hash::sha256_hex(json.as_bytes());
         Ok((json, hash))
     }
 }

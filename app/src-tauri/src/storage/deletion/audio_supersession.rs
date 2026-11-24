@@ -20,7 +20,7 @@ fn hash(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(b"mon/audio-history-supersession/v1\0");
     h.update(s.as_bytes());
-    format!("{:x}", h.finalize())
+    mon_core::hash::sha256_output_hex(h.finalize())
 }
 fn valid_hash(s: &str) -> bool {
     s.len() == 64

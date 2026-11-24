@@ -69,7 +69,15 @@ fn source_key(source: &RecordedAudioPlan, known: &KnownInput) -> Result<String, 
         "kind":t.kind,"startUs":t.start_us,"endUs":t.end_us,"sampleRate":t.sample_rate,"channels":t.channels,
         "chunks":t.chunks.iter().map(|c|serde_json::json!({"hash":c.hash,"size":c.size,"startUs":c.start_us,"endUs":c.end_us,"frames":c.frames,"sampleRate":c.sample_rate,"channels":c.channels,"clockSegments":c.clock_segments})).collect::<Vec<_>>()
     })).collect();
-    Ok(format!("{:x}",Sha256::digest(serde_json::to_vec(&serde_json::json!({"policy":"meeting_wav_pcm16_16000_v1","resampling":"direct_per_input_16000_v1","tracks":tracks,"coverage":known})).map_err(|e|e.to_string())?)))
+    Ok(mon_core::hash::sha256_hex(
+        serde_json::to_vec(&serde_json::json!({
+            "policy": "meeting_wav_pcm16_16000_v1",
+            "resampling": "direct_per_input_16000_v1",
+            "tracks": tracks,
+            "coverage": known,
+        }))
+        .map_err(|e| e.to_string())?,
+    ))
 }
 
 // Keep capture gaps conservative for voice evidence, and also mark timeline
@@ -236,7 +244,7 @@ impl Storage {
                 if cancelled() {
                     return Err("会議音声の準備を中断しました".into());
                 }
-                Ok(format!("{:x}", expected.finalize()))
+                Ok(mon_core::hash::sha256_output_hex(expected.finalize()))
             })()
         };
         let expected = result?;

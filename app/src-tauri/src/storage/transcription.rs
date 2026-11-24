@@ -362,7 +362,7 @@ impl Storage {
             .take(limit + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
-        if bytes.len() as u64 > limit || format!("{:x}", Sha256::digest(&bytes)) != hash {
+        if bytes.len() as u64 > limit || mon_core::hash::sha256_hex(&bytes) != hash {
             return Err("解析結果が読込中に変更されています".into());
         }
         Ok(bytes)

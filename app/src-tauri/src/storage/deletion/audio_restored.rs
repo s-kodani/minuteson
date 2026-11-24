@@ -33,7 +33,7 @@ fn digest(json: &str) -> String {
     let mut h = Sha256::new();
     h.update(b"mon/restored-audio-unavailable/v1\0");
     h.update(json.as_bytes());
-    format!("{:x}", h.finalize())
+    mon_core::hash::sha256_output_hex(h.finalize())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -285,7 +285,7 @@ impl Source {
         Ok(Self {
             receipt,
             row,
-            seal: format!("{:x}", Sha256::digest(&json)),
+            seal: mon_core::hash::sha256_hex(&json),
             bytes,
         })
     }
@@ -377,7 +377,7 @@ pub(in crate::storage::deletion::audio) fn superseded_baseline(
     cancel(check)?;
     Ok(SupersededBaseline {
         paths,
-        seal: format!("{:x}", Sha256::digest(&json)),
+        seal: mon_core::hash::sha256_hex(&json),
         bytes,
         published: row.1,
         meeting: header.meeting,

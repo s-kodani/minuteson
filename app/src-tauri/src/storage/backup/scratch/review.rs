@@ -147,8 +147,8 @@ impl Registry {
                 retained: false,
             },
             state,
-            intent_hash: format!("{:x}", intent.finalize()),
-            status_hash: format!("{:x}", status.finalize()),
+            intent_hash: mon_core::hash::sha256_output_hex(intent.finalize()),
+            status_hash: mon_core::hash::sha256_output_hex(status.finalize()),
             live,
         })
     }

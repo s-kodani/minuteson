@@ -97,7 +97,7 @@ pub(in crate::storage) fn snapshot(
         RetiredAudio {
             relative: relative.into(),
             bytes,
-            hash: format!("{:x}", sha.finalize()),
+            hash: mon_core::hash::sha256_output_hex(sha.finalize()),
             identity: Identity::read(&before)?,
         },
         before,

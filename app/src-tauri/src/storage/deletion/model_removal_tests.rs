@@ -39,7 +39,7 @@ fn model_deletion_body_removes_only_fixed_package_and_preserves_cpu_profiles_job
         [],
     )
     .unwrap();
-    db.execute("INSERT INTO app_settings(key,value_json,content_hash,lock_version,updated_at) VALUES('synthetic','{}',?1,1,1)",params![format!("{:x}",Sha256::digest(b"{}"))]).unwrap();
+    db.execute("INSERT INTO app_settings(key,value_json,content_hash,lock_version,updated_at) VALUES('synthetic','{}',?1,1,1)",params![mon_core::hash::sha256_hex(b"{}")]).unwrap();
     let meeting: String = db
         .query_row("SELECT id FROM meetings LIMIT 1", [], |r| r.get(0))
         .unwrap();

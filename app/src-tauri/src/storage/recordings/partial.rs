@@ -124,7 +124,7 @@ impl Review {
             "meetingVersion":self.meeting_version,"meetingState":self.meeting_state,
             "origin":self.origin,"lanes":self.summary.lanes,"generations":generations}))
         .map_err(|e| e.to_string())?;
-        Ok(format!("{:x}", Sha256::digest(&proof)))
+        Ok(mon_core::hash::sha256_hex(&proof))
     }
     pub(super) fn input_hash(&self) -> Result<String, String> {
         input_hash(&self.summary.review_hash, self.origin, &self.prefixes)
@@ -151,7 +151,7 @@ pub(super) fn input_hash(review: &str, origin: i64, prefixes: &[Prefix]) -> Resu
         "lanes":prefixes.iter().map(|p|p.lane().name()).collect::<Vec<_>>()
     }))
     .map_err(|e| e.to_string())?;
-    Ok(format!("{:x}", Sha256::digest(&proof)))
+    Ok(mon_core::hash::sha256_hex(&proof))
 }
 
 impl Storage {
@@ -383,7 +383,7 @@ impl Storage {
             "meetingState":meeting_state,"directory":[identity.dev(),identity.ino(),identity.uid()],
             "origin":origin,"lanes":lanes,"generations":generations}))
         .map_err(|e| e.to_string())?;
-        let review_hash = format!("{:x}", Sha256::digest(&proof));
+        let review_hash = mon_core::hash::sha256_hex(&proof);
         self.managed_anchor.verify()?;
         for prefix in &prefixes {
             prefix.verify_at(&self.root.join(&base), cancelled)?;

@@ -191,7 +191,7 @@ impl Snapshot<'_> {
         let mut entries = vec![Entry {
             path: "contents.json".into(),
             size,
-            sha256: format!("{:x}", hash.finalize()),
+            sha256: mon_core::hash::sha256_output_hex(hash.finalize()),
             asset_id: None,
             meeting_id: None,
             source_size: None,
@@ -394,7 +394,7 @@ fn verify_written_archive(
     ) {
         return Err("検証中にバックアップが変更されています".into());
     }
-    Ok(format!("{:x}", archive_hash.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(archive_hash.finalize()))
 }
 
 fn read_entry(
@@ -417,7 +417,7 @@ fn read_entry(
         remaining -= count as u64;
         crate::operation_observation::advance(count as u64);
     }
-    if format!("{:x}", hash.finalize()) != entry.sha256 {
+    if mon_core::hash::sha256_output_hex(hash.finalize()) != entry.sha256 {
         return Err("バックアップの管理ファイルハッシュが一致しません".into());
     }
     Ok(())

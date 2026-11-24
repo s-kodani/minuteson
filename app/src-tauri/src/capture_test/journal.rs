@@ -182,7 +182,7 @@ fn lock(file: &File) -> Result<(), String> {
     Ok(())
 }
 fn hash(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    mon_core::hash::sha256_hex(value.as_bytes())
 }
 fn encode<T: Serialize>(value: &T) -> Result<(String, String), String> {
     let proof = serde_json::to_string(value).map_err(|e| e.to_string())?;

@@ -53,7 +53,7 @@ fn minutes(f: &Fixture, base: &PlacementRecord) -> PlacementRecord {
             vec![b'm'; 150000]
         };
         assert_eq!(bytes.len() as u64, file.actual_size);
-        assert_eq!(format!("{:x}", Sha256::digest(&bytes)), file.actual_hash);
+        assert_eq!(mon_core::hash::sha256_hex(&bytes), file.actual_hash);
         std::fs::write(path, bytes).unwrap();
     }
     record.source_manifest_hash = digest(&record.manifest).unwrap();
