@@ -76,7 +76,7 @@ impl Storage {
             return Ok(current);
         }
         let json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-        let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+        let hash = mon_core::hash::sha256_hex(json.as_bytes());
         let version = expected_version
             .checked_add(1)
             .ok_or("声の自動適用設定の版番号が範囲外です")?;
@@ -96,7 +96,7 @@ pub(super) fn validate(payload: &VoiceMatchingPreferences) -> Result<(), String>
 pub(super) fn load(connection: &Connection) -> Result<Snapshot, String> {
     let row: Option<(String, String, i64)> = connection.query_row("SELECT value_json, content_hash, lock_version FROM app_settings WHERE key = 'voice_matching'", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|e| e.to_string())?;
     let (payload, lock_version) = if let Some((json, hash, version)) = row {
-        if format!("{:x}", Sha256::digest(json.as_bytes())) != hash {
+        if mon_core::hash::sha256_hex(json.as_bytes()) != hash {
             return Err("保存済み声の自動適用設定の内容が変更されています".into());
         }
         (
@@ -183,7 +183,7 @@ pub(in crate::storage) fn restore(
         .checked_add(1)
         .ok_or("設定の版番号が範囲外です")?;
     let json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-    let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+    let hash = mon_core::hash::sha256_hex(json.as_bytes());
     tx.execute("INSERT INTO app_settings(key,value_json,content_hash,lock_version,updated_at) VALUES('voice_matching',?1,?2,?3,?4) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,content_hash=excluded.content_hash,lock_version=excluded.lock_version,updated_at=excluded.updated_at",params![json,hash,version,now_ms()?]).map_err(|e|e.to_string())?;
     Ok(())
 }

@@ -1040,18 +1040,18 @@ fn model_deletion_renewal_rehashed_foreign_scope_is_not_a_deletion_authority() {
                 bytes.push(u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap());
             }
         }
-        let old_hash = format!("{:x}", Sha256::digest(&bytes));
+        let old_hash = mon_core::hash::sha256_hex(&bytes);
         let plan = String::from_utf8(bytes)
             .unwrap()
             .replacen(&package, &foreign, 1);
-        let new_hash = format!("{:x}", Sha256::digest(plan.as_bytes()));
+        let new_hash = mon_core::hash::sha256_hex(plan.as_bytes());
         let next_header = header.replace(&old_hash, &new_hash);
-        let next_sha = format!("{:x}", Sha256::digest(next_header.as_bytes()));
+        let next_sha = mon_core::hash::sha256_hex(next_header.as_bytes());
         replace_trigger(db, "maintenance_path_fixed", |db| {
             for (index, part) in plan.as_bytes().chunks(384).enumerate() {
                 let data: String = part.iter().map(|b| format!("{b:02x}")).collect();
                 let json = format!(r#"{{"version":1,"data":"{data}"}}"#);
-                db.execute("UPDATE maintenance_paths SET content_hash=?3,identity_json=?4,identity_hash=?5 WHERE operation_id=?1 AND relative_path=?2",params![id,format!("model-deletion-proof/{index:06}"),format!("{:x}",Sha256::digest(part)),json,format!("{:x}",Sha256::digest(json.as_bytes()))]).unwrap();
+                db.execute("UPDATE maintenance_paths SET content_hash=?3,identity_json=?4,identity_hash=?5 WHERE operation_id=?1 AND relative_path=?2",params![id,format!("model-deletion-proof/{index:06}"),mon_core::hash::sha256_hex(part),json,mon_core::hash::sha256_hex(json.as_bytes())]).unwrap();
             }
         });
         replace_trigger(db, "maintenance_operation_fixed", |db| {

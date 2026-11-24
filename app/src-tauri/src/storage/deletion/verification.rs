@@ -80,7 +80,7 @@ pub(super) fn hash(
     {
         return Err("検査中にファイルが変更されました".into());
     }
-    let sha = format!("{:x}", hash.finalize());
+    let sha = mon_core::hash::sha256_output_hex(hash.finalize());
     if protected {
         CACHE.with(|c| {
             if let Some(entries) = c.borrow_mut().as_mut() {

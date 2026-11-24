@@ -123,7 +123,7 @@ fn stages() -> &'static Mutex<BTreeMap<PathBuf, Active>> {
     STAGES.get_or_init(Mutex::default)
 }
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn sync(path: &Path) -> Result<(), String> {
     crate::native_fs::sync_directory(path)

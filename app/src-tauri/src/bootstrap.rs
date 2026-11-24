@@ -147,7 +147,7 @@ fn regular(m: &Metadata, private: bool) -> bool {
     m.is_file() && m.nlink() == 1 && (!private || m.mode() & 0o077 == 0)
 }
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn uuid(s: &str) -> bool {
     Uuid::parse_str(s).is_ok_and(|u| u.to_string() == s)

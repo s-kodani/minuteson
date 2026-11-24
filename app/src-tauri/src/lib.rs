@@ -103,11 +103,11 @@ mod test_profile_guards {
         .is_err());
         use sha2::{Digest, Sha256};
         assert_eq!(
-            format!("{:x}", Sha256::digest(vec![0x5a; 1024 * 1024])),
+            mon_core::hash::sha256_hex(vec![0x5a; 1024 * 1024]),
             "bf63d8a95fcc2e64619813aae35fdcbe871fdd9264caa3f365eb3aed0f679129"
         );
         assert_eq!(
-            format!("{:x}", Sha256::digest(b"")),
+            mon_core::hash::sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }

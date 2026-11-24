@@ -24,7 +24,7 @@ fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
     }
 }
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn manifest_hash(manifest: &Manifest) -> Result<String, String> {
     Ok(hash(
@@ -103,7 +103,7 @@ fn plan_hash(manifest: &Manifest, policy: &Policy) -> Result<String, String> {
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(digest.finalize()))
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

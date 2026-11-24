@@ -28,7 +28,7 @@ impl Storage {
             return Err("起動時案内の既読記録が上限を超えています".into());
         }
         let json = serde_json::to_string(&receipts).map_err(|e| e.to_string())?;
-        let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+        let hash = mon_core::hash::sha256_hex(json.as_bytes());
         tx.execute("INSERT INTO app_settings(key,value_json,content_hash,lock_version,updated_at) VALUES(?1,?2,?3,1,?4) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,content_hash=excluded.content_hash,lock_version=app_settings.lock_version+1,updated_at=excluded.updated_at", params![KEY,json,hash,now_ms()?]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e| e.to_string())
     }
@@ -39,7 +39,7 @@ fn load(db: &Connection) -> Result<BTreeMap<String, String>, String> {
         return Ok(BTreeMap::new());
     };
     let json = json.ok_or("起動時案内の記録が容量上限を超えています")?;
-    if format!("{:x}", Sha256::digest(json.as_bytes())) != hash {
+    if mon_core::hash::sha256_hex(json.as_bytes()) != hash {
         return Err("起動時案内の記録が変更されています".into());
     }
     let receipts: BTreeMap<String, String> =

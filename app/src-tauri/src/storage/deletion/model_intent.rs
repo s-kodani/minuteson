@@ -54,7 +54,7 @@ pub(super) fn hash_valid(hash: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn slot(index: usize) -> String {
     format!("model-deletion-proof/{index:06}")

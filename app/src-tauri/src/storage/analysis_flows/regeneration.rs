@@ -244,7 +244,7 @@ impl Storage {
         }
         let value = serde_json::to_value(&plan).map_err(|e| e.to_string())?;
         let json = serde_json::to_string(&value).map_err(|e| e.to_string())?;
-        let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+        let hash = mon_core::hash::sha256_hex(json.as_bytes());
         let mut db = self
             .connection
             .lock()

@@ -453,11 +453,7 @@ fn compatibility_saved_artifacts_and_rehashed_invalid_report_are_not_trusted() {
         .unwrap();
     db.execute(
         "UPDATE model_compatibility_checks SET report_json=?1,report_hash=?2 WHERE id=?3",
-        rusqlite::params![
-            json,
-            format!("{:x}", Sha256::digest(json.as_bytes())),
-            operation
-        ],
+        rusqlite::params![json, mon_core::hash::sha256_hex(json.as_bytes()), operation],
     )
     .unwrap();
     drop(db);
