@@ -480,7 +480,7 @@ impl Review {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = storage
+        let mut db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
@@ -527,7 +527,7 @@ pub(crate) fn review(
 ) -> Result<Review, String> {
     active(lease, check)?;
     let cancelled = || check() || lease.cancelled();
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -639,7 +639,7 @@ fn accept_inner(
         previously_completed: old.progress.previously_completed || old.completed(),
     };
     next.validate(&old.saved, &review.plan)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -683,11 +683,12 @@ fn accept_inner(
     }
     // Completed sources retain their SQL completed state. The v3 residual
     // cursor is conservatively fenced; no original fixed evidence is changed.
-    storage.deletion_fence.arm(&db)?;
-    let _writer = crate::storage::deletion::fence::write_model_reconfirmation(
-        storage, &db, review, old, lease, &cancelled,
+    storage.deletion_fence.arm(&mut db)?;
+    let writer = crate::storage::deletion::fence::write_model_reconfirmation(
+        storage, &mut db, review, old, lease, &cancelled,
     )?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let conn = writer.connection();
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     let updated: i64 = tx
         .query_row(

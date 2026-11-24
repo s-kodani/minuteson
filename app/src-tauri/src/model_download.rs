@@ -161,7 +161,7 @@ pub(crate) fn readback(
     let payload = Directory::open_existing(&staging_root.join(operation_id).join("payload"))?;
     let report = model_inspection::inspect(payload.path(), cancelled)?;
     let manifest_bytes = serde_json::to_vec(&result.recipe.manifest).map_err(|e| e.to_string())?;
-    if report.manifest_hash != format!("{:x}", Sha256::digest(manifest_bytes))
+    if report.manifest_hash != mon_core::hash::sha256_hex(manifest_bytes)
         || report.review_hash != completion.review_hash
         || report.total_bytes != completion.total_bytes
     {
@@ -489,7 +489,7 @@ fn stage(
     let payload = operation.child("payload", true)?;
     let manifest_bytes =
         serde_json::to_vec(&recipe.manifest).map_err(|_| "モデルmanifestを符号化できません")?;
-    let manifest_hash = format!("{:x}", Sha256::digest(&manifest_bytes));
+    let manifest_hash = mon_core::hash::sha256_hex(&manifest_bytes);
     durable_file(&payload, model_inspection::MANIFEST, &manifest_bytes)?;
     let mut completed = 0_u64;
     progress(0, transfer_total);

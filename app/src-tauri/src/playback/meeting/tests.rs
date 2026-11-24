@@ -26,7 +26,7 @@ fn audio(
         let audio = VerifiedAudio::open(
             file,
             bytes.len() as u64,
-            &format!("{:x}", Sha256::digest(&bytes)),
+            &mon_core::hash::sha256_hex(&bytes),
         )
         .unwrap();
         let frames = audio.format.frames;
@@ -256,7 +256,7 @@ fn prepared_source_mutation_is_not_hidden_by_resampling() {
     let verified = VerifiedAudio::open(
         reader,
         bytes.len() as u64,
-        &format!("{:x}", Sha256::digest(&bytes)),
+        &mon_core::hash::sha256_hex(&bytes),
     )
     .unwrap();
     let source = PreparedAudio {

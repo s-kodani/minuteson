@@ -291,7 +291,7 @@ fn windows_finalization_preserves_verified_pcm_when_descriptive_metadata_is_dama
         );
         assert_eq!(
             canonical["wavPublication"]["sha256"],
-            format!("{:x}", Sha256::digest(&original_audio)),
+            mon_core::hash::sha256_hex(&original_audio),
             "{problem}"
         );
         assert_eq!(canonical["wavRecovery"]["partial"], false, "{problem}");

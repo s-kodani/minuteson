@@ -167,7 +167,7 @@ fn load(paths: Paths, target: Target) -> Result<Credits, String> {
         return Err("依存ライブラリ一覧がこのOSの形式と一致しません".into());
     }
     let dependency_notices = read_text(&paths.notices.join("THIRD_PARTY_NOTICES.txt"), MAX_TEXT)?;
-    if format!("{:x}", Sha256::digest(dependency_notices.as_bytes())) != inventory.notices_sha256 {
+    if mon_core::hash::sha256_hex(dependency_notices.as_bytes()) != inventory.notices_sha256 {
         return Err("依存ライブラリの通知文と一覧が一致しません".into());
     }
     let mut technologies = Vec::new();
@@ -235,7 +235,7 @@ fn load(paths: Paths, target: Target) -> Result<Credits, String> {
         notices.push(Notice { title, text });
     }
     let mut seen = BTreeSet::new();
-    notices.retain(|notice| seen.insert(format!("{:x}", Sha256::digest(notice.text.as_bytes()))));
+    notices.retain(|notice| seen.insert(mon_core::hash::sha256_hex(notice.text.as_bytes())));
     if notices
         .iter()
         .map(|notice| notice.text.len())
@@ -565,7 +565,7 @@ mod tests {
         let text = "Original attribution\r\nCopyright holder\n";
         std::fs::write(root.path().join("THIRD_PARTY_NOTICES.txt"), text).unwrap();
         std::fs::write(root.path().join("third-party-inventory.json"), serde_json::to_vec(&serde_json::json!({
-            "schemaVersion":1,"target":Target::Windows.triple(),"noticesSha256":format!("{:x}",Sha256::digest(text.as_bytes())),
+            "schemaVersion":1,"target":Target::Windows.triple(),"noticesSha256":mon_core::hash::sha256_hex(text.as_bytes()),
             "packages":[{"ecosystem":"npm","name":"react","version":"19.0.0","declaredLicense":"MIT","repository":null,"sourceArchive":null}]
         })).unwrap()).unwrap();
         std::fs::write(

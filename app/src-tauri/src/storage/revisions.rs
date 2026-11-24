@@ -99,7 +99,7 @@ pub(super) fn analysis_content_hash(
     ] {
         hash_rows(transaction, &mut hasher, marker, sql, params![revision_id])?;
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(hasher.finalize()))
 }
 
 fn hash_rows<P: Params>(

@@ -310,7 +310,7 @@ fn root_json(f: &Fixture) -> String {
         .unwrap()
 }
 fn evidence(f: &Fixture) -> (String, String, i64, Vec<(String, String)>) {
-    let db = f.f.storage.connection.lock().unwrap();
+    let mut db = f.f.storage.connection.lock().unwrap();
     let (json, hash, consent) = db.query_row(
         "SELECT target_manifest_json,target_hash,consent_at FROM maintenance_operations WHERE id=?1",
         params![f.operation], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
@@ -398,7 +398,7 @@ fn database_renewal_all_three_stages_preserve_original_evidence_and_resume_witho
             f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some(),
             !phase.rows_committed()
         );
-        let db = f.f.storage.connection.lock().unwrap();
+        let mut db = f.f.storage.connection.lock().unwrap();
         assert!(fence::has_pending(&db).unwrap());
         assert!(f.f.storage.data_write_blocked());
         assert!(original
@@ -669,14 +669,15 @@ fn database_renewal_rejects_downgraded_or_forgotten_phase_and_does_not_revert_co
     reappear(&f, b"KEEP INVALID PLAN FILE");
     let files = accept(&f, &original);
     let json = root_json(&f);
-    let db = f.f.storage.connection.lock().unwrap();
-    let _writer = fence::write_removal(
+    let mut db = f.f.storage.connection.lock().unwrap();
+    let writer = fence::write_removal(
         &f.f.storage,
-        &db,
+        &mut db,
         &files,
         &crate::test_support::never_cancelled,
     )
     .unwrap();
+    let conn = writer.connection();
     for (version, phase) in [
         (2, None),
         (3, Some("rowsPending")),
@@ -690,31 +691,31 @@ fn database_renewal_rejects_downgraded_or_forgotten_phase_and_does_not_revert_co
         } else {
             changed.as_object_mut().unwrap().remove("databasePhase");
         }
-        db.execute(
+        conn.execute(
             "UPDATE maintenance_operations SET progress_json=?2 WHERE id=?1",
             params![f.operation, changed.to_string()],
         )
         .unwrap();
         assert!(
-            removal::Receipt::load(&db, &f.operation, &crate::test_support::never_cancelled)
+            removal::Receipt::load(conn, &f.operation, &crate::test_support::never_cancelled)
                 .is_err()
         );
-        db.execute(
+        conn.execute(
             "UPDATE maintenance_operations SET progress_json=?2 WHERE id=?1",
             params![f.operation, json],
         )
         .unwrap();
     }
-    assert!(db
+    assert!(conn
         .execute(
             "UPDATE maintenance_operations SET state='cleanup' WHERE id=?1",
             params![f.operation]
         )
         .is_err());
     files
-        .verify_saved(&db, &crate::test_support::never_cancelled)
+        .verify_saved(conn, &crate::test_support::never_cancelled)
         .unwrap();
-    drop(_writer);
+    drop(writer);
     drop(db);
     assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP INVALID PLAN FILE");
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());

@@ -240,7 +240,7 @@ impl Storage {
             crate::audio::reuse::stamp(&metadata),
         ))
         .map_err(|e| e.to_string())?;
-        Ok(Some(format!("{:x}", Sha256::digest(source))))
+        Ok(Some(mon_core::hash::sha256_hex(source)))
     }
 
     pub(crate) fn verify_recording_history_source(

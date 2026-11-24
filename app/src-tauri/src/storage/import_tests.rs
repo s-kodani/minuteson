@@ -102,7 +102,7 @@ fn pending_with_info(
     let source = Fingerprint {
         path: s.root.join("not-permanent.wav"),
         size: bytes.len() as u64,
-        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        sha256: mon_core::hash::sha256_hex(&bytes),
     };
     let (import, created) = s
         .begin_audio_import_configured(
@@ -144,7 +144,7 @@ fn pending_with_info(
         },
         audio: FileEvidence {
             size: caf.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(&caf)),
+            sha256: mon_core::hash::sha256_hex(&caf),
         },
     };
     std::fs::write(
@@ -165,7 +165,7 @@ fn pending_wav(s: &Storage, operation: &str) -> (ImportSnapshot, PathBuf, Import
     manifest.saved_audio = Some(audio_import::SavedAudio::for_source(&manifest.info).unwrap());
     manifest.audio = FileEvidence {
         size: bytes.len() as u64,
-        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        sha256: mon_core::hash::sha256_hex(&bytes),
     };
     std::fs::write(
         base.join("manifest.json"),
@@ -342,7 +342,7 @@ fn legacy_compact_import_wraps_pcm_in_wav_without_requantizing() {
     manifest.saved_audio = Some(audio_import::SavedAudio::for_source(&manifest.info).unwrap());
     manifest.audio = FileEvidence {
         size: caf.len() as u64,
-        sha256: format!("{:x}", Sha256::digest(&caf)),
+        sha256: mon_core::hash::sha256_hex(&caf),
     };
     std::fs::write(
         base.join("manifest.json"),
@@ -574,7 +574,7 @@ fn invalid_import_options_are_rejected_before_audio_commit_or_automatic_handoff(
         let json =
             "{\"profile\":\"unsupported\",\"meetingVocabulary\":[],\"expectedGlobalVersion\":null}";
         let digest = if valid_hash {
-            format!("{:x}", Sha256::digest(json.as_bytes()))
+            mon_core::hash::sha256_hex(json.as_bytes())
         } else {
             "0".repeat(64)
         };

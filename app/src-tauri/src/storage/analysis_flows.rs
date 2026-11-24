@@ -44,7 +44,7 @@ pub(super) fn read_flow(db: &Connection, meeting: &str) -> Result<Option<Analysi
     };
     let plan: Option<Value> = match (text, hash) {
         (Some(text), Some(hash))
-            if text.len() <= 65536 && format!("{:x}", Sha256::digest(text.as_bytes())) == hash =>
+            if text.len() <= 65536 && mon_core::hash::sha256_hex(text.as_bytes()) == hash =>
         {
             Some(serde_json::from_str(&text).map_err(|e| e.to_string())?)
         }
@@ -362,7 +362,7 @@ impl Storage {
             .map_err(|e| e.to_string())?;
         let hash = text
             .as_ref()
-            .map(|t| format!("{:x}", Sha256::digest(t.as_bytes())));
+            .map(|t| mon_core::hash::sha256_hex(t.as_bytes()));
         let message = error.map(|e| e.chars().take(2000).collect::<String>());
         let mut db = self
             .connection

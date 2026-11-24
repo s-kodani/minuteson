@@ -303,7 +303,7 @@ pub fn extract(
             return Err("アーカイブ本文が欠損しています".into());
         }
         if let Some(index) = index {
-            if format!("{:x}", hash.finalize()) != selected[index].sha256 {
+            if crate::hash::sha256_output_hex(hash.finalize()) != selected[index].sha256 {
                 return Err("展開したファイルの容量・SHAが一致しません".into());
             }
             destination.unwrap().finish()?;
@@ -382,7 +382,7 @@ mod tests {
     }
     fn run(bytes: &[u8], policy: Policy) -> (Result<(), String>, Arc<Mutex<Stored>>) {
         let stored = Arc::new(Mutex::new(Stored::default()));
-        let hash = format!("{:x}", Sha256::digest(b"model"));
+        let hash = crate::hash::sha256_hex(b"model");
         let member = Member {
             path: "pkg/model",
             size: 5,
@@ -472,7 +472,7 @@ mod tests {
         )
         .0
         .is_err());
-        let hash = format!("{:x}", Sha256::digest(b"model"));
+        let hash = crate::hash::sha256_hex(b"model");
         let member = Member {
             path: "pkg/model",
             size: 5,
