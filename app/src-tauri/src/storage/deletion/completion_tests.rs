@@ -98,17 +98,18 @@ fn compound_current_census_rejects_changed_rows_and_recreated_deleted_meeting_wi
         );
         let mut db = f.f.storage.connection.lock().unwrap();
         {
-            let _writer = super::super::fence::write_completion(
+            let writer = super::super::fence::write_completion(
                 &f.f.storage,
                 &mut db,
                 &receipt,
                 &crate::test_support::never_cancelled,
             )
             .unwrap();
+            let conn = writer.connection();
             if committed {
-                db.execute("INSERT INTO meetings(id,title,lifecycle,source_type,created_at,updated_at,lock_version) VALUES(?1,'RECREATED','draft','recording',0,0,0)", params![f.f.meeting]).unwrap();
+                conn.execute("INSERT INTO meetings(id,title,lifecycle,source_type,created_at,updated_at,lock_version) VALUES(?1,'RECREATED','draft','recording',0,0,0)", params![f.f.meeting]).unwrap();
             } else {
-                db.execute(
+                conn.execute(
                     "UPDATE meetings SET title='CHANGED DB SCOPE' WHERE id=?1",
                     params![f.f.meeting],
                 )
@@ -677,14 +678,15 @@ fn compound_deletion_refuses_changed_database_scope_and_recreated_file_tree_befo
         let mut r = f.begin();
         if change == "scope" {
             let mut db = f.f.storage.connection.lock().unwrap();
-            let _writer = super::super::fence::write_completion(
+            let writer = super::super::fence::write_completion(
                 &f.f.storage,
                 &mut db,
                 &r,
                 &crate::test_support::never_cancelled,
             )
             .unwrap();
-            db.execute(
+            let conn = writer.connection();
+            conn.execute(
                 "UPDATE meetings SET title='KEEP CHANGED' WHERE id=?1",
                 params![f.f.meeting],
             )
@@ -704,13 +706,14 @@ fn compound_deletion_rejects_corrupt_phase_file_proof_and_foreign_progress() {
         let f = Fixture::new();
         let r = f.begin();
         let mut db = f.f.storage.connection.lock().unwrap();
-        let _writer = super::super::fence::write_completion(
+        let writer = super::super::fence::write_completion(
             &f.f.storage,
             &mut db,
             &r,
             &crate::test_support::never_cancelled,
         )
         .unwrap();
+        let conn = writer.connection();
         let mut json = serde_json::to_value(&r.progress).unwrap();
         match change {
             "version" => json["version"] = 2.into(),
@@ -719,12 +722,12 @@ fn compound_deletion_rejects_corrupt_phase_file_proof_and_foreign_progress() {
             "unknown" => json["unexpected"] = true.into(),
             _ => unreachable!(),
         }
-        db.execute(
+        conn.execute(
             "UPDATE maintenance_operations SET progress_json=?2 WHERE id=?1",
             params![f.operation, serde_json::to_string(&json).unwrap()],
         )
         .unwrap();
-        drop(_writer);
+        drop(writer);
         drop(db);
         assert!(read(
             &f.f.storage,
@@ -741,15 +744,16 @@ fn compound_deletion_foreign_connection_and_other_pending_operation_cannot_mutat
     let mut r = f.begin();
     assert_matching_copy_is_not_a_writer(&f, &r);
     let mut db = f.f.storage.connection.lock().unwrap();
-    let _writer = super::super::fence::write_completion(
+    let writer = super::super::fence::write_completion(
         &f.f.storage,
         &mut db,
         &r,
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![uuid::Uuid::new_v4().to_string(),f.f.other,"0".repeat(64)]).unwrap();
-    drop(_writer);
+    let conn = writer.connection();
+    conn.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![uuid::Uuid::new_v4().to_string(),f.f.other,"0".repeat(64)]).unwrap();
+    drop(writer);
     drop(db);
     assert!(run(&f.f.storage, &mut r, &crate::test_support::never_cancelled).is_err());
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_some());
@@ -763,20 +767,31 @@ fn compound_deletion_blocked_wal_checkpoint_retains_cleanup_then_retries_after_r
     let f = Fixture::new();
     let mut r = f.begin();
     let mut db = f.f.storage.connection.lock().unwrap();
-    {
-        let mut statement = db.prepare("SELECT id FROM model_packages").unwrap();
-        let mut rows = statement.query([]).unwrap();
-        assert!(rows.next().unwrap().is_some());
-    }
-    assert!(run_locked(
+    let writer = super::super::fence::write_completion(
         &f.f.storage,
         &mut db,
+        &r,
+        &crate::test_support::never_cancelled,
+    )
+    .unwrap();
+    let mut statement = writer
+        .connection()
+        .prepare("SELECT id FROM model_packages")
+        .unwrap();
+    let mut rows = statement.query([]).unwrap();
+    assert!(rows.next().unwrap().is_some());
+    assert!(run_phases(
+        &f.f.storage,
+        &writer,
         &mut r,
         &crate::test_support::never_cancelled,
         &|_| {}
     )
     .is_err());
     assert_eq!(r.progress.database_phase, Phase::RowsDeleted);
+    drop(rows);
+    drop(statement);
+    drop(writer);
     drop(db);
     assert!(f.f.storage.data_write_blocked());
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());
@@ -790,13 +805,14 @@ fn compound_deletion_rejects_claimed_row_completion_when_actual_rows_still_exist
         let f = Fixture::new();
         let r = f.begin();
         let mut db = f.f.storage.connection.lock().unwrap();
-        let _writer = super::super::fence::write_completion(
+        let writer = super::super::fence::write_completion(
             &f.f.storage,
             &mut db,
             &r,
             &crate::test_support::never_cancelled,
         )
         .unwrap();
+        let conn = writer.connection();
         let mut progress = r.progress.clone();
         progress.database_phase = phase;
         let state = if progress.database_phase == Phase::Finished {
@@ -804,8 +820,8 @@ fn compound_deletion_rejects_claimed_row_completion_when_actual_rows_still_exist
         } else {
             "cleanup"
         };
-        db.execute("UPDATE maintenance_operations SET state=?2,meeting_id=NULL,progress_json=?3 WHERE id=?1",params![f.operation,state,progress.encode().unwrap()]).unwrap();
-        drop(_writer);
+        conn.execute("UPDATE maintenance_operations SET state=?2,meeting_id=NULL,progress_json=?3 WHERE id=?1",params![f.operation,state,progress.encode().unwrap()]).unwrap();
+        drop(writer);
         drop(db);
         let mut forged = read(
             &f.f.storage,

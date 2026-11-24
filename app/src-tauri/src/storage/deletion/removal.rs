@@ -600,15 +600,16 @@ pub(super) fn start(
             return Err("削除用予約名が既に存在します".into());
         }
     }
-    let _writer = super::fence::write_prepared(storage, &mut db, confirmed, check)?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let writer = super::fence::write_prepared(storage, &mut db, confirmed, check)?;
+    let conn = writer.connection();
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     confirmed.verify_saved(&tx, check)?;
     cancel(check)?;
     if tx.execute("UPDATE maintenance_operations SET state='installing',progress_json=?2,updated_at=max(updated_at,?3) WHERE id=?1 AND state='prepared' AND progress_json='{\"filePhase\":\"notStarted\"}'",params![confirmed.operation(),progress.encode()?,now_ms()?]).map_err(|e|e.to_string())?!=1 { return Err("削除開始の確認状態が変更されています".into()); }
     cancel(check)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Receipt::load(&db, confirmed.operation(), check)
+    Receipt::load(conn, confirmed.operation(), check)
 }
 
 fn parent(storage: &Storage, manifest: &Manifest, path: &str) -> Result<Option<Directory>, String> {
@@ -1043,8 +1044,9 @@ fn save_unlocked(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     let mut db = crate::operation_observation::lock(&storage.connection)?;
-    let _writer = super::fence::write_removal(storage, &mut db, receipt, check)?;
-    receipt.save(storage, &db, next, check)
+    let writer = super::fence::write_removal(storage, &mut db, receipt, check)?;
+    let conn = writer.connection();
+    receipt.save(storage, conn, next, check)
 }
 pub(super) fn run(
     storage: &Storage,

@@ -528,19 +528,20 @@ fn deletion_wrong_kind_corrupt_receipt_and_other_pending_operation_never_grant_a
     let Target::Unstarted(ref saved) = p.target else {
         unreachable!()
     };
-    let _writer = super::super::fence::write_prepared(
+    let writer = super::super::fence::write_prepared(
         &f.storage,
         &mut db,
         saved,
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    db.execute(
+    let conn = writer.connection();
+    conn.execute(
         "UPDATE maintenance_operations SET progress_json='{}' WHERE id=?1",
         params![id],
     )
     .unwrap();
-    drop(_writer);
+    drop(writer);
     drop(db);
     assert!(authorize_review(&f.storage, Some(&id)).is_err());
     assert!(f.audio.exists());
@@ -562,7 +563,8 @@ fn deletion_other_pending_kind_is_not_a_deletion_admission_or_silently_ignored()
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![other,f.other,"0".repeat(64)]).unwrap();
+    let conn = writer.connection();
+    conn.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![other,f.other,"0".repeat(64)]).unwrap();
     drop(writer);
     drop(db);
     assert!(authorize_review(&f.storage, Some(&other)).is_err());

@@ -652,6 +652,7 @@ fn renewal_immutable_audit_targets_and_paths_reject_updates_deletes_or_post_comp
         &crate::test_support::never_cancelled,
     )
     .unwrap();
+    let conn = writer.connection();
     for sql in [
         "UPDATE maintenance_operations SET target_manifest_json='{}' WHERE id=?1",
         "UPDATE maintenance_operations SET consent_at=consent_at+1 WHERE id=?1",
@@ -661,7 +662,7 @@ fn renewal_immutable_audit_targets_and_paths_reject_updates_deletes_or_post_comp
         "DELETE FROM maintenance_paths WHERE operation_id=?1",
         "INSERT INTO maintenance_paths(operation_id,relative_path,kind,identity_json,identity_hash) VALUES(?1,'late','directory','{}','0000000000000000000000000000000000000000000000000000000000000000')",
     ] {
-        assert!(db.execute(sql, params![id]).is_err(), "audit must be immutable: {sql}");
+        assert!(conn.execute(sql, params![id]).is_err(), "audit must be immutable: {sql}");
     }
     drop(writer);
     drop(db);
@@ -699,8 +700,9 @@ fn renewal_invalid_reference_policy_cursor_or_audit_progress_refuses_loading_and
             &crate::test_support::never_cancelled,
         )
         .unwrap();
+        let conn = writer.connection();
         if corruption == "audit_progress" {
-            db.execute(
+            conn.execute(
                 "UPDATE maintenance_operations SET progress_json='{}' WHERE id=?1",
                 params![id],
             )
@@ -717,7 +719,7 @@ fn renewal_invalid_reference_policy_cursor_or_audit_progress_refuses_loading_and
                 "consent" => json["consentAt"] = (r.progress.consent_at + 1).into(),
                 _ => unreachable!(),
             }
-            db.execute(
+            conn.execute(
                 "UPDATE maintenance_operations SET progress_json=?2 WHERE id=?1",
                 params![f.operation, serde_json::to_string(&json).unwrap()],
             )
@@ -870,7 +872,8 @@ fn renewal_another_pending_kind_blocks_inspection_and_acceptance_without_changin
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![uuid::Uuid::new_v4().to_string(), f.other,"0".repeat(64)]).unwrap();
+    let conn = writer.connection();
+    conn.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,?2,'delete_assets','attention','{}',?3,'{}',1,1)",params![uuid::Uuid::new_v4().to_string(), f.other,"0".repeat(64)]).unwrap();
     drop(writer);
     drop(db);
     assert!(
@@ -998,7 +1001,8 @@ fn renewal_cannot_replace_original_database_scope_even_after_a_new_file_review()
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    db.execute(
+    let conn = writer.connection();
+    conn.execute(
         "UPDATE meetings SET title='UNREVIEWED DATABASE CHANGE' WHERE id=?1",
         params![f.meeting],
     )
@@ -1036,7 +1040,8 @@ fn renewal_cached_builtin_schema_never_adopts_a_changed_live_constraint() {
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    db.execute_batch("DROP TRIGGER maintenance_operation_fixed")
+    let conn = writer.connection();
+    conn.execute_batch("DROP TRIGGER maintenance_operation_fixed")
         .unwrap();
     drop(writer);
     drop(db);

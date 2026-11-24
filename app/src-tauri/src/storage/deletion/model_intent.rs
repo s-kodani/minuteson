@@ -523,9 +523,10 @@ pub(crate) fn keep_unstarted(
         return active(lease, check);
     }
     let writer = super::super::fence::write_model_prepared(storage, &mut db, &saved, lease)?;
+    let conn = writer.connection();
     // Writer borrows the Connection; this transaction still owns a proper RAII
     // rollback and we assert autocommit at the writer admission boundary.
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     saved.verify_saved(&tx)?;
     active(lease, check)?;

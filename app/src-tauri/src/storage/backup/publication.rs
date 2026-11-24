@@ -8,6 +8,7 @@ use restore_ids::RestoreIds;
 use rusqlite::config::DbConfig;
 use rusqlite::types::Value;
 use rusqlite::TransactionBehavior;
+use std::sync::{atomic::AtomicBool, Arc};
 
 mod files;
 pub(in crate::storage::backup) mod journal;
@@ -29,121 +30,97 @@ fn schema(db: &Connection) -> Result<Vec<(String, String, String)>, String> {
 }
 
 // Historical immutable children and edit chains cannot be recreated by ordinary
-// worker INSERT order (the worker was running then, and is interrupted now).
-// Suppress INSERT triggers only on this locked connection, not via DROP/DDL.
-// The authorizer disallows all UPDATE/DELETE/DDL/ATTACH while that capability is
-// held. Constraints/FKs remain enabled; no INSERT OR REPLACE/IGNORE is used.
-struct AppendOnlyGuard<'a> {
+// worker INSERT order. Limit the trigger-free phase to portable-table inserts
+// on this locked connection. Constraints and foreign keys stay enabled.
+struct AppendOnly<'a> {
     db: &'a mut Connection,
-    finished: bool,
+    active: Arc<AtomicBool>,
 }
 
-struct AppendOnly;
-impl AppendOnly {
-    fn begin(db: &mut Connection) -> Result<(), String> {
+impl<'a> AppendOnly<'a> {
+    fn new(db: &'a mut Connection) -> Result<Self, String> {
         if !db
             .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
             .map_err(|e| e.to_string())?
         {
             return Err("保存先DBの制約が無効です".into());
         }
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
-            .map_err(|e| e.to_string())?;
-        db.flush_prepared_statement_cache();
-        db.authorizer(Some(|context: AuthContext<'_>| match context.action {
-            AuthAction::Insert { table_name }
-                if context.database_name == Some("main")
-                    && portable::TABLES.contains(&table_name) =>
-            {
-                Authorization::Allow
+        let active = Arc::new(AtomicBool::new(false));
+        let authorizing = active.clone();
+        db.authorizer(Some(move |context: AuthContext<'_>| {
+            if !authorizing.load(Ordering::Relaxed) {
+                return Authorization::Allow;
             }
-            AuthAction::Update { table_name, .. }
-                if context.database_name == Some("main")
-                    && matches!(
-                        table_name,
-                        "vocabulary_scopes"
-                            | "vocabulary_entries"
-                            | "restore_batches"
-                            | "maintenance_operations"
-                            | "maintenance_paths"
-                    ) =>
-            {
-                Authorization::Allow
+            match context.action {
+                AuthAction::Insert { table_name }
+                    if context.database_name == Some("main")
+                        && portable::TABLES.contains(&table_name) =>
+                {
+                    Authorization::Allow
+                }
+                AuthAction::Read { .. }
+                | AuthAction::Select
+                | AuthAction::Function { .. }
+                | AuthAction::Recursive
+                | AuthAction::Transaction {
+                    operation: rusqlite::hooks::TransactionOperation::Rollback,
+                } => Authorization::Allow,
+                _ => Authorization::Deny,
             }
-            AuthAction::Read { .. }
-            | AuthAction::Select
-            | AuthAction::Function { .. }
-            | AuthAction::Transaction { .. }
-            | AuthAction::Savepoint { .. }
-            | AuthAction::Recursive => Authorization::Allow,
-            AuthAction::Pragma {
-                pragma_name,
-                pragma_value: None,
-            } if matches!(
-                pragma_name,
-                "foreign_keys"
-                    | "foreign_key_check"
-                    | "defer_foreign_keys"
-                    | "schema_version"
-                    | "user_version"
-            ) =>
-            {
-                Authorization::Allow
-            }
-            AuthAction::Pragma {
-                pragma_name: "defer_foreign_keys",
-                ..
-            } => Authorization::Allow,
-            AuthAction::Pragma {
-                pragma_name,
-                pragma_value: Some(table),
-            } if matches!(
-                pragma_name,
-                "table_info" | "table_xinfo" | "foreign_key_list" | "index_list" | "index_info"
-            ) && portable::TABLES.contains(&table) =>
-            {
-                Authorization::Allow
-            }
-            _ => Authorization::Deny,
         }))
         .map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(Self { db, active })
     }
-    fn begin_guard(db: &mut Connection) -> Result<AppendOnlyGuard<'_>, String> {
-        Self::begin(db)?;
-        Ok(AppendOnlyGuard {
-            db,
-            finished: false,
-        })
-    }
-    fn finish(db: &mut Connection) -> Result<(), String> {
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
-            .map_err(|e| e.to_string())?;
-        db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
-            .map_err(|e| e.to_string())
-    }
-}
 
-impl<'a> AppendOnlyGuard<'a> {
-    fn connection(&mut self) -> &mut Connection {
+    fn connection(&self) -> &Connection {
         self.db
     }
-    fn finish(mut self) -> Result<(), String> {
-        self.finished = true;
-        AppendOnly::finish(self.db)
+
+    fn with_portable_inserts<T>(
+        &self,
+        run: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.db
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+            .map_err(|e| e.to_string())?;
+        self.db.flush_prepared_statement_cache();
+        self.active.store(true, Ordering::Relaxed);
+        let scope = PortableInserts(self);
+        let result = run(self.db);
+        scope.0.restore_triggers()?;
+        result
+    }
+
+    fn restore_triggers(&self) -> Result<(), String> {
+        if !self.active.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        self.db
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+            .map_err(|e| e.to_string())?;
+        self.db.flush_prepared_statement_cache();
+        self.active.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn append(&self, source: &Connection, check: &impl Fn() -> bool) -> Result<(), String> {
+        self.with_portable_inserts(|db| append_portable(db, source, check))?;
+        super::super::salvage_schema::append_meetings(self.db, source)
     }
 }
 
-impl Drop for AppendOnlyGuard<'_> {
+struct PortableInserts<'a, 'db>(&'a AppendOnly<'db>);
+
+impl Drop for PortableInserts<'_, '_> {
     fn drop(&mut self) {
-        if self.finished {
-            return;
-        }
-        if self
-            .db
-            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
-            .is_ok()
-        {
+        let _ = self.0.restore_triggers();
+    }
+}
+
+impl Drop for AppendOnly<'_> {
+    fn drop(&mut self) {
+        // Retain the restrictive authorizer if restoring triggers fails.
+        if self.restore_triggers().is_ok() {
             let _ = self
                 .db
                 .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
@@ -151,7 +128,7 @@ impl Drop for AppendOnlyGuard<'_> {
     }
 }
 
-pub(in crate::storage::backup) fn append(
+fn append_portable(
     target: &Connection,
     source: &Connection,
     check: &impl Fn() -> bool,
@@ -194,7 +171,7 @@ pub(in crate::storage::backup) fn append(
                 .map_err(|e| e.to_string())?;
         }
     }
-    super::super::salvage_schema::append_meetings(target, source)
+    Ok(())
 }
 
 impl Storage {
@@ -309,18 +286,11 @@ impl Storage {
         // Persist stable IDs before installing files. Per-path ownership records
         // must be durable outside the later atomic publication transaction.
         tx.commit().map_err(|e| e.to_string())?;
-        let mut installed = {
-            let journal = journal::Journal::begin(&db, &self.root, sealed, ids)?;
-            match Installed::prepare_recorded(&self.root, sealed, journal, &db, check) {
-                Ok(installed) => installed,
-                Err(error) => {
-                    let _ = journal::recover_all(&self.root, &db);
-                    return Err(error);
-                }
-            }
-        };
-        AppendOnly::begin(&mut db)?;
-        let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        let append = AppendOnly::new(&mut db)?;
+        let db = append.connection();
+        let journal = journal::Journal::begin(db, &self.root, sealed, ids)?;
+        let mut installed = Installed::prepare_recorded(&self.root, sealed, journal, check)?;
+        let mut tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         let operation = (|| {
             if plan.reserve(&mut tx, check)? != BatchState::Prepared {
@@ -329,7 +299,7 @@ impl Storage {
             ids.check_publication_destination(&tx, sealed.connection(), check)?;
             tx.execute_batch("PRAGMA defer_foreign_keys=ON;")
                 .map_err(|e| e.to_string())?;
-            append(&tx, sealed.connection(), check)?;
+            append.append(sealed.connection(), check)?;
             let vocabulary = merge.apply(&mut tx, check)?;
             portable::validate_scopes(&tx)?;
             ledger::validate_provenance(&tx, check)?;
@@ -344,9 +314,6 @@ impl Storage {
             {
                 return Err("追加復元の参照整合性が不正です".into());
             }
-            db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
-                .map_err(|e| e.to_string())?;
-            db.flush_prepared_statement_cache();
             if schema(&tx)? != schema(sealed.connection())? {
                 return Err("追加復元後のDB定義が一致しません".into());
             }
@@ -396,17 +363,11 @@ impl Storage {
                     maintenance.fail_closed();
                     return Err(format!("追加復元の巻き戻し結果が未確定です。追加物を保持します: {error}; {rollback}"));
                 }
-                let _ = AppendOnly::finish(&mut db);
-                installed
-                    .rollback_installation(&db)
-                    .map_err(|cleanup| format!("{error}; {cleanup}"))?;
                 return Err(error);
             }
         };
         match tx.commit() {
-            Ok(()) => {
-                AppendOnly::finish(&mut db)?;
-            }
+            Ok(()) => {}
             Err(error) => {
                 // Never remove assets if COMMIT's result is uncertain. A live
                 // transaction or unreadable terminal state needs reopen/recovery.
@@ -421,8 +382,6 @@ impl Storage {
                     Ok(Some(state)) if state == "published" && db.is_autocommit() => {}
                     Ok(None) if db.is_autocommit() => return Err(error.to_string()),
                     Ok(Some(state)) if state == "prepared" && db.is_autocommit() => {
-                        let _ = AppendOnly::finish(&mut db);
-                        let _ = installed.rollback_installation(&db);
                         return Err(error.to_string());
                     }
                     _ => {

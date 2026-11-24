@@ -323,7 +323,7 @@ impl Source<'_> {
     fn writer<'a>(
         &self,
         storage: &'a Storage,
-        db: &mut Connection,
+        db: &'a mut Connection,
         check: &impl Fn() -> bool,
     ) -> Result<super::fence::Writer<'a>, String> {
         match self {
@@ -516,8 +516,9 @@ fn accept_inner(
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
     review.verify(storage, &db, &source, &check)?;
-    let _writer = source.writer(storage, &mut db, &check)?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let writer = source.writer(storage, &mut db, &check)?;
+    let conn = writer.connection();
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     review.verify(storage, &tx, &source, &check)?;
     tx.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES(?1,'delete_meeting','prepared',?2,?3,?4,?5,?4,?4)",params![reference.operation_id,json,reference.intent_hash,consent,AUDIT_PROGRESS]).map_err(|e| e.to_string())?;

@@ -362,20 +362,21 @@ fn restore_publication_rejects_wrong_workspace_schema_and_late_json_identity_col
 fn restore_append_capability_denies_update_delete_ddl_and_restores_triggers_on_error() {
     let mut db = portable::schema().unwrap();
     {
-        let mut guard = AppendOnly::begin_guard(&mut db).unwrap();
-        for sql in [
-            "UPDATE meetings SET title='x'",
-            "DELETE FROM meetings",
-            "DROP TABLE meetings",
-            "CREATE TABLE extra(id)",
-            "INSERT INTO app_settings(key,value_json,lock_version,updated_at) VALUES('x','{}',0,0)",
-            "ATTACH DATABASE ':memory:' AS other",
-        ] {
-            assert!(
-                guard.connection().execute_batch(sql).is_err(),
-                "allowed {sql}"
-            );
-        }
+        let guard = AppendOnly::new(&mut db).unwrap();
+        let result = guard.with_portable_inserts(|db| {
+            for sql in [
+                "UPDATE meetings SET title='x'",
+                "DELETE FROM meetings",
+                "DROP TABLE meetings",
+                "CREATE TABLE extra(id)",
+                "INSERT INTO app_settings(key,value_json,lock_version,updated_at) VALUES('x','{}',0,0)",
+                "ATTACH DATABASE ':memory:' AS other",
+            ] {
+                assert!(db.execute_batch(sql).is_err(), "allowed {sql}");
+            }
+            Err::<(), _>("abort".into())
+        });
+        assert_eq!(result.unwrap_err(), "abort");
     }
     assert!(db
         .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
@@ -464,22 +465,25 @@ fn restore_append_cancel_after_immutable_children_rolls_back_and_preserves_old_r
     let old: i64 = db
         .query_row("SELECT count(*) FROM utterances", [], |r| r.get(0))
         .unwrap();
-    AppendOnly::begin(&mut db).unwrap();
-    let mut tx =
-        rusqlite::Transaction::new_unchecked(&db, rusqlite::TransactionBehavior::Immediate)
-            .unwrap();
+    let guard = AppendOnly::new(&mut db).unwrap();
+    let tx = rusqlite::Transaction::new_unchecked(
+        guard.connection(),
+        rusqlite::TransactionBehavior::Immediate,
+    )
+    .unwrap();
     tx.execute_batch("PRAGMA defer_foreign_keys=ON;").unwrap();
-    let error = append(&tx, sealed.connection(), &|| {
-        tx.query_row("SELECT count(*) FROM utterances", [], |r| {
-            r.get::<_, i64>(0)
+    let error = guard
+        .append(sealed.connection(), &|| {
+            tx.query_row("SELECT count(*) FROM utterances", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap()
+                > old
         })
-        .unwrap()
-            > old
-    })
-    .unwrap_err();
+        .unwrap_err();
     assert!(error.contains("中断"), "{error}");
     tx.rollback().unwrap();
-    AppendOnly::finish(&mut db).unwrap();
+    drop(guard);
     assert!(db
         .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
         .unwrap());
@@ -530,7 +534,6 @@ fn restore_install_detects_late_links_and_cleanup_preserves_outside_and_unknown_
     let install = Installed::prepare(
         &f.target.root,
         &sealed,
-        &f.target.connection.lock().unwrap(),
         &crate::test_support::never_cancelled,
     )
     .unwrap();
@@ -562,7 +565,6 @@ fn restore_install_detects_late_links_and_cleanup_preserves_outside_and_unknown_
     let install = Installed::prepare(
         &target_storage.root,
         &sealed,
-        &target_storage.connection.lock().unwrap(),
         &crate::test_support::never_cancelled,
     )
     .unwrap();

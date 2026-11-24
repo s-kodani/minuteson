@@ -684,10 +684,11 @@ fn accept_inner(
     // Completed sources retain their SQL completed state. The v3 residual
     // cursor is conservatively fenced; no original fixed evidence is changed.
     storage.deletion_fence.arm(&mut db)?;
-    let _writer = crate::storage::deletion::fence::write_model_reconfirmation(
+    let writer = crate::storage::deletion::fence::write_model_reconfirmation(
         storage, &mut db, review, old, lease, &cancelled,
     )?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let conn = writer.connection();
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     let updated: i64 = tx
         .query_row(

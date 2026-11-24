@@ -368,18 +368,17 @@ fn state(db: &Connection, batch: &str) -> String {
     )
     .unwrap()
 }
-fn recorded(
+fn recorded<'a>(
     f: &super::super::tests::Fixture,
-    db: &Connection,
+    db: &'a Connection,
     sealed: &SealedWorkspace,
     ids: &RestoreIds<'_>,
-) -> Installed {
+) -> Installed<'a> {
     let journal = Journal::begin(db, &f.target.root, sealed, ids).unwrap();
     Installed::prepare_recorded(
         &f.target.root,
         sealed,
         journal,
-        db,
         &crate::test_support::never_cancelled,
     )
     .unwrap()
@@ -482,8 +481,7 @@ fn restore_journal_partial_copy_and_repeated_cleanup_remove_only_registered_owne
     let root = f.target.root.clone();
     {
         let db = f.target.connection.lock().unwrap();
-        let conn: &Connection = &db;
-        let journal = Journal::begin(conn, &root, &sealed, &ids).unwrap();
+        let journal = Journal::begin(&db, &root, &sealed, &ids).unwrap();
         let target = targets(&sealed)
             .unwrap()
             .into_iter()
@@ -502,16 +500,12 @@ fn restore_journal_partial_copy_and_repeated_cleanup_remove_only_registered_owne
             }
             builder.create(folder).unwrap();
             journal
-                .record(
-                    conn,
-                    folder,
-                    &crate::native_fs::symlink_metadata(folder).unwrap(),
-                )
+                .record(folder, &crate::native_fs::symlink_metadata(folder).unwrap())
                 .unwrap();
         }
         let mut file = private_file(&path).unwrap();
         journal
-            .record(conn, &path, &crate::native_fs::metadata(&file).unwrap())
+            .record(&path, &crate::native_fs::metadata(&file).unwrap())
             .unwrap();
         file.write_all(b"partial").unwrap();
         file.sync_all().unwrap();
@@ -680,19 +674,18 @@ fn restore_journal_drop_after_successful_publication_never_unlinks_committed_ass
     let batch = Uuid::new_v4().to_string();
     let ids = ids(&f, &batch);
     let sealed = sealed(&f, &ids);
-    let db = f.target.connection.lock().unwrap();
-    let install = recorded(&f, &db, &sealed, &ids);
+    let mut db = f.target.connection.lock().unwrap();
+    let guard = AppendOnly::new(&mut db).unwrap();
+    let db = guard.connection();
+    let install = recorded(&f, db, &sealed, &ids);
     let merge = sealed
-        .global_merge(&db, &crate::test_support::never_cancelled)
+        .global_merge(db, &crate::test_support::never_cancelled)
         .unwrap();
-    let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate).unwrap();
+    let mut tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate).unwrap();
     tx.execute_batch("PRAGMA defer_foreign_keys=ON;").unwrap();
-    append(
-        &tx,
-        sealed.connection(),
-        &crate::test_support::never_cancelled,
-    )
-    .unwrap();
+    guard
+        .append(sealed.connection(), &crate::test_support::never_cancelled)
+        .unwrap();
     merge
         .apply(&mut tx, &crate::test_support::never_cancelled)
         .unwrap();
@@ -738,8 +731,12 @@ fn restore_journal_cleanup_commit_failure_retains_markers_and_replays_missing_pa
     let root = f.target.root.clone();
     {
         let mut db = f.target.connection.lock().unwrap();
+        let interrupt_commit = Arc::new(AtomicBool::new(false));
+        let interrupt = interrupt_commit.clone();
+        db.commit_hook(Some(move || interrupt.load(Ordering::Relaxed)))
+            .unwrap();
         let install = recorded(&f, &db, &sealed, &ids);
-        db.commit_hook(Some(|| true)).unwrap();
+        interrupt_commit.store(true, Ordering::Relaxed);
         drop(install);
         assert_eq!(state(&db, &batch), "installing");
         assert!(paths(&sealed, &root).iter().all(|p| !p.exists()));

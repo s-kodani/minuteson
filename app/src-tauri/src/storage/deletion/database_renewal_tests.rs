@@ -670,13 +670,14 @@ fn database_renewal_rejects_downgraded_or_forgotten_phase_and_does_not_revert_co
     let files = accept(&f, &original);
     let json = root_json(&f);
     let mut db = f.f.storage.connection.lock().unwrap();
-    let _writer = fence::write_removal(
+    let writer = fence::write_removal(
         &f.f.storage,
         &mut db,
         &files,
         &crate::test_support::never_cancelled,
     )
     .unwrap();
+    let conn = writer.connection();
     for (version, phase) in [
         (2, None),
         (3, Some("rowsPending")),
@@ -690,31 +691,31 @@ fn database_renewal_rejects_downgraded_or_forgotten_phase_and_does_not_revert_co
         } else {
             changed.as_object_mut().unwrap().remove("databasePhase");
         }
-        db.execute(
+        conn.execute(
             "UPDATE maintenance_operations SET progress_json=?2 WHERE id=?1",
             params![f.operation, changed.to_string()],
         )
         .unwrap();
         assert!(
-            removal::Receipt::load(&db, &f.operation, &crate::test_support::never_cancelled)
+            removal::Receipt::load(conn, &f.operation, &crate::test_support::never_cancelled)
                 .is_err()
         );
-        db.execute(
+        conn.execute(
             "UPDATE maintenance_operations SET progress_json=?2 WHERE id=?1",
             params![f.operation, json],
         )
         .unwrap();
     }
-    assert!(db
+    assert!(conn
         .execute(
             "UPDATE maintenance_operations SET state='cleanup' WHERE id=?1",
             params![f.operation]
         )
         .is_err());
     files
-        .verify_saved(&db, &crate::test_support::never_cancelled)
+        .verify_saved(conn, &crate::test_support::never_cancelled)
         .unwrap();
-    drop(_writer);
+    drop(writer);
     drop(db);
     assert_eq!(std::fs::read(&f.file).unwrap(), b"KEEP INVALID PLAN FILE");
     assert!(f.f.storage.get_meeting(&f.f.meeting).unwrap().is_none());

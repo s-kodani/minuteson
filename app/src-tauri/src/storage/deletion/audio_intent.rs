@@ -616,7 +616,8 @@ fn keep_inner(
         return active(lease, check);
     }
     let writer = super::super::fence::write_audio_prepared(storage, &mut db, &saved, lease, check)?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let conn = writer.connection();
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     saved.verify_saved(&tx, &|| check() || lease.cancelled())?;
     active(lease, check)?;

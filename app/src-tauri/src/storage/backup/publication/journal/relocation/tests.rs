@@ -27,14 +27,14 @@ fn pending(f: &Fixture, mode: &str) -> Pending {
         let path = f.target.root.join(relative);
         std::fs::create_dir(&path).unwrap();
         journal
-            .record(&db, &path, &std::fs::symlink_metadata(&path).unwrap())
+            .record(&path, &std::fs::symlink_metadata(&path).unwrap())
             .unwrap();
     }
     let path = f.target.root.join(&file);
     std::fs::write(&path, b"incomplete owned restore").unwrap();
     if mode != "gap" {
         journal
-            .record(&db, &path, &std::fs::symlink_metadata(&path).unwrap())
+            .record(&path, &std::fs::symlink_metadata(&path).unwrap())
             .unwrap();
     }
     if mode == "substituted" {
@@ -226,15 +226,15 @@ fn retry(f: &Fixture, target: &Storage, p: &Pending) {
         let path = target.root.join(relative);
         std::fs::create_dir(&path).unwrap();
         journal
-            .record(&db, &path, &std::fs::symlink_metadata(&path).unwrap())
+            .record(&path, &std::fs::symlink_metadata(&path).unwrap())
             .unwrap();
     }
     let file = target.root.join(&p.file);
     std::fs::write(&file, b"new local retry body").unwrap();
     journal
-        .record(&db, &file, &std::fs::symlink_metadata(&file).unwrap())
+        .record(&file, &std::fs::symlink_metadata(&file).unwrap())
         .unwrap();
-    journal.recover(&db).unwrap();
+    journal.recover().unwrap();
     assert!(!file.exists());
 }
 #[test]

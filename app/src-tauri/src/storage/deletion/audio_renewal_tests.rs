@@ -1399,7 +1399,7 @@ fn corrupted_audit_and_orphan_audit_cannot_unfence_startup() {
         let audit = saved.audits[0].clone();
         if orphan {
             let mut db = f.storage.connection.lock().unwrap();
-            let _writer = crate::storage::deletion::fence::write_audio_removal(
+            let writer = crate::storage::deletion::fence::write_audio_removal(
                 &f.storage,
                 &mut db,
                 &saved,
@@ -1407,9 +1407,10 @@ fn corrupted_audit_and_orphan_audit_cannot_unfence_startup() {
                 &crate::test_support::never_cancelled,
             )
             .unwrap();
+            let conn = writer.connection();
             let copied = uuid::Uuid::new_v4().to_string();
-            db.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) SELECT ?2,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at FROM maintenance_operations WHERE id=?1",params![audit,copied]).unwrap();
-            drop(_writer);
+            conn.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) SELECT ?2,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at FROM maintenance_operations WHERE id=?1",params![audit,copied]).unwrap();
+            drop(writer);
             drop(db);
             let f = f.reopen();
             assert!(crate::storage::deletion::startup::contains(
@@ -1591,7 +1592,7 @@ fn clock_rollback_and_new_reservation_collision_do_not_publish_audit() {
         if future {
             let mut db = f.storage.connection.lock().unwrap();
             let saved = Receipt::load(&db, &op, &crate::test_support::never_cancelled).unwrap();
-            let _writer = crate::storage::deletion::fence::write_audio_removal(
+            let writer = crate::storage::deletion::fence::write_audio_removal(
                 &f.storage,
                 &mut db,
                 &saved,
@@ -1599,7 +1600,8 @@ fn clock_rollback_and_new_reservation_collision_do_not_publish_audit() {
                 &crate::test_support::never_cancelled,
             )
             .unwrap();
-            db.execute(
+            let conn = writer.connection();
+            conn.execute(
                 "UPDATE maintenance_operations SET updated_at=?2 WHERE id=?1",
                 params![op, crate::storage::now_ms().unwrap() + 86_400_000],
             )

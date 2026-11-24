@@ -486,12 +486,12 @@ fn connection_identity(db: &Connection) -> usize {
 // It is not a capability reconstructed from a client-provided ID or JSON.
 pub(super) struct Writer<'a> {
     storage: &'a Storage,
-    connection_identity: usize,
+    db: &'a mut Connection,
 }
 impl Writer<'_> {
     fn begin<'a>(
         storage: &'a Storage,
-        db: &mut Connection,
+        db: &'a mut Connection,
         require_pending: bool,
     ) -> Result<Writer<'a>, String> {
         if storage.retired.load(Ordering::Acquire)
@@ -527,112 +527,87 @@ impl Writer<'_> {
             storage.deletion_fence.fail_closed(db);
             return Err(error);
         }
-        Ok(Writer {
-            storage,
-            connection_identity: connection_identity(db),
-        })
+        Ok(Writer { storage, db })
     }
 
-    pub(super) fn finish(self, db: &mut Connection) {
-        release_writer(self.storage, db, self.connection_identity);
+    pub(super) fn connection(&self) -> &Connection {
+        self.db
+    }
+
+    pub(super) fn connection_mut(&mut self) -> &mut Connection {
+        self.db
     }
 }
-fn release_writer(storage: &Storage, db: &mut Connection, expected_identity: usize) {
-    let fence = &storage.deletion_fence;
-    if !fence.writing.load(Ordering::Acquire) {
-        return;
-    }
-    if connection_identity(db) != expected_identity {
-        fence.scoped.store(false, Ordering::Release);
-        fence.pending.store(true, Ordering::Release);
-        fence.writing.store(false, Ordering::Release);
-        return;
-    }
-    // Never hand an uncommitted write transaction back to ordinary callers.
-    let rolled_back = db.is_autocommit() || db.execute_batch("ROLLBACK").is_ok();
-    let guards = db
-        .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
-        .is_ok_and(|enabled| enabled)
-        && db
-            .query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))
-            .is_ok_and(|enabled| enabled);
-    #[cfg(any(unix, windows))]
-    let anchored = storage.managed_anchor.verify().is_ok();
-    #[cfg(not(any(unix, windows)))]
-    let anchored = true;
-    let pending = has_pending(db);
-    let normalized = fence.startup_deferred
-        || fence.startup_audio_scopes.is_empty()
-        || (rolled_back
-            && guards
-            && anchored
-            && pending.is_ok()
-            && (|| -> Result<(), String> {
-                let tx = db
-                    .unchecked_transaction()
-                    .map_err(|error| error.to_string())?;
-                for meeting in &fence.startup_audio_scopes {
-                    if !audio_pending(&tx, meeting)?
-                        && !super::super::meeting_access::reserved(&tx, meeting)?
-                    {
-                        super::super::normalize_startup_audio_states(&tx, meeting)?;
-                    }
-                }
-                tx.commit().map_err(|error| error.to_string())
-            })()
-            .is_ok());
-    let guarded = super::super::meeting_access::bypass(db, false).is_ok();
-    if !rolled_back || !guards || !anchored || pending.is_err() || !guarded {
-        fence.scoped.store(false, Ordering::Release);
-        fence.pending.store(true, Ordering::Release);
-        let _ = db.authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
-    } else if !normalized {
-        fence.fail_closed(db);
-    } else {
-        fence.pending.store(pending.unwrap(), Ordering::Release);
-        if !fence.startup_deferred {
-            let scoped = fence.scopes_allow_writes(db).unwrap_or(false);
-            fence.scoped.store(scoped, Ordering::Release);
-        }
-        let _ = fence.install(db);
-    }
-    fence.writing.store(false, Ordering::Release);
-}
+
 impl Drop for Writer<'_> {
     fn drop(&mut self) {
-        if !self.storage.deletion_fence.writing.load(Ordering::Acquire) {
-            return;
+        let storage = self.storage;
+        let db = &mut *self.db;
+        let fence = &storage.deletion_fence;
+        // Never hand an uncommitted write transaction back to ordinary callers.
+        let rolled_back = db.is_autocommit() || db.execute_batch("ROLLBACK").is_ok();
+        let guards = db
+            .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
+            .is_ok_and(|enabled| enabled)
+            && db
+                .query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))
+                .is_ok_and(|enabled| enabled);
+        #[cfg(any(unix, windows))]
+        let anchored = storage.managed_anchor.verify().is_ok();
+        #[cfg(not(any(unix, windows)))]
+        let anchored = true;
+        let pending = has_pending(db);
+        let normalized = fence.startup_deferred
+            || fence.startup_audio_scopes.is_empty()
+            || (rolled_back
+                && guards
+                && anchored
+                && pending.is_ok()
+                && (|| -> Result<(), String> {
+                    let tx = db
+                        .unchecked_transaction()
+                        .map_err(|error| error.to_string())?;
+                    for meeting in &fence.startup_audio_scopes {
+                        if !audio_pending(&tx, meeting)?
+                            && !super::super::meeting_access::reserved(&tx, meeting)?
+                        {
+                            super::super::normalize_startup_audio_states(&tx, meeting)?;
+                        }
+                    }
+                    tx.commit().map_err(|error| error.to_string())
+                })()
+                .is_ok());
+        let guarded = super::super::meeting_access::bypass(db, false).is_ok();
+        if !rolled_back || !guards || !anchored || pending.is_err() || !guarded {
+            fence.scoped.store(false, Ordering::Release);
+            fence.pending.store(true, Ordering::Release);
+            let _ = db.authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
+        } else if !normalized {
+            fence.fail_closed(db);
+        } else {
+            fence.pending.store(pending.unwrap(), Ordering::Release);
+            if !fence.startup_deferred {
+                let scoped = fence.scopes_allow_writes(db).unwrap_or(false);
+                fence.scoped.store(scoped, Ordering::Release);
+            }
+            let _ = fence.install(db);
         }
-        if let Ok(mut db) = self.storage.connection.lock() {
-            release_writer(self.storage, &mut db, self.connection_identity);
-            return;
-        }
-        self.storage
-            .deletion_fence
-            .writing
-            .store(false, Ordering::Release);
-        self.storage
-            .deletion_fence
-            .pending
-            .store(true, Ordering::Release);
-        self.storage
-            .deletion_fence
-            .scoped
-            .store(false, Ordering::Release);
+        fence.writing.store(false, Ordering::Release);
     }
 }
 
 pub(super) fn write_fresh<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
 ) -> Result<Writer<'a>, String> {
-    Writer::begin(storage, db, has_pending(db)?)
+    let pending = has_pending(db)?;
+    Writer::begin(storage, db, pending)
 }
 
 #[cfg(any(unix, windows))]
 pub(super) fn write_prepared<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     confirmed: &super::intent::Prepared,
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
@@ -643,7 +618,7 @@ pub(super) fn write_prepared<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_audio_prepared<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     confirmed: &super::audio::intent::Prepared,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
     check: &impl Fn() -> bool,
@@ -656,20 +631,21 @@ pub(super) fn write_audio_prepared<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_audio_reconfirmation<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     review: &super::audio::intent::reconfirmation::Review,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
     lease.validate_active()?;
     review.verify(storage, db, check)?;
-    Writer::begin(storage, db, has_pending(db)?)
+    let pending = has_pending(db)?;
+    Writer::begin(storage, db, pending)
 }
 
 #[cfg(any(unix, windows))]
 pub(super) fn write_audio_renewal<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     review: &super::audio::intent::removal::renewal::Review,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
     check: &impl Fn() -> bool,
@@ -682,7 +658,7 @@ pub(super) fn write_audio_renewal<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_audio_removal<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     receipt: &super::audio::intent::removal::Receipt,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
     check: &impl Fn() -> bool,
@@ -696,7 +672,7 @@ pub(super) fn write_audio_removal<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_model_prepared<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     confirmed: &super::models::intent::Prepared,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
 ) -> Result<Writer<'a>, String> {
@@ -708,7 +684,7 @@ pub(super) fn write_model_prepared<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_model_reconfirmation<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     review: &super::models::intent::removal::renewal::Review,
     confirmed: &super::models::intent::removal::Receipt,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
@@ -730,7 +706,7 @@ pub(super) fn write_model_reconfirmation<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_model_removal<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     confirmed: &super::models::intent::removal::Receipt,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
 ) -> Result<Writer<'a>, String> {
@@ -750,7 +726,7 @@ pub(super) fn write_model_removal<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_removal<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     confirmed: &super::removal::Receipt,
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
@@ -761,7 +737,7 @@ pub(super) fn write_removal<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_completion<'a>(
     storage: &'a Storage,
-    db: &mut Connection,
+    db: &'a mut Connection,
     confirmed: &super::completion::Receipt,
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {

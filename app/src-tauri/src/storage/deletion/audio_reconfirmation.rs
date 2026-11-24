@@ -561,9 +561,10 @@ fn accept_inner(
         storage.deletion_fence.arm(&mut db)?;
         return Ok(saved);
     }
-    let writer = crate::storage::deletion::fence::write_audio_reconfirmation(
+    let mut writer = crate::storage::deletion::fence::write_audio_reconfirmation(
         storage, &mut db, review, lease, check,
     )?;
+    let conn = writer.connection();
     let bytes = review.snapshot.encode()?;
     let saved = Prepared {
         header: Header {
@@ -582,7 +583,7 @@ fn accept_inner(
         consent: crate::storage::now_ms()?,
         kept: false,
     };
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     saved.validate(&tx)?;
     saved.verify_locked(storage, &tx, lease, check)?;
@@ -602,7 +603,7 @@ fn accept_inner(
     event("beforeAudioReconfirmationCommit");
     saved.verify_locked(storage, &tx, lease, check)?;
     tx.commit().map_err(|e| e.to_string())?;
-    storage.deletion_fence.arm(&mut db)?;
+    storage.deletion_fence.arm(writer.connection_mut())?;
     drop(writer);
     event("audioReconfirmationCommitted");
     Ok(saved)

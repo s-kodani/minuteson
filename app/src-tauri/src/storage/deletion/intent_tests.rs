@@ -74,17 +74,18 @@ impl Fixture {
         )
         .unwrap();
         let mut db = self.storage.connection.lock().unwrap();
-        let _writer = super::fence::write_prepared(
+        let writer = super::fence::write_prepared(
             &self.storage,
             &mut db,
             &saved,
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+        let conn = writer.connection();
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
-        db.execute(sql, params![self.operation]).unwrap();
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+        conn.execute(sql, params![self.operation]).unwrap();
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
             .unwrap();
     }
 }
@@ -566,39 +567,41 @@ fn deletion_intent_read_rejects_unknown_schema_disabled_guards_and_other_pending
     let p = f.prepare();
     {
         let mut db = f.storage.connection.lock().unwrap();
-        let _writer = super::fence::write_prepared(
+        let writer = super::fence::write_prepared(
             &f.storage,
             &mut db,
             &p,
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-        db.execute_batch("CREATE TEMP TABLE untrusted(id TEXT)")
+        let conn = writer.connection();
+        conn.execute_batch("CREATE TEMP TABLE untrusted(id TEXT)")
             .unwrap();
         assert!(p
-            .verify_saved(&db, &crate::test_support::never_cancelled)
+            .verify_saved(conn, &crate::test_support::never_cancelled)
             .is_err());
-        db.execute_batch("DROP TABLE temp.untrusted").unwrap();
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+        conn.execute_batch("DROP TABLE temp.untrusted").unwrap();
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
         assert!(p
-            .verify_saved(&db, &crate::test_support::never_cancelled)
+            .verify_saved(conn, &crate::test_support::never_cancelled)
             .is_err());
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
             .unwrap();
     }
     p.verify_live(&f.storage, &crate::test_support::never_cancelled)
         .unwrap();
     {
         let mut db = f.storage.connection.lock().unwrap();
-        let _writer = super::fence::write_prepared(
+        let writer = super::fence::write_prepared(
             &f.storage,
             &mut db,
             &p,
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-        db.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES('other-pending',?1,'delete_assets','attention','{}',?2,NULL,'{}',1,1)", params![f.other, "a".repeat(64)]).unwrap();
+        let conn = writer.connection();
+        conn.execute("INSERT INTO maintenance_operations(id,meeting_id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) VALUES('other-pending',?1,'delete_assets','attention','{}',?2,NULL,'{}',1,1)", params![f.other, "a".repeat(64)]).unwrap();
     }
     // Reading an unchanged receipt remains possible, but it cannot be admitted
     // while a different meeting's maintenance operation remains unresolved.
@@ -633,7 +636,8 @@ fn deletion_intent_read_validates_manifest_fields_even_when_outer_hash_is_recomp
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-        let json: String = db
+        let conn = writer.connection();
+        let json: String = conn
             .query_row(
                 "SELECT target_manifest_json FROM maintenance_operations WHERE id=?1",
                 params![f.operation],
@@ -644,9 +648,9 @@ fn deletion_intent_read_validates_manifest_fields_even_when_outer_hash_is_recomp
         value_json[field] = value;
         let altered = serde_json::to_string(&value_json).unwrap();
         use sha2::{Digest, Sha256};
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
-        db.execute(
+        conn.execute(
             "UPDATE maintenance_operations SET target_manifest_json=?2,target_hash=?3 WHERE id=?1",
             params![
                 f.operation,
@@ -655,7 +659,7 @@ fn deletion_intent_read_validates_manifest_fields_even_when_outer_hash_is_recomp
             ],
         )
         .unwrap();
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
             .unwrap();
         drop(writer);
         drop(db);

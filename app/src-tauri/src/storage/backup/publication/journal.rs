@@ -79,7 +79,8 @@ struct Saved {
     state: String,
     targets: BTreeMap<String, (Target, Option<Identity>)>,
 }
-pub(super) struct Journal {
+pub(super) struct Journal<'a> {
+    db: &'a Connection,
     root: PathBuf,
     id: String,
 }
@@ -318,9 +319,9 @@ fn load(db: &Connection, id: &str) -> Result<Saved, String> {
         targets,
     })
 }
-impl Journal {
+impl<'a> Journal<'a> {
     pub(super) fn begin(
-        db: &Connection,
+        db: &'a Connection,
         root: &Path,
         sealed: &SealedWorkspace,
         ids: &RestoreIds<'_>,
@@ -377,17 +378,13 @@ impl Journal {
         };
         db.execute("UPDATE maintenance_operations SET state='installing',error_code=NULL,updated_at=?1 WHERE id=?2 AND state IN ('prepared','recovered')",params![now_ms()?,id]).map_err(|e|e.to_string())?;
         Ok(Self {
+            db,
             root: root.into(),
             id,
         })
     }
-    pub(super) fn record(
-        &self,
-        db: &Connection,
-        path: &Path,
-        metadata: &Metadata,
-    ) -> Result<(), String> {
-        if !db.is_autocommit() {
+    pub(super) fn record(&self, path: &Path, metadata: &Metadata) -> Result<(), String> {
+        if !self.db.is_autocommit() {
             return Err("復元実体の記録は公開前に確定してください".into());
         }
         let relative = path
@@ -401,7 +398,7 @@ impl Journal {
         } // Shared parent is never removed.
         let json = serde_json::to_string(&Identity::read(metadata)?).map_err(|e| e.to_string())?;
         sync(path.parent().ok_or("復元実体の親がありません")?)?;
-        let tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
+        let tx = rusqlite::Transaction::new_unchecked(self.db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         if tx.execute("UPDATE maintenance_paths SET identity_json=?1,identity_hash=?2 WHERE operation_id=?3 AND relative_path=?4 AND identity_json IS NULL",params![json,hash(json.as_bytes()),self.id,relative]).map_err(|e|e.to_string())?!=1 {return Err("復元実体の予約がありません".into());}
         tx.execute("UPDATE maintenance_operations SET progress_json=json_object('owned',(SELECT count(*) FROM maintenance_paths WHERE operation_id=?1 AND identity_json IS NOT NULL)),updated_at=?2 WHERE id=?1",params![self.id,now_ms()?]).map_err(|e|e.to_string())?;
@@ -411,8 +408,8 @@ impl Journal {
         if db.execute("UPDATE maintenance_operations SET state='completed',error_code=NULL,updated_at=?1 WHERE id=?2 AND state='installing'",params![now_ms()?,self.id]).map_err(|e|e.to_string())?!=1 {return Err("復元回収記録の同時確定に失敗しました".into());}
         Ok(())
     }
-    pub(super) fn recover(&self, db: &Connection) -> Result<(), String> {
-        recover_one(&self.root, db, &self.id)
+    pub(super) fn recover(&self) -> Result<(), String> {
+        recover_one(&self.root, self.db, &self.id)
     }
 }
 fn attention(db: &Connection, id: &str, code: &str) -> Result<(), String> {

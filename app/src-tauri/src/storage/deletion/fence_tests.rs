@@ -227,11 +227,10 @@ fn deletion_fence_invalidates_cached_writes_at_confirmation_and_writes_prepared_
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let mut cached = db
-        .prepare("UPDATE meetings SET title='escaped write' WHERE id=?1")
-        .unwrap();
+    let sql = "UPDATE meetings SET title='escaped write' WHERE id=?1";
+    drop(writer.connection().prepare_cached(sql).unwrap());
     drop(writer);
-    assert!(cached.execute(params![f.other]).is_err());
+    assert!(db.prepare_cached(sql).is_err());
     assert_eq!(
         db.query_row(
             "SELECT title FROM meetings WHERE id=?1",
@@ -255,8 +254,9 @@ fn deletion_fence_writer_rolls_back_open_transaction_and_reinstates_guards_on_dr
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    db.execute_batch("BEGIN IMMEDIATE").unwrap();
-    db.execute(
+    let conn = writer.connection();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    conn.execute(
         "UPDATE meetings SET title='uncommitted edit' WHERE id=?1",
         params![f.other],
     )
@@ -287,15 +287,16 @@ fn deletion_fence_writer_unwind_does_not_leave_connection_writable_or_commit_par
     let p = f.prepare();
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut db = f.storage.connection.lock().unwrap();
-        let _writer = write_prepared(
+        let writer = write_prepared(
             &f.storage,
             &mut db,
             &p,
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-        db.execute_batch("BEGIN IMMEDIATE").unwrap();
-        db.execute(
+        let conn = writer.connection();
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        conn.execute(
             "UPDATE meetings SET title='uncommitted panic' WHERE id=?1",
             params![f.other],
         )
@@ -334,7 +335,8 @@ fn deletion_fence_guard_failure_stays_fail_closed_until_reopen() {
             &crate::test_support::never_cancelled,
         )
         .unwrap();
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+        let conn = writer.connection();
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
             .unwrap();
         drop(writer);
         assert!(db
@@ -400,11 +402,12 @@ fn deletion_fence_cold_open_recovers_unrelated_rows_and_protects_target_until_re
         let p=f.prepare();
         {
             let mut db = f.storage.connection.lock().unwrap();
-            let _writer = write_prepared(&f.storage, &mut db, &p, &||false).unwrap();
+            let writer = write_prepared(&f.storage, &mut db, &p, &||false).unwrap();
+            let conn = writer.connection();
             if table == "recording_sessions" {
-                db.execute(sql,params![f.other]).unwrap();
+                conn.execute(sql,params![f.other]).unwrap();
             } else {
-                db.execute(sql,params![f.other,"a".repeat(64)]).unwrap();
+                conn.execute(sql,params![f.other,"a".repeat(64)]).unwrap();
             }
         }
         let root=f.storage.root().to_owned(); drop(f.storage);
@@ -514,17 +517,18 @@ fn deletion_fence_keep_cannot_resolve_a_started_or_corrupted_receipt() {
         let p = f.prepare();
         {
             let mut db = f.storage.connection.lock().unwrap();
-            let _writer = write_prepared(
+            let writer = write_prepared(
                 &f.storage,
                 &mut db,
                 &p,
                 &crate::test_support::never_cancelled,
             )
             .unwrap();
-            db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+            let conn = writer.connection();
+            conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
                 .unwrap();
-            db.execute(sql, params![f.operation]).unwrap();
-            db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
+            conn.execute(sql, params![f.operation]).unwrap();
+            conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
                 .unwrap();
         }
         assert!(
