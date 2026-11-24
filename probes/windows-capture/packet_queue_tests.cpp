@@ -69,6 +69,15 @@ int main(){
       bool fatal=false;try{if(error)std::rethrow_exception(error);}catch(const product::InputDataFault&){}catch(const std::runtime_error& failure){fatal=std::string(failure.what())==marker;}
       require(fatal&&output.pending_frames()==48000*20,"storage failure became overload recovery or replaced accepted output");
     }
+    { // Disposing the consumer must release a producer blocked on backpressure.
+      product::PacketQueue output;
+      for(unsigned i=0;i<10;++i){product::CapturePacket full;full.frames=96000;full.flags=2;output.push(std::move(full));}
+      std::exception_ptr error;
+      std::thread writer([&]{try{product::CapturePacket next;next.frames=480;next.flags=2;output.push_wait(std::move(next));}catch(...){error=std::current_exception();}});
+      output.discard_waiters();writer.join();
+      bool released=false;try{if(error)std::rethrow_exception(error);}catch(const product::InputDataFault&){}catch(const std::runtime_error&){released=true;}
+      require(released&&output.pending_frames()==48000*20,"discarded consumer left a producer waiting or replaced accepted output");
+    }
     std::cout<<"acquisition queue: delayed storage, exact continuous PCM, ordered drain before failure, and bounded overflow passed\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

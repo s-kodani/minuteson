@@ -214,7 +214,13 @@ class Lane {
     return Json{{"latePackets",value.late_packets},{"lateFrames",value.late_frames},{"retimedPackets",value.retimed_packets},{"retimedFrames",value.retimed_frames},{"clockAdjustmentFrames",value.clock_adjustment_frames},{"pressureFlushes",value.pressure_flushes},{"discardedFrames",0},{"capacityFrames",value.capacity_frames},{"resyncFrames",value.reset_frames},{"ranges",losses},{"rangesTruncated",value.truncated}};
   }
   Lane(fs::path output,UINT32 count,bool bounded=false):path(std::move(output)),channels(count),clock(bounded?PacketClock::bounded_capacity:PacketClock::recording_capacity){}
-  ~Lane(){try{stop_acquisition();}catch(...) {}}
+  // An aborted session no longer drains this lane. Release any producer blocked
+  // on mixed-output backpressure so its native owner can be joined.
+  ~Lane(){
+    if(reader)reader->queue.discard_waiters();
+    if(retiring_reader)retiring_reader->queue.discard_waiters();
+    try{stop_acquisition();}catch(...) {}
+  }
   void cancel_preparation(){if(preparation){preparation->cancel();preparation_schedule.cancel();}}
   bool is_recording()const{return raw||(wav&&wav->pending());}
   void adopt(PreparedInput input){if(reader||retirement||retiring_reader)throw std::logic_error("input handoff overlaps owned retirement");if(wav)wav->drain_converter();if(raw)input.reader->queue.attach_storage(raw->writer->pending(),raw->lane_index);else if(wav&&wav->pending())input.reader->queue.attach_storage(wav->pending(),wav->lane_index());clock.begin_stream(input.matching_position_rate);admitted_sequence=0;reader=std::move(input.reader);started=true;binding.connected();preparation_schedule.accept();}
