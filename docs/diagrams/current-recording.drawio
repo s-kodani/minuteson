@@ -8,7 +8,7 @@
         <mxCell id="title" value="&lt;b&gt;録音データの取得・時刻補正・統合&lt;/b&gt;" vertex="1" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacing=0;fontFamily=Helvetica;fontColor=#243247;fontSize=23;">
           <mxGeometry x="30" y="15" width="1100" height="35" as="geometry" />
         </mxCell>
-        <mxCell id="scope" value="現行の通常録音／2026-11-24のPR #143に照合。5秒テスト・旧CAF救出・取り込みは対象外。" vertex="1" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacing=0;fontFamily=Helvetica;fontColor=#243247;fontSize=15;">
+        <mxCell id="scope" value="現行の通常録音／2026-11-24時点の作業ツリーに照合。5秒テスト・旧CAF救出・取り込みは対象外。" vertex="1" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacing=0;fontFamily=Helvetica;fontColor=#243247;fontSize=15;">
           <mxGeometry x="30" y="55" width="1100" height="30" as="geometry" />
         </mxCell>
         <mxCell id="windows" value="Windows  |  C++録音ヘルパー" vertex="1" parent="1" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;swimlane;horizontal=1;startSize=38;collapsible=0;fontStyle=1;fillColor=#eaf3ff;strokeColor=#52799f;swimlaneFillColor=#ffffff;">
