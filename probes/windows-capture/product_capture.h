@@ -120,7 +120,7 @@ struct PreparedInput {
   PreparedInput(PreparedInput&& other)noexcept{swap(other);}
   PreparedInput& operator=(PreparedInput&& other)noexcept{swap(other);return *this;}
   void swap(PreparedInput& other)noexcept{client.Swap(other.client);reader.swap(other.reader);std::swap(choice,other.choice);std::swap(matching_position_rate,other.matching_position_rate);}
-  ~PreparedInput(){if(reader)reader->stop();}
+  ~PreparedInput(){if(reader)reader->discard();}
 };
 using NativePreparation=InputPreparation<PreparedInput,CaptureApartment>;
 using NativeRetirement=InputPreparation<std::shared_ptr<CaptureReader>,CaptureApartment>;

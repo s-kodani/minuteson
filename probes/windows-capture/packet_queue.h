@@ -1,5 +1,7 @@
 #pragma once
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <exception>
@@ -74,7 +76,7 @@ class PacketIngressBudget {
   std::uint64_t pending_nanoseconds(){std::lock_guard lock(mutex_);return nanoseconds_;}
 };
 // At most 20 seconds per lane (11 MiB total PCM for mono + stereo).
-// Never discard old audio to make room; an exhausted writer stops explicitly.
+// Native acquisition never waits or discards old audio to make room.
 class PacketQueue {
  public:
   static inline const std::uint64_t max_frames=48000*mon_capture_limit(7)/1000000000;
@@ -84,17 +86,38 @@ class PacketQueue {
     if(ingress_||!packets_.empty())throw std::logic_error("transient ingress already active");
     ingress_=std::move(budget);
   }
-  void push(CapturePacket packet) {
+  void push(CapturePacket packet) {push_impl(std::move(packet),false);}
+  // Mixed PCM is already accepted by an upstream queue. Keep it owned by
+  // the producer while the consumer drains, rather than treating it as a
+  // newly rejected native packet. Only disposal of the consumer cancels this.
+  void push_wait(CapturePacket packet) {push_impl(std::move(packet),true);}
+  void discard_waiters(){
+    {std::lock_guard lock(mutex_);discarded_=true;}
+    space_.notify_all();
+  }
+ private:
+  void push_impl(CapturePacket packet,bool wait) {
     // Rejection cannot acquire storage credits or contaminate the converter.
     const bool silent=(packet.flags&2)!=0;
     if(!packet.frames||(!silent&&(packet.samples.size()%packet.frames!=0)))throw InputDataFault("invalid queued PCM layout");
     const auto channels=packet.samples.empty()?1u:std::uint32_t(packet.samples.size()/packet.frames);
     require_input_pcm(packet.samples.data(),packet.frames,channels,silent);
-    std::lock_guard lock(mutex_);
+    std::unique_lock lock(mutex_);
     const auto bytes=std::uint64_t(packet.samples.size())*sizeof(float);
     const auto duration=(std::uint64_t(packet.frames)*1000000000+47999)/48000;
-    if(!mon_capture_permits_pending(bytes_,nanoseconds_,
-        static_cast<std::uint32_t>(packets_.size()),bytes,duration))
+    auto permits=[&]{return mon_capture_permits_pending(bytes_,nanoseconds_,
+      static_cast<std::uint32_t>(packets_.size()),bytes,duration);};
+    if(wait){
+      if(!mon_capture_permits_pending(0,0,0,bytes,duration))throw std::runtime_error("mixed PCM exceeds output queue capacity");
+      while(!discarded_&&!permits()){
+        // Durable-storage failures must also wake an otherwise stalled
+        // handoff. StoragePending has its own mutex and no queue notifier.
+        if(storage_)storage_->check();
+        space_.wait_for(lock,std::chrono::milliseconds(50));
+      }
+      if(discarded_)throw std::runtime_error("capture output consumer was discarded");
+    }
+    if(!permits())
       throw InputOverload("音声の保存待ちが上限に達しました。入力を取得し直します。保存先の負荷を確認してください。確定済み音声は保持しています");
     if(ingress_)ingress_->acquire(bytes,duration);
     try{
@@ -104,6 +127,7 @@ class PacketQueue {
       bytes_+=bytes;nanoseconds_+=duration;frames_+=frames;peak_=std::max(peak_,frames_);
     }catch(...){if(ingress_)ingress_->release(bytes,duration);throw;}
   }
+ public:
   // Preparation may be cancelled before adoption, so only product-owned
   // ingress is charged. Stamp the already bounded preparation queue atomically
   // before any of its packets can enter the recording converter.
@@ -118,7 +142,7 @@ class PacketQueue {
     std::lock_guard lock(mutex_);
     if(packets_.empty()){if(failure_)std::rethrow_exception(failure_);return std::nullopt;}
     auto packet=std::move(packets_.front());packets_.pop_front();const auto bytes=std::uint64_t(packet.samples.size())*sizeof(float),duration=(std::uint64_t(packet.frames)*1000000000+47999)/48000;
-    frames_-=packet.frames;bytes_-=bytes;nanoseconds_-=duration;if(ingress_)ingress_->release(bytes,duration);return packet;
+    frames_-=packet.frames;bytes_-=bytes;nanoseconds_-=duration;if(ingress_)ingress_->release(bytes,duration);space_.notify_one();return packet;
   }
   // Only the acquisition owner may publish this after draining the native
   // buffers and any adapter-held PCM preceding `through`. It belongs after
@@ -137,6 +161,8 @@ class PacketQueue {
   std::uint64_t peak(){std::lock_guard lock(mutex_);return peak_;}
  private:
   std::mutex mutex_;
+  std::condition_variable space_;
+  bool discarded_=false;
   std::deque<CapturePacket> packets_;
   std::uint64_t frames_=0,peak_=0,bytes_=0,nanoseconds_=0;
   std::uint64_t sequence_=0;
@@ -151,6 +177,8 @@ class CaptureReader {
   PacketQueue queue;
   virtual AlignmentDiagnostics alignment_diagnostics(){return {};}
   virtual void stop()=0;
+  // Unadopted/cancelled inputs have no recording consumer to drain them.
+  virtual void discard(){stop();}
   virtual ~CaptureReader()=default;
 };
 } // namespace product

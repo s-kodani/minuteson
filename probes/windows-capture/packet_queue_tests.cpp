@@ -60,6 +60,15 @@ int main(){
     require(!progress.observed_through(1),"old observation overtook newly accepted PCM");
     progress.pop();require(!progress.observed_through(2),"old observation authorized an unobserved sequence");
     progress.observe(3000);require(progress.observed_through(2)==3000,"latest drained observation missing");
+    { // A durable writer failure must interrupt mixed-output backpressure.
+      product::PacketQueue output;auto storage=std::make_shared<product::StoragePending>();output.attach_storage(storage,1);
+      for(unsigned i=0;i<10;++i){product::CapturePacket full;full.frames=96000;full.flags=2;output.push(std::move(full));}
+      constexpr auto marker="mixed-output storage failure";std::exception_ptr error;
+      std::thread writer([&]{try{product::CapturePacket next;next.frames=480;next.flags=2;output.push_wait(std::move(next));}catch(...){error=std::current_exception();}});
+      storage->fail(std::make_exception_ptr(std::runtime_error(marker)));writer.join();
+      bool fatal=false;try{if(error)std::rethrow_exception(error);}catch(const product::InputDataFault&){}catch(const std::runtime_error& failure){fatal=std::string(failure.what())==marker;}
+      require(fatal&&output.pending_frames()==48000*20,"storage failure became overload recovery or replaced accepted output");
+    }
     std::cout<<"acquisition queue: delayed storage, exact continuous PCM, ordered drain before failure, and bounded overflow passed\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
