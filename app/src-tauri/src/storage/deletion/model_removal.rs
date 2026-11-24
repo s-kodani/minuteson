@@ -123,7 +123,7 @@ impl Receipt {
         &self,
         storage: &Storage,
     ) -> Result<bool, String> {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         self.verify_saved(&db)?;
         renewal::recorded_policy(&db, &self.saved, &self.progress)
     }
@@ -153,7 +153,7 @@ impl Receipt {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         verify_remaining(storage, &db, self, &|| check() || lease.cancelled())?;
         active(lease, check)
     }
@@ -520,7 +520,7 @@ fn verify_unlocked(
     Ok(models)
 }
 fn check_metadata(storage: &Storage, r: &Receipt) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     r.verify_saved(&db)?;
     r.metadata(storage, &db)
 }
@@ -531,9 +531,10 @@ fn save_unlocked(
     lease: &DataMaintenanceLease,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
-    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, r, lease)?;
-    r.save(storage, &db, next, lease, check)
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
+    let writer = crate::storage::deletion::fence::write_model_removal(storage, &mut db, r, lease)?;
+    let conn = writer.connection();
+    r.save(storage, conn, next, lease, check)
 }
 fn resolve_unlocked(
     storage: &Storage,
@@ -541,9 +542,10 @@ fn resolve_unlocked(
     lease: &DataMaintenanceLease,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
-    let _writer = crate::storage::deletion::fence::write_model_removal(storage, &db, r, lease)?;
-    super::super::startup::resolve(storage, &db, r, check)
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
+    let writer = crate::storage::deletion::fence::write_model_removal(storage, &mut db, r, lease)?;
+    let conn = writer.connection();
+    super::super::startup::resolve(storage, conn, r, check)
 }
 
 pub(crate) fn start(
@@ -554,7 +556,7 @@ pub(crate) fn start(
 ) -> Result<Receipt, String> {
     active(lease, check)?;
     let saved = {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         super::read(&db, operation)?
     };
     let current = super::super::capture_mode(
@@ -565,7 +567,7 @@ pub(crate) fn start(
         &|| check() || lease.cancelled(),
         saved.snapshot.directory_scope,
     )?;
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     saved.verify_saved(&db)?;
     saved
         .snapshot
@@ -611,16 +613,17 @@ pub(crate) fn start(
             return Err("モデル削除の予約ルートが既に存在します".into());
         }
     }
-    let _writer =
-        crate::storage::deletion::fence::write_model_prepared(storage, &db, &saved, lease)?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let writer =
+        crate::storage::deletion::fence::write_model_prepared(storage, &mut db, &saved, lease)?;
+    let conn = writer.connection();
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     saved.verify_saved(&tx)?;
     active(lease, check)?;
     if tx.execute("UPDATE maintenance_operations SET state='installing',progress_json=?2,updated_at=max(updated_at,?3) WHERE id=?1 AND state='prepared' AND progress_json=?4",params![operation,progress.encode()?,storage::now_ms()?,super::INITIAL]).map_err(|e|e.to_string())?!=1 { return Err("モデル削除の開始状態が変更されています".into()); }
     active(lease, check)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Receipt::load(&db, operation)
+    Receipt::load(conn, operation)
 }
 fn run_directory(
     storage: &Storage,
@@ -708,7 +711,7 @@ fn run_inner(
 ) -> Result<Receipt, String> {
     active(lease, check)?;
     let mut r = {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         Receipt::load(&db, operation)?
     };
     if r.saved.snapshot.directory_scope {

@@ -226,7 +226,7 @@ fn windows_hash_pin_denies_writes_allows_journaled_rename_and_unlink_and_expires
     std::fs::write(f.path("cli"), b"new generation").unwrap();
     let (_, sha) =
         crate::storage::deletion::verification::hash(&directory, "cli", &|| false).unwrap();
-    assert_eq!(sha, format!("{:x}", Sha256::digest(b"new generation")));
+    assert_eq!(sha, mon_core::hash::sha256_hex(b"new generation"));
 }
 
 #[test]

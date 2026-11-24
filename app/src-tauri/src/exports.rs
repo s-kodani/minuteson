@@ -98,7 +98,7 @@ fn fingerprint_with(
         created: metadata.created().map_err(|e| e.to_string())?,
         size: bytes,
         modified: metadata.modified().map_err(|e| e.to_string())?,
-        hash: format!("{:x}", hash.finalize()),
+        hash: mon_core::hash::sha256_output_hex(hash.finalize()),
         #[cfg(any(unix, windows))]
         device: {
             #[cfg(unix)]

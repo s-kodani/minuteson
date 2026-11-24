@@ -231,7 +231,7 @@ pub(super) fn start(
     check: &impl Fn() -> bool,
 ) -> Result<Receipt, String> {
     cancel(check)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -250,15 +250,16 @@ pub(super) fn start(
         current.verify_live(storage, &db, check)?;
         return Ok(current);
     }
-    let _writer = super::fence::write_removal(storage, &db, files, check)?;
-    let finished = files.verify_finished(storage, &db, check)?;
+    let writer = super::fence::write_removal(storage, &mut db, files, check)?;
+    let conn = writer.connection();
+    let finished = files.verify_finished(storage, conn, check)?;
     let progress = Progress {
         version: 1,
         files: finished,
         database_phase: files.progress.database_phase.unwrap_or(Phase::RowsPending),
     };
     let p = files.confirmed();
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let mut tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     files.verify_saved(&tx, check)?;
     storage.managed_anchor.verify()?;
@@ -267,7 +268,7 @@ pub(super) fn start(
     }
     cancel(check)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Receipt::load(&db, p.operation(), check)
+    Receipt::load(conn, p.operation(), check)
 }
 fn save_phase(db: &Connection, receipt: &Receipt, phase: Phase) -> Result<Progress, String> {
     let mut next = receipt.progress.clone();
@@ -296,23 +297,34 @@ fn run_inner(
     event: &impl Fn(&str),
 ) -> Result<(), String> {
     cancel(check)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
-    run_locked(storage, &db, receipt, check, event)
+    run_locked(storage, &mut db, receipt, check, event)
 }
 fn run_locked(
     storage: &Storage,
-    db: &Connection,
+    db: &mut Connection,
     receipt: &mut Receipt,
     check: &impl Fn() -> bool,
     event: &impl Fn(&str),
 ) -> Result<(), String> {
-    let _writer = super::fence::write_completion(storage, db, receipt, check)?;
-    receipt.verify_live(storage, &db, check)?;
+    let writer = super::fence::write_completion(storage, db, receipt, check)?;
+    run_phases(storage, &writer, receipt, check, event)
+}
+
+fn run_phases(
+    storage: &Storage,
+    writer: &super::fence::Writer<'_>,
+    receipt: &mut Receipt,
+    check: &impl Fn() -> bool,
+    event: &impl Fn(&str),
+) -> Result<(), String> {
+    let conn = writer.connection();
+    receipt.verify_live(storage, conn, check)?;
     if receipt.progress.database_phase == Phase::RowsPending {
-        let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        let mut tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         receipt.verify_live(storage, &tx, check)?;
         storage.managed_anchor.verify_current_history()?;
@@ -333,14 +345,14 @@ fn run_locked(
         receipt
             .progress
             .files
-            .verify_absent(storage, db, &receipt.confirmed)?;
+            .verify_absent(storage, conn, &receipt.confirmed)?;
         tx.commit().map_err(|e| e.to_string())?;
         receipt.progress = next;
         event("rowsCommitted");
     }
-    receipt.verify_live(storage, &db, check)?;
+    receipt.verify_live(storage, conn, check)?;
     if receipt.progress.database_phase == Phase::RowsDeleted {
-        let mode: String = db
+        let mode: String = conn
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         if mode != "wal" {
@@ -348,21 +360,21 @@ fn run_locked(
         }
         cancel(check)?;
         storage.managed_anchor.verify()?;
-        database::secure_delete(&db)?;
-        database::checkpoint(&db)?;
+        database::secure_delete(conn)?;
+        database::checkpoint(conn)?;
         event("checkpointed");
         cancel(check)?;
         storage.managed_anchor.verify()?;
         if !receipt.manifest.directory_scope() {
-            db.execute_batch("VACUUM").map_err(|e| e.to_string())?;
+            conn.execute_batch("VACUUM").map_err(|e| e.to_string())?;
         }
         event("vacuumed");
         cancel(check)?;
         storage.managed_anchor.verify()?;
-        database::checkpoint(&db)?;
+        database::checkpoint(conn)?;
         event("purged");
-        receipt.verify_live(storage, &db, check)?;
-        let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        receipt.verify_live(storage, conn, check)?;
+        let mut tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         receipt.verify_saved(&tx, check)?;
         let next = save_phase(&tx, receipt, Phase::Finished)?;
@@ -371,7 +383,7 @@ fn run_locked(
         receipt
             .progress
             .files
-            .verify_absent(storage, db, &receipt.confirmed)?;
+            .verify_absent(storage, conn, &receipt.confirmed)?;
         tx.commit().map_err(|e| e.to_string())?;
         receipt.progress = next;
         event("completed");
@@ -379,15 +391,15 @@ fn run_locked(
     // This WAL contains only the non-text completion receipt. Do not return
     // success until its final checkpoint succeeds; acknowledgement can replay.
     cancel(check)?;
-    receipt.verify_live(storage, &db, check)?;
+    receipt.verify_live(storage, conn, check)?;
     storage.managed_anchor.verify()?;
     if !receipt.manifest.directory_scope() {
-        database::compact_receipt_pages(&db)?;
+        database::compact_receipt_pages(conn)?;
     }
     cancel(check)?;
-    database::checkpoint(&db)?;
+    database::checkpoint(conn)?;
     event("ackCheckpointed");
-    super::startup::resolve(storage, db, receipt, check)?;
+    super::startup::resolve(storage, conn, receipt, check)?;
     Ok(())
 }
 

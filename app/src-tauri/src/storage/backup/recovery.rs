@@ -187,7 +187,11 @@ fn observe(
             queue.extend(children);
         }
     }
-    Ok((format!("{:x}", digest.finalize()), count, complete))
+    Ok((
+        mon_core::hash::sha256_output_hex(digest.finalize()),
+        count,
+        complete,
+    ))
 }
 
 impl Storage {
@@ -339,7 +343,7 @@ impl Prepared {
                     }
                 }
                 Source::RestoreAddition => {
-                    let db = storage
+                    let mut db = storage
                         .connection
                         .lock()
                         .map_err(|_| "DBロックを取得できません")?;

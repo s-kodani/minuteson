@@ -287,7 +287,7 @@ pub(in crate::storage) struct Fence {
     startup_deferred: bool,
 }
 impl Fence {
-    pub(in crate::storage) fn open(db: &Connection) -> Result<Self, String> {
+    pub(in crate::storage) fn open(db: &mut Connection) -> Result<Self, String> {
         let (pending, mut scopes) = match has_pending(db) {
             Ok(false) => (false, StartupScopes::default()),
             Ok(true) => (
@@ -378,7 +378,7 @@ impl Fence {
     pub(in crate::storage) fn preserve_startup_meeting(&self, meeting: &str) -> bool {
         self.startup_meeting_scopes.contains(meeting)
     }
-    fn install(&self, db: &Connection) -> Result<(), String> {
+    fn install(&self, db: &mut Connection) -> Result<(), String> {
         db.flush_prepared_statement_cache();
         let result = if self.blocked() {
             db.authorizer(Some(readonly))
@@ -395,7 +395,7 @@ impl Fence {
         }
         Ok(())
     }
-    pub(super) fn arm(&self, db: &Connection) -> Result<(), String> {
+    pub(super) fn arm(&self, db: &mut Connection) -> Result<(), String> {
         self.pending.store(true, Ordering::Release);
         if self.writing.load(Ordering::Acquire) {
             return Ok(());
@@ -405,8 +405,8 @@ impl Fence {
 
     pub(in crate::storage) fn scoped_update(
         &self,
-        db: &Connection,
-        action: impl FnOnce() -> Result<(), String>,
+        db: &mut Connection,
+        action: impl FnOnce(&mut Connection) -> Result<(), String>,
     ) -> Result<(), String> {
         if self.startup_deferred {
             return Err("再起動後の削除は専用の回復操作で確認してください".into());
@@ -414,7 +414,7 @@ impl Fence {
         db.flush_prepared_statement_cache();
         db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
             .map_err(|e| e.to_string())?;
-        let result = action();
+        let result = action(db);
         if result.is_err() {
             self.fail_closed(db);
             return result;
@@ -447,7 +447,7 @@ impl Fence {
         Ok(!scopes.audio.is_empty() || super::super::meeting_access::any_reserved(db)?)
     }
 
-    pub(in crate::storage) fn fail_closed(&self, db: &Connection) {
+    pub(in crate::storage) fn fail_closed(&self, db: &mut Connection) {
         self.scoped.store(false, Ordering::Release);
         self.pending.store(true, Ordering::Release);
         db.flush_prepared_statement_cache();
@@ -486,12 +486,12 @@ fn connection_identity(db: &Connection) -> usize {
 // It is not a capability reconstructed from a client-provided ID or JSON.
 pub(super) struct Writer<'a> {
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
 }
 impl Writer<'_> {
     fn begin<'a>(
         storage: &'a Storage,
-        db: &'a Connection,
+        db: &'a mut Connection,
         require_pending: bool,
     ) -> Result<Writer<'a>, String> {
         if storage.retired.load(Ordering::Acquire)
@@ -529,25 +529,34 @@ impl Writer<'_> {
         }
         Ok(Writer { storage, db })
     }
+
+    pub(super) fn connection(&self) -> &Connection {
+        self.db
+    }
+
+    pub(super) fn connection_mut(&mut self) -> &mut Connection {
+        self.db
+    }
 }
+
 impl Drop for Writer<'_> {
     fn drop(&mut self) {
-        let fence = &self.storage.deletion_fence;
+        let storage = self.storage;
+        let db = &mut *self.db;
+        let fence = &storage.deletion_fence;
         // Never hand an uncommitted write transaction back to ordinary callers.
-        let rolled_back = self.db.is_autocommit() || self.db.execute_batch("ROLLBACK").is_ok();
-        let guards = self
-            .db
+        let rolled_back = db.is_autocommit() || db.execute_batch("ROLLBACK").is_ok();
+        let guards = db
             .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
             .is_ok_and(|enabled| enabled)
-            && self
-                .db
+            && db
                 .query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))
                 .is_ok_and(|enabled| enabled);
         #[cfg(any(unix, windows))]
-        let anchored = self.storage.managed_anchor.verify().is_ok();
+        let anchored = storage.managed_anchor.verify().is_ok();
         #[cfg(not(any(unix, windows)))]
         let anchored = true;
-        let pending = has_pending(self.db);
+        let pending = has_pending(db);
         let normalized = fence.startup_deferred
             || fence.startup_audio_scopes.is_empty()
             || (rolled_back
@@ -555,8 +564,7 @@ impl Drop for Writer<'_> {
                 && anchored
                 && pending.is_ok()
                 && (|| -> Result<(), String> {
-                    let tx = self
-                        .db
+                    let tx = db
                         .unchecked_transaction()
                         .map_err(|error| error.to_string())?;
                     for meeting in &fence.startup_audio_scopes {
@@ -569,22 +577,20 @@ impl Drop for Writer<'_> {
                     tx.commit().map_err(|error| error.to_string())
                 })()
                 .is_ok());
-        let guarded = super::super::meeting_access::bypass(self.db, false).is_ok();
+        let guarded = super::super::meeting_access::bypass(db, false).is_ok();
         if !rolled_back || !guards || !anchored || pending.is_err() || !guarded {
             fence.scoped.store(false, Ordering::Release);
             fence.pending.store(true, Ordering::Release);
-            let _ = self
-                .db
-                .authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
+            let _ = db.authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
         } else if !normalized {
-            fence.fail_closed(self.db);
+            fence.fail_closed(db);
         } else {
             fence.pending.store(pending.unwrap(), Ordering::Release);
             if !fence.startup_deferred {
-                let scoped = fence.scopes_allow_writes(self.db).unwrap_or(false);
+                let scoped = fence.scopes_allow_writes(db).unwrap_or(false);
                 fence.scoped.store(scoped, Ordering::Release);
             }
-            let _ = fence.install(self.db);
+            let _ = fence.install(db);
         }
         fence.writing.store(false, Ordering::Release);
     }
@@ -592,15 +598,16 @@ impl Drop for Writer<'_> {
 
 pub(super) fn write_fresh<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
 ) -> Result<Writer<'a>, String> {
-    Writer::begin(storage, db, has_pending(db)?)
+    let pending = has_pending(db)?;
+    Writer::begin(storage, db, pending)
 }
 
 #[cfg(any(unix, windows))]
 pub(super) fn write_prepared<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     confirmed: &super::intent::Prepared,
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
@@ -611,7 +618,7 @@ pub(super) fn write_prepared<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_audio_prepared<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     confirmed: &super::audio::intent::Prepared,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
     check: &impl Fn() -> bool,
@@ -624,20 +631,21 @@ pub(super) fn write_audio_prepared<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_audio_reconfirmation<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     review: &super::audio::intent::reconfirmation::Review,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
     lease.validate_active()?;
     review.verify(storage, db, check)?;
-    Writer::begin(storage, db, has_pending(db)?)
+    let pending = has_pending(db)?;
+    Writer::begin(storage, db, pending)
 }
 
 #[cfg(any(unix, windows))]
 pub(super) fn write_audio_renewal<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     review: &super::audio::intent::removal::renewal::Review,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
     check: &impl Fn() -> bool,
@@ -650,7 +658,7 @@ pub(super) fn write_audio_renewal<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_audio_removal<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     receipt: &super::audio::intent::removal::Receipt,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
     check: &impl Fn() -> bool,
@@ -664,7 +672,7 @@ pub(super) fn write_audio_removal<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_model_prepared<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     confirmed: &super::models::intent::Prepared,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
 ) -> Result<Writer<'a>, String> {
@@ -676,7 +684,7 @@ pub(super) fn write_model_prepared<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_model_reconfirmation<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     review: &super::models::intent::removal::renewal::Review,
     confirmed: &super::models::intent::removal::Receipt,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
@@ -698,7 +706,7 @@ pub(super) fn write_model_reconfirmation<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_model_removal<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     confirmed: &super::models::intent::removal::Receipt,
     lease: &crate::analysis_worker::data_maintenance::DataMaintenanceLease,
 ) -> Result<Writer<'a>, String> {
@@ -718,7 +726,7 @@ pub(super) fn write_model_removal<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_removal<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     confirmed: &super::removal::Receipt,
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {
@@ -729,7 +737,7 @@ pub(super) fn write_removal<'a>(
 #[cfg(any(unix, windows))]
 pub(super) fn write_completion<'a>(
     storage: &'a Storage,
-    db: &'a Connection,
+    db: &'a mut Connection,
     confirmed: &super::completion::Receipt,
     check: &impl Fn() -> bool,
 ) -> Result<Writer<'a>, String> {

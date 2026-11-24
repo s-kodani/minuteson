@@ -196,7 +196,7 @@ fn copy_checked(
             digest.update(&buffer[..count]);
             output.write_all(&buffer[..count]).map_err(err)?;
         }
-        if read != size || format!("{:x}", digest.finalize()) != hash {
+        if read != size || mon_core::hash::sha256_output_hex(digest.finalize()) != hash {
             return Err("復元ファイルの内容が保存記録と一致しません".into());
         }
         source.verify()?;

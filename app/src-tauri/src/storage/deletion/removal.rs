@@ -24,7 +24,7 @@ fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
     }
 }
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn manifest_hash(manifest: &Manifest) -> Result<String, String> {
     Ok(hash(
@@ -63,7 +63,7 @@ impl Reviewed {
         include_unregistered: bool,
         check: &impl Fn() -> bool,
     ) -> Result<Self, String> {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         prepared.verify_saved(&db, check)?;
         prepared.verify_locked(storage, &db, check)?;
         let capture = if prepared.manifest().directory_scope() {
@@ -103,7 +103,7 @@ fn plan_hash(manifest: &Manifest, policy: &Policy) -> Result<String, String> {
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(digest.finalize()))
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -319,7 +319,7 @@ impl Receipt {
         storage: &Storage,
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         preflight(storage, &db, self, check)
     }
     pub(super) fn processed_paths(&self) -> usize {
@@ -547,7 +547,7 @@ pub(super) fn verify_reservation_names(
     Ok(())
 }
 pub(super) fn is_database_files(storage: &Storage, operation: &str) -> Result<bool, String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     db.query_row("SELECT json_extract(progress_json,'$.version')=4 FROM maintenance_operations WHERE id=?1 AND kind='delete_meeting'", params![operation], |r|r.get::<_, Option<bool>>(0)).map(|v|v.unwrap_or(false)).map_err(|e|e.to_string())
 }
 pub(super) fn read(
@@ -555,7 +555,7 @@ pub(super) fn read(
     operation: &str,
     check: &impl Fn() -> bool,
 ) -> Result<Receipt, String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     storage.managed_anchor.verify()?;
     Receipt::load(&db, operation, check)
 }
@@ -569,7 +569,7 @@ pub(super) fn start(
     if confirmed.manifest() != &reviewed.manifest || confirmed.scope() != &reviewed.scope {
         return Err("削除可能範囲の確認対象が一致しません".into());
     }
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     confirmed.verify_saved(&db, check)?;
     confirmed.verify_locked(storage, &db, check)?;
     let progress = Progress {
@@ -600,15 +600,16 @@ pub(super) fn start(
             return Err("削除用予約名が既に存在します".into());
         }
     }
-    let _writer = super::fence::write_prepared(storage, &db, confirmed, check)?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let writer = super::fence::write_prepared(storage, &mut db, confirmed, check)?;
+    let conn = writer.connection();
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     confirmed.verify_saved(&tx, check)?;
     cancel(check)?;
     if tx.execute("UPDATE maintenance_operations SET state='installing',progress_json=?2,updated_at=max(updated_at,?3) WHERE id=?1 AND state='prepared' AND progress_json='{\"filePhase\":\"notStarted\"}'",params![confirmed.operation(),progress.encode()?,now_ms()?]).map_err(|e|e.to_string())?!=1 { return Err("削除開始の確認状態が変更されています".into()); }
     cancel(check)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Receipt::load(&db, confirmed.operation(), check)
+    Receipt::load(conn, confirmed.operation(), check)
 }
 
 fn parent(storage: &Storage, manifest: &Manifest, path: &str) -> Result<Option<Directory>, String> {
@@ -994,12 +995,12 @@ fn verify_unlocked(
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
     if receipt.manifest.directory_scope() {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         return verify_directory(storage, &db, receipt, check);
     }
     let p = &receipt.confirmed;
     let roots = {
-        let db = crate::operation_observation::lock(&storage.connection)?;
+        let mut db = crate::operation_observation::lock(&storage.connection)?;
         receipt.verify_saved(&db, check)?;
         if super::fence::other_pending(&db, Some(p.operation()))? {
             return Err("別の保守操作があります".into());
@@ -1033,7 +1034,7 @@ fn verify_unlocked(
         )?
     };
     compare_census(storage, receipt, current)?;
-    let db = crate::operation_observation::lock(&storage.connection)?;
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
     receipt.verify_saved(&db, check)
 }
 fn save_unlocked(
@@ -1042,9 +1043,10 @@ fn save_unlocked(
     next: Progress,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let db = crate::operation_observation::lock(&storage.connection)?;
-    let _writer = super::fence::write_removal(storage, &db, receipt, check)?;
-    receipt.save(storage, &db, next, check)
+    let mut db = crate::operation_observation::lock(&storage.connection)?;
+    let writer = super::fence::write_removal(storage, &mut db, receipt, check)?;
+    let conn = writer.connection();
+    receipt.save(storage, conn, next, check)
 }
 pub(super) fn run(
     storage: &Storage,

@@ -14,7 +14,7 @@ fn contradictory_frame_size_hints_allow_verified_audio_and_saved_playback() {
     bytes[12..15].copy_from_slice(&[0xff, 0xff, 0xff]);
     bytes[15..18].copy_from_slice(&[0, 0, 1]);
     std::fs::write(&path, &bytes).unwrap();
-    let hash = format!("{:x}", Sha256::digest(&bytes));
+    let hash = mon_core::hash::sha256_hex(&bytes);
 
     // Reproduce the reported rejection with the unmodified decoder input.
     let raw = MediaSourceStream::new(
@@ -83,7 +83,7 @@ fn contradictory_frame_size_hints_do_not_hide_audio_corruption() {
             _ => unreachable!(),
         }
         std::fs::write(&path, &broken).unwrap();
-        let hash = format!("{:x}", Sha256::digest(&broken));
+        let hash = mon_core::hash::sha256_hex(&broken);
         assert!(
             VerifiedAudio::open(File::open(&path).unwrap(), broken.len() as u64, &hash).is_err(),
             "accepted {defect}"
@@ -117,7 +117,7 @@ fn missing_and_duplicated_flac_frames_are_classified_without_accepting_them() {
         let error = verify_source_classified(
             &mut File::open(&path).unwrap(),
             damaged.len() as u64,
-            &format!("{:x}", Sha256::digest(&damaged)),
+            &mon_core::hash::sha256_hex(&damaged),
             &mut input,
             0,
             saved.frames,
@@ -212,7 +212,7 @@ fn canonical_verifier_rejects_valid_flac_from_another_source_and_trailing_data()
     let mut forged = VerifiedAudio::open(
         File::open(&raw).unwrap(),
         bytes.len() as u64,
-        &format!("{:x}", Sha256::digest(&bytes)),
+        &mon_core::hash::sha256_hex(&bytes),
     )
     .unwrap();
     assert!(verify_source(
@@ -279,7 +279,7 @@ fn source(root: &Path, rate: u32, channels: u32, frames: usize) -> (VerifiedAudi
         VerifiedAudio::open(
             File::open(path).unwrap(),
             bytes.len() as u64,
-            &format!("{:x}", Sha256::digest(&bytes)),
+            &mon_core::hash::sha256_hex(&bytes),
         )
         .unwrap(),
         samples,
@@ -290,7 +290,7 @@ fn read(path: &Path) -> Result<VerifiedAudio, String> {
     VerifiedAudio::open(
         File::open(path).unwrap(),
         bytes.len() as u64,
-        &format!("{:x}", Sha256::digest(&bytes)),
+        &mon_core::hash::sha256_hex(&bytes),
     )
 }
 fn assert_samples(audio: &mut VerifiedAudio, start: usize, count: usize, expected: &[f32]) {
@@ -337,7 +337,7 @@ fn flac_round_trip_preserves_all_stereo_samples_and_random_access_across_blocks(
     assert_eq!(saved.size, std::fs::metadata(&path).unwrap().len());
     assert_eq!(
         saved.sha256,
-        format!("{:x}", Sha256::digest(std::fs::read(&path).unwrap()))
+        mon_core::hash::sha256_hex(std::fs::read(&path).unwrap())
     );
     let mut output = read(&path).unwrap();
     for (start, count) in [

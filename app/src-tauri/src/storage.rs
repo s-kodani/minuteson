@@ -173,8 +173,12 @@ pub struct Storage {
 }
 
 #[cfg(test)]
-pub(crate) fn with_test_database<T>(storage: &Storage, action: impl FnOnce(&Connection) -> T) -> T {
-    action(&storage.connection.lock().unwrap())
+pub(crate) fn with_test_database<T>(
+    storage: &Storage,
+    action: impl FnOnce(&mut Connection) -> T,
+) -> T {
+    let mut db = storage.connection.lock().unwrap();
+    action(&mut db)
 }
 
 impl Storage {
@@ -631,7 +635,7 @@ impl Storage {
                 "削除記録の属先を確認できません。元のデータを保持しています: {error}"
             ));
         }
-        let deletion_fence = deletion::fence::Fence::open(&connection)?;
+        let deletion_fence = deletion::fence::Fence::open(&mut connection)?;
         let mut scratch = None;
         let mut scratch_startup_error = None;
         if !deletion_fence.blocked()
@@ -1150,7 +1154,7 @@ fn canonical_schema_sql() -> &'static str {
 
 fn schema_checksum() -> &'static str {
     static CHECKSUM: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CHECKSUM.get_or_init(|| format!("{:x}", Sha256::digest(canonical_schema_sql().as_bytes())))
+    CHECKSUM.get_or_init(|| mon_core::hash::sha256_hex(canonical_schema_sql().as_bytes()))
 }
 
 pub(crate) fn verify_database_schema(connection: &Connection) -> Result<(), Box<dyn Error>> {
@@ -1172,7 +1176,7 @@ fn hash_file(path: &Path) -> Result<(i64, String), String> {
             .ok_or("ファイルが大きすぎます")?;
         hasher.update(&buffer[..count]);
     }
-    Ok((size, format!("{:x}", hasher.finalize())))
+    Ok((size, mon_core::hash::sha256_output_hex(hasher.finalize())))
 }
 
 fn now_ms() -> Result<i64, String> {

@@ -318,7 +318,9 @@ fn trial_recipe_at(
                 report(count);
             }
             source.verify()?;
-            if count != expected_size || format!("{:x}", digest.finalize()) != expected_hash {
+            if count != expected_size
+                || mon_core::hash::sha256_output_hex(digest.finalize()) != expected_hash
+            {
                 return Err("元素材SHAが不一致です".into());
             }
             Ok(())

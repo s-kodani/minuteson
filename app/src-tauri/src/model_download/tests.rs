@@ -13,7 +13,7 @@ mod archives;
 const BIN: &[u8] = b"not-an-executable";
 const MODEL: &[u8] = b"not-a-real-model";
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 // Deliberately minimal USTAR fixture builder; no extracted fixture is run.
 fn tar(entries: &[(&str, &[u8], u8)]) -> Vec<u8> {

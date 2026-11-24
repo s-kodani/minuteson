@@ -96,7 +96,11 @@ fn rehash(db: &Connection, batch: &str) {
     }
     db.execute(
         "UPDATE restore_batches SET mapping_hash=?1,mapping_count=?2 WHERE batch_id=?3",
-        params![format!("{:x}", hash.finalize()), count, batch],
+        params![
+            mon_core::hash::sha256_output_hex(hash.finalize()),
+            count,
+            batch
+        ],
     )
     .unwrap();
 }

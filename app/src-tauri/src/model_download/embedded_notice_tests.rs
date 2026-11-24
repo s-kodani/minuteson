@@ -23,7 +23,7 @@ fn fixture(lightweight: bool) -> (Recipe, Vec<(String, Vec<u8>)>) {
         if file.role != Role::Notice {
             let bytes = format!("synthetic payload: {}", file.relative_path).into_bytes();
             file.expected_size = Some(bytes.len() as u64);
-            file.expected_hash = Some(format!("{:x}", Sha256::digest(&bytes)));
+            file.expected_hash = Some(mon_core::hash::sha256_hex(&bytes));
             // Exercise staging only; archive expansion has independent tests.
             source.archive = None;
             source.url = format!("https://fixture.invalid/{}", file.relative_path);
@@ -37,7 +37,7 @@ fn fixture(lightweight: bool) -> (Recipe, Vec<(String, Vec<u8>)>) {
             relative_path: "bin/fixture-worker".into(),
             role: Role::Executable,
             expected_size: Some(bin.len() as u64),
-            expected_hash: Some(format!("{:x}", Sha256::digest(&bin))),
+            expected_hash: Some(mon_core::hash::sha256_hex(&bin)),
         },
     );
     recipe.sources.insert(

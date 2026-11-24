@@ -300,7 +300,10 @@ fn fingerprints(
             let mut hash = Sha256::new();
             hash.update(b"mon/portable-deleted-audio/v1\0");
             hash.update(name.as_bytes());
-            hash.update(serde_json::to_vec(&statement.column_names()).map_err(|e| e.to_string())?);
+            hash.update(
+                serde_json::to_vec(&statement.column_names().collect::<Vec<_>>())
+                    .map_err(|e| e.to_string())?,
+            );
             let mut rows = statement.query([meeting]).map_err(|e| e.to_string())?;
             let mut count = 0;
             while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -342,7 +345,7 @@ fn fingerprints(
             Ok(TableProof {
                 name: name.to_string(),
                 rows: count,
-                sha256: format!("{:x}", hash.finalize()),
+                sha256: mon_core::hash::sha256_output_hex(hash.finalize()),
             })
         })
         .collect()

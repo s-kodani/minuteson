@@ -4,8 +4,8 @@ use super::{PcmFormat, VerifiedAudio};
 use flacenc::component::{BitRepr, Stream, StreamInfo};
 use flacenc::error::Verify;
 use flacenc::source::{Fill, FrameBuf};
-use md5::{Digest, Md5};
-use sha2::Sha256;
+use md5::{Digest as Md5Digest, Md5};
+use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -407,7 +407,7 @@ impl FlacAudio {
                 stream: None,
                 next_frame: 0,
             },
-            format!("{:x}", sha.finalize()),
+            mon_core::hash::sha256_output_hex(sha.finalize()),
         ))
     }
 
@@ -951,7 +951,7 @@ fn encode_segment_inner(
         }
         hash.update(&buffer[..count]);
     }
-    let sha256 = format!("{:x}", hash.finalize());
+    let sha256 = mon_core::hash::sha256_output_hex(hash.finalize());
     let size = temporary.metadata().map_err(|e| e.to_string())?.len();
     if verify {
         verify_source(temporary, size, &sha256, source, first, frames, cancelled)?;

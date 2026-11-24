@@ -78,7 +78,7 @@ pub(crate) fn content_hash(markdown: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(b"mon-minutes-markdown-v1\0");
     hash.update(markdown.as_bytes());
-    format!("{:x}", hash.finalize())
+    mon_core::hash::sha256_output_hex(hash.finalize())
 }
 
 pub(crate) fn validate_text(markdown: &str) -> Result<(), String> {
