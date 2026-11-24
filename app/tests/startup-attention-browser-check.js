@@ -157,6 +157,7 @@ async (page, capturePath = path => path) => {
   for (const phase of ["ready", "blocked"]) {
     await page.goto(`http://127.0.0.1:1420/?fixture=transition-${phase}`);
     await page.getByRole("main", { name: "起動確認", exact: true }).waitFor();
+    await page.waitForFunction(() => window.startupFixture?.calls.some(({ command }) => command === "get_startup_report"));
     const center = await page.locator(".startup-loading-group:visible").evaluate(element => {
       const bounds = element.getBoundingClientRect();
       return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2, width: innerWidth, height: innerHeight };
@@ -167,14 +168,16 @@ async (page, capturePath = path => path) => {
       "normal pending startup showed the diagnostic page");
     check(await page.getByRole("main", { name: "通常画面", exact: true }).count() === 0,
       "workspace mounted before confirmed admission");
+    await page.evaluate(() => window.startupFixture.completeStartup());
     if (phase === "ready") await page.getByRole("main", { name: "通常画面", exact: true }).waitFor();
     else { await quit().waitFor(); await noWorkspace(); }
     check(await page.getByRole("progressbar", { name:"起動処理中", exact:true }).count() === 0, "startup progress remained after ready/blocked settled");
-    const settled = (await commands()).length;
+    const settled = await commands();
+    check(settled.filter(command => command === "get_startup_report").length >= 2,
+      "startup did not reread the pending report");
     await page.clock.runFor(450);
-    check((await commands()).length === settled && settled >= 2,
-      "startup did not reread pending memory or kept polling a settled result");
-    check((await commands()).every(c => ["get_startup_report", "get_startup_reset_state"].includes(c)), "pending startup invoked storage work");
+    check((await commands()).length === settled.length, "startup kept polling a settled report");
+    check(settled.every(c => ["get_startup_report", "get_startup_reset_state"].includes(c)), "pending startup invoked storage work");
   }
   results.push("pending startup reads memory until ready/blocked, then stops; normal startup needs no confirmation");
 

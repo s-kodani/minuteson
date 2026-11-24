@@ -109,6 +109,9 @@ if (variant === "ready-salvage-edit") {
   ]);
   createRoot(document.getElementById("root")).render(createElement(StartupGate, null,
     createElement("main", { "aria-label": "通常画面" }, "通常画面")));
-  setTimeout(() => { f.report = variant === "transition-ready"
-    ? { schemaVersion: 1, phase: "ready", failure: null } : structuredClone(report); }, 600);
+  // The driver releases the transition after checking the pending screen.
+  f.completeStartup = () => {
+    f.report = variant === "transition-ready"
+      ? { schemaVersion: 1, phase: "ready", failure: null } : structuredClone(report);
+  };
 } else await import("../src/bootstrap.tsx");
