@@ -342,7 +342,9 @@ pub(super) fn place(
     validate_tree(&destination, &intent.recipe, cancelled)?;
     // This is the single full-byte inspection in the placement stage.
     let report = model_inspection::inspect(destination.path(), cancelled)?;
-    let manifest_hash = mon_core::hash::sha256_hex(serde_json::to_vec(&intent.recipe.manifest).map_err(|e| e.to_string())?);
+    let manifest_hash = mon_core::hash::sha256_hex(
+        serde_json::to_vec(&intent.recipe.manifest).map_err(|e| e.to_string())?,
+    );
     if report.manifest != intent.recipe.manifest
         || report.manifest_hash != manifest_hash
         || report.review_hash != expected_review_hash

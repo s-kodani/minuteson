@@ -137,7 +137,9 @@ fn stream(
         if !status.success() {
             return Err(mon_native::transport::HTTP_FAILURE.into());
         }
-        if count != expected_size || mon_core::hash::sha256_output_hex(hash.finalize()) != expected_hash {
+        if count != expected_size
+            || mon_core::hash::sha256_output_hex(hash.finalize()) != expected_hash
+        {
             return Err("取得ファイルの容量・SHA-256が確認内容と一致しません".into());
         }
         output.sync_all().map_err(|e| e.to_string())?;

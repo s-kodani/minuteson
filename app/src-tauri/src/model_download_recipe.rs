@@ -78,7 +78,9 @@ impl RecipeExt for Recipe {
     fn ensure_placement_record_fits(&self) -> Result<(), String> {
         // Expected metadata for a byte-size budget ONLY, never observed file
         // evidence, a stored intent, a download receipt or execution permission.
-        let manifest_hash = mon_core::hash::sha256_hex(serde_json::to_vec(&self.manifest).map_err(|e| e.to_string())?);
+        let manifest_hash = mon_core::hash::sha256_hex(
+            serde_json::to_vec(&self.manifest).map_err(|e| e.to_string())?,
+        );
         let files = self
             .manifest
             .files

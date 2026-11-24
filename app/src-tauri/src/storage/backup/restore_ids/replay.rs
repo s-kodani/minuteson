@@ -123,7 +123,8 @@ impl<'a> RestoreIds<'a> {
                 )
                 .map_err(|e| e.to_string())?;
         }
-        if count != saved.count || mon_core::hash::sha256_output_hex(hash.finalize()) != saved.hash {
+        if count != saved.count || mon_core::hash::sha256_output_hex(hash.finalize()) != saved.hash
+        {
             return Err("保存済み復元ID対応の件数・SHAが一致しません".into());
         }
         check_cancelled(cancelled)
@@ -340,7 +341,8 @@ impl<'a> RestoreIds<'a> {
             count = count.checked_add(1).ok_or("復元ID件数が範囲外です")?;
             Ok(())
         })?;
-        if count != saved.count || mon_core::hash::sha256_output_hex(hash.finalize()) != saved.hash {
+        if count != saved.count || mon_core::hash::sha256_output_hex(hash.finalize()) != saved.hash
+        {
             return Err("保存済み復元IDに余分または欠損した対応があります".into());
         }
         Ok(())
@@ -379,7 +381,8 @@ impl<'a> RestoreIds<'a> {
             hash.update(serde_json::to_vec(&map).map_err(|e| e.to_string())?);
             hash.update(b"\n");
         }
-        if count != saved.count || mon_core::hash::sha256_output_hex(hash.finalize()) != saved.hash {
+        if count != saved.count || mon_core::hash::sha256_output_hex(hash.finalize()) != saved.hash
+        {
             return Err("確認中に保存済み復元ID対応が変更されています".into());
         }
         Ok(())

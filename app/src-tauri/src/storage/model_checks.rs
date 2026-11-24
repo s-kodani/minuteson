@@ -43,8 +43,7 @@ pub(super) fn read(db: &Connection, id: &str) -> Result<Option<SavedCheck>, Stri
             if json.len() > 65536
                 || finished.is_none()
                 || error.is_some()
-                || hash.as_deref()
-                    != Some(mon_core::hash::sha256_hex(json.as_bytes()).as_str())
+                || hash.as_deref() != Some(mon_core::hash::sha256_hex(json.as_bytes()).as_str())
             {
                 return Err("互換性の成功証拠・SHAが一致しません".into());
             }

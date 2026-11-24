@@ -67,7 +67,8 @@ pub(super) fn extract(
             .ok_or("アーカイブ容量が一致しません")?;
         digest.update(&buffer[..n]);
     }
-    if size != archive.expected_size || mon_core::hash::sha256_output_hex(digest.finalize()) != archive.expected_hash
+    if size != archive.expected_size
+        || mon_core::hash::sha256_output_hex(digest.finalize()) != archive.expected_hash
     {
         return Err("アーカイブの容量・SHAが一致しません".into());
     }

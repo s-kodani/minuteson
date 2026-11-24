@@ -171,7 +171,9 @@ impl Settings {
     }
 }
 fn digest<T: Serialize>(value: &T) -> Result<String, String> {
-    Ok(mon_core::hash::sha256_hex(serde_json::to_vec(value).map_err(|e| e.to_string())?))
+    Ok(mon_core::hash::sha256_hex(
+        serde_json::to_vec(value).map_err(|e| e.to_string())?,
+    ))
 }
 fn hash(value: &str) -> bool {
     value.len() == 64

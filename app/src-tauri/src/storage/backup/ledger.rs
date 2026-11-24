@@ -31,7 +31,9 @@ pub(super) struct SavedBatch {
 }
 
 pub(super) fn fingerprint(source: &archive::VerifiedArchive) -> Result<String, String> {
-    Ok(mon_core::hash::sha256_hex(serde_json::to_vec(&source.manifest).map_err(|e| e.to_string())?))
+    Ok(mon_core::hash::sha256_hex(
+        serde_json::to_vec(&source.manifest).map_err(|e| e.to_string())?,
+    ))
 }
 
 pub(super) fn saved_batch(

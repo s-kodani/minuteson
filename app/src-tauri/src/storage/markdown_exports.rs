@@ -144,8 +144,7 @@ impl Storage {
                 .map_err(|e| e.to_string())?;
             let (_, _, document) = checked_source(&tx, request)?;
             if document != prepared.document
-                || mon_core::hash::sha256_hex(document.markdown.as_bytes())
-                    != prepared.output_hash
+                || mon_core::hash::sha256_hex(document.markdown.as_bytes()) != prepared.output_hash
             {
                 return Err("保存ダイアログ表示中に議事録内容が変わりました".into());
             }

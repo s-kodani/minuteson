@@ -404,7 +404,7 @@ impl Storage {
             // The only source includes potentially rescuable later audio: retain
             // it byte-for-byte and materialize only the independently proven prefix.
             let key = mon_core::hash::sha256_hex(
-                    format!("{}:{}:{}", session.id, tip.frames, source.pcm_hash).as_bytes()
+                format!("{}:{}:{}", session.id, tip.frames, source.pcm_hash).as_bytes(),
             );
             let leaf = format!("wav-recovery-{key}");
             let output = if base.join(&leaf).exists() {

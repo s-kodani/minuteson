@@ -590,7 +590,11 @@ fn inspect_recorded_pcm(
     {
         return Err("録音音声が検証中に変更されました".into());
     }
-    Ok((format, size, mon_core::hash::sha256_output_hex(hasher.finalize())))
+    Ok((
+        format,
+        size,
+        mon_core::hash::sha256_output_hex(hasher.finalize()),
+    ))
 }
 
 fn decode_sample(bytes: &[u8], format: &PcmFormat) -> Result<f32, String> {
@@ -665,11 +669,7 @@ pub(crate) mod tests {
         let mut file = tempfile::tempfile().unwrap();
         file.write_all(bytes).unwrap();
         file.rewind().unwrap();
-        VerifiedAudio::open(
-            file,
-            bytes.len() as u64,
-            &mon_core::hash::sha256_hex(bytes),
-        )
+        VerifiedAudio::open(file, bytes.len() as u64, &mon_core::hash::sha256_hex(bytes))
     }
 
     #[test]

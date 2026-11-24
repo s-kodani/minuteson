@@ -176,7 +176,9 @@ pub(super) fn deletion_v1_schema_hash(
         return Err("削除v1の既知の取り込みガードではありません".into());
     }
     trigger.3 = trigger.3.replacen(NEW_PREDICATE, OLD_PREDICATE, 1);
-    Ok(mon_core::hash::sha256_hex(serde_json::to_vec(&legacy).map_err(|e| e.to_string())?))
+    Ok(mon_core::hash::sha256_hex(
+        serde_json::to_vec(&legacy).map_err(|e| e.to_string())?,
+    ))
 }
 
 pub(super) fn verify_startup(db: &Connection) -> Result<(), Box<dyn Error>> {

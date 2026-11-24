@@ -734,7 +734,11 @@ fn snapshot_revalidates_draft_ids_even_when_modified_json_has_matching_hash() {
             .unwrap()
             .execute(
                 "UPDATE working_drafts SET payload_json = ?1,content_hash = ?2 WHERE id = ?3",
-                params![serialized, mon_core::hash::sha256_output_hex(hash.finalize()), draft.id],
+                params![
+                    serialized,
+                    mon_core::hash::sha256_output_hex(hash.finalize()),
+                    draft.id
+                ],
             )
             .unwrap();
         assert!(

@@ -373,8 +373,7 @@ pub(crate) fn copy_package(
     let mut sources = Vec::new();
     if let Some(bytes) = manifest_bytes {
         check(cancelled)?;
-        if bytes.len() > 65_536 || mon_core::hash::sha256_hex(bytes) != expected.manifest_hash
-        {
+        if bytes.len() > 65_536 || mon_core::hash::sha256_hex(bytes) != expected.manifest_hash {
             return Err("確認した画面の構成とコピーするmanifestが一致しません".into());
         }
         let (mut output, parent) = destination.create(model_inspection::MANIFEST)?;
@@ -421,7 +420,9 @@ pub(crate) fn copy_package(
             output.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
             digest.update(&buffer[..n]);
         }
-        if size.is_some_and(|s| s != count) || mon_core::hash::sha256_output_hex(digest.finalize()) != hash {
+        if size.is_some_and(|s| s != count)
+            || mon_core::hash::sha256_output_hex(digest.finalize()) != hash
+        {
             return Err("コピー中に確認済みモデルの容量・SHAが変わりました".into());
         }
         input.verify()?;

@@ -174,7 +174,9 @@ fn transfer(
     diagnostics
         .complete_http(status.unwrap().success())
         .map_err(str::to_owned)?;
-    if count != expected_size || mon_core::hash::sha256_output_hex(digest.finalize()) != expected_hash {
+    if count != expected_size
+        || mon_core::hash::sha256_output_hex(digest.finalize()) != expected_hash
+    {
         return Err("ダウンロード本文の容量・SHA-256が一致しません".into());
     }
     Ok(())

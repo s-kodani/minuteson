@@ -259,7 +259,8 @@ pub(super) fn inspect(
         missing,
         diagnostics_known: diagnostics_known && origin.is_some() && claimed_frames == Some(frames),
         pcm_hash: mon_core::hash::sha256_output_hex(pcm_hash.finalize()),
-        full_hash: (claimed_frames == Some(frames)).then(|| mon_core::hash::sha256_output_hex(full_hash.finalize())),
+        full_hash: (claimed_frames == Some(frames))
+            .then(|| mon_core::hash::sha256_output_hex(full_hash.finalize())),
         fault,
     })
 }

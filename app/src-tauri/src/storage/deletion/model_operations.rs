@@ -624,7 +624,8 @@ impl Prepared {
     ) -> Result<Receipt, String> {
         active(lease, check)?;
         if let Target::Fresh(s) = &self.target {
-            let hash = mon_core::hash::sha256_hex(serde_json::to_vec(s).map_err(|e| e.to_string())?);
+            let hash =
+                mon_core::hash::sha256_hex(serde_json::to_vec(s).map_err(|e| e.to_string())?);
             progress("fixing_model_delete_scope");
             let saved = intent::prepare_mode(
                 storage,

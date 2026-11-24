@@ -19,8 +19,7 @@ pub(super) fn load(db: &Connection) -> Result<(Option<String>, i64), String> {
         return Ok((None, 0));
     };
     let json = json.ok_or("前回のマイク設定が容量上限を超えています")?;
-    if mon_core::hash::sha256_hex(json.as_bytes()) != hash
-        || !(1..=MAX_VERSION).contains(&version)
+    if mon_core::hash::sha256_hex(json.as_bytes()) != hash || !(1..=MAX_VERSION).contains(&version)
     {
         return Err("前回のマイク設定の整合性を確認できません".into());
     }
