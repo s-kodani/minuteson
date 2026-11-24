@@ -15,7 +15,7 @@ pub(crate) fn split_fixture(root: &Path) -> (Storage, String, AsrConfig) {
     let caf = caf_fixture(16000, 1, 3, 32, 4, &pcm);
     std::fs::write(path, &caf).unwrap();
     let db = storage.connection.lock().unwrap();
-    db.execute("UPDATE file_assets SET size_bytes=?1,content_hash=?2 WHERE id=(SELECT file_asset_id FROM audio_chunks WHERE id='chunk')",params![caf.len() as i64,format!("{:x}",Sha256::digest(&caf))]).unwrap();
+    db.execute("UPDATE file_assets SET size_bytes=?1,content_hash=?2 WHERE id=(SELECT file_asset_id FROM audio_chunks WHERE id='chunk')",params![caf.len() as i64,mon_core::hash::sha256_hex(&caf)]).unwrap();
     db.execute_batch("UPDATE audio_chunks SET end_us=20000000; UPDATE meetings SET duration_us=20000000; UPDATE recording_sessions SET duration_us=20000000;").unwrap();
     for (id, first, end, start, last) in [
         ("left", 0, 80000, 0, 5000000),

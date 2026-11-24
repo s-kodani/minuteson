@@ -130,7 +130,7 @@ pub(in crate::storage) fn admitted_history(
     admission.verify()?;
     let saved = admission.control()?;
     if saved.len() > MAX_BYTES
-        || format!("{:x}", Sha256::digest(saved.as_bytes())) != admission.control_hash()
+        || mon_core::hash::sha256_hex(saved.as_bytes()) != admission.control_hash()
     {
         return Err("承認済み制御記録の容量・SHAが一致しません".into());
     }

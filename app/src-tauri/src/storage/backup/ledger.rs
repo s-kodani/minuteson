@@ -31,9 +31,8 @@ pub(super) struct SavedBatch {
 }
 
 pub(super) fn fingerprint(source: &archive::VerifiedArchive) -> Result<String, String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&source.manifest).map_err(|e| e.to_string())?)
+    Ok(mon_core::hash::sha256_hex(
+        serde_json::to_vec(&source.manifest).map_err(|e| e.to_string())?,
     ))
 }
 
@@ -186,7 +185,7 @@ pub(in crate::storage) fn verify_restored_audio_origin(
         hash.update(b"\n");
     }
     if count != expected_count
-        || format!("{:x}", hash.finalize()) != expected_hash
+        || mon_core::hash::sha256_output_hex(hash.finalize()) != expected_hash
         || found != (true, true)
     {
         return Err("音声利用不可の復元ID台帳・件数・SHAが一致しません".into());
@@ -270,7 +269,7 @@ impl<'a, 'b> BatchPlan<'a, 'b> {
         Ok(Self {
             ids,
             fingerprint,
-            hash: format!("{:x}", hash.finalize()),
+            hash: mon_core::hash::sha256_output_hex(hash.finalize()),
             count,
         })
     }

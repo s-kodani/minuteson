@@ -12,10 +12,7 @@ fn guided_model_preflight_needs_no_manifest_and_preserves_existing_manifest() {
         assert_eq!(report.manifest, manifest);
         assert_eq!(
             report.manifest_hash,
-            format!(
-                "{:x}",
-                Sha256::digest(serde_json::to_vec(&manifest).unwrap())
-            )
+            mon_core::hash::sha256_hex(serde_json::to_vec(&manifest).unwrap())
         );
         assert!(!dir.path().join(MANIFEST).exists());
         assert!(!report.ready && !report.installed);
@@ -83,7 +80,7 @@ fn fixture(engine: Engine) -> (tempfile::TempDir, PackageManifest) {
                 relative_path: name.into(),
                 role,
                 expected_size: Some(bytes.len() as u64),
-                expected_hash: Some(format!("{:x}", Sha256::digest(bytes.as_bytes()))),
+                expected_hash: Some(mon_core::hash::sha256_hex(bytes.as_bytes())),
             }
         })
         .collect();
@@ -126,7 +123,7 @@ fn all_engine_packages_are_read_only_hashed_and_never_ready_or_executed() {
         assert_eq!(report.manifest, manifest);
         assert_eq!(
             report.manifest_hash,
-            format!("{:x}", Sha256::digest(&manifest_bytes))
+            mon_core::hash::sha256_hex(&manifest_bytes)
         );
         assert_eq!(report.files.len(), manifest.files.len());
         assert_eq!(

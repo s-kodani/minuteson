@@ -29,7 +29,7 @@ impl MarkdownExportRequest {
         let mut hash = Sha256::new();
         hash.update(b"mon-plain-markdown-export-v1\0");
         hash.update(serde_json::to_vec(self).map_err(|e| e.to_string())?);
-        Ok(format!("{:x}", hash.finalize()))
+        Ok(mon_core::hash::sha256_output_hex(hash.finalize()))
     }
 }
 pub(crate) struct PreparedMarkdownExport {
@@ -95,7 +95,7 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(|e| e.to_string())?;
         let (title, created, document) = checked_source(&tx, &request)?;
-        let output_hash = format!("{:x}", Sha256::digest(document.markdown.as_bytes()));
+        let output_hash = mon_core::hash::sha256_hex(document.markdown.as_bytes());
         Ok(PreparedMarkdownExport {
             request,
             document,
@@ -144,8 +144,7 @@ impl Storage {
                 .map_err(|e| e.to_string())?;
             let (_, _, document) = checked_source(&tx, request)?;
             if document != prepared.document
-                || format!("{:x}", Sha256::digest(document.markdown.as_bytes()))
-                    != prepared.output_hash
+                || mon_core::hash::sha256_hex(document.markdown.as_bytes()) != prepared.output_hash
             {
                 return Err("保存ダイアログ表示中に議事録内容が変わりました".into());
             }

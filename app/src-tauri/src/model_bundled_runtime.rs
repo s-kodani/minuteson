@@ -305,7 +305,7 @@ impl Bundle {
             }
         }
         if count != self.index.archive.bytes
-            || format!("{:x}", digest.finalize()) != self.index.archive.sha256
+            || mon_core::hash::sha256_output_hex(digest.finalize()) != self.index.archive.sha256
         {
             return Err("同梱素材の容量・SHAが一致しません".into());
         }

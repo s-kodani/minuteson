@@ -2,6 +2,7 @@
 //! these policies never grant access from an untrusted path or saved receipt.
 pub mod archive;
 pub mod durability;
+mod hash;
 pub mod identity;
 pub mod process;
 pub mod transport;

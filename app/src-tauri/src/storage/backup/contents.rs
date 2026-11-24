@@ -235,7 +235,7 @@ impl Contents {
             let manifest = Asset {
                 id: id(),
                 size: bytes.len() as i64,
-                hash: format!("{:x}", Sha256::digest(bytes)),
+                hash: mon_core::hash::sha256_hex(bytes),
             };
             let key = id();
             let path = stage.join("assets").join(&key);
@@ -889,7 +889,7 @@ mod tests {
             .to_vec();
         bytes.resize(80 + audio.frames as usize * 2, 0);
         audio.asset.size = bytes.len() as i64;
-        audio.asset.hash = format!("{:x}", Sha256::digest(&bytes));
+        audio.asset.hash = mon_core::hash::sha256_hex(&bytes);
         let asset = audio.asset.clone();
         let path = stage.path().join("reserved.wav");
         std::fs::write(&path, &bytes).unwrap();
@@ -944,7 +944,7 @@ mod tests {
         let audio = contents.meetings[0].audio.as_mut().unwrap();
         audio.frames = frames as i64;
         audio.asset.size = size as i64;
-        audio.asset.hash = format!("{:x}", Sha256::digest(&bytes));
+        audio.asset.hash = mon_core::hash::sha256_hex(&bytes);
         let asset = audio.asset.clone();
         let assets = BTreeMap::from([(asset.id.clone(), path.clone())]);
         contents.verify_audio(&assets, &|| false).unwrap();
