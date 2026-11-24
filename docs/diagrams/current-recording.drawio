@@ -8,7 +8,7 @@
         <mxCell id="title" value="&lt;b&gt;録音データの取得・時刻補正・統合&lt;/b&gt;" vertex="1" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacing=0;fontFamily=Helvetica;fontColor=#243247;fontSize=23;">
           <mxGeometry x="30" y="15" width="1100" height="35" as="geometry" />
         </mxCell>
-        <mxCell id="scope" value="現行の通常録音／2026-11-22の作業ツリーに照合。5秒テスト・旧CAF救出・取り込みは対象外。" vertex="1" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacing=0;fontFamily=Helvetica;fontColor=#243247;fontSize=15;">
+        <mxCell id="scope" value="現行の通常録音／2026-11-24のPR #143に照合。5秒テスト・旧CAF救出・取り込みは対象外。" vertex="1" parent="1" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=middle;spacing=0;fontFamily=Helvetica;fontColor=#243247;fontSize=15;">
           <mxGeometry x="30" y="55" width="1100" height="30" as="geometry" />
         </mxCell>
         <mxCell id="windows" value="Windows  |  C++録音ヘルパー" vertex="1" parent="1" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;swimlane;horizontal=1;startSize=38;collapsible=0;fontStyle=1;fillColor=#eaf3ff;strokeColor=#52799f;swimlaneFillColor=#ffffff;">
@@ -65,16 +65,16 @@
         <mxCell id="storage" value="保存I/OはOS別実装  |  共通の保存契約・WAV形式・確定記録" vertex="1" parent="1" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;swimlane;horizontal=1;startSize=38;collapsible=0;fontStyle=1;fillColor=#f2eafa;strokeColor=#8866aa;swimlaneFillColor=#ffffff;">
           <mxGeometry x="20" y="885" width="1100" height="160" as="geometry" />
         </mxCell>
-        <mxCell id="w-io" value="&lt;b&gt;Windows  |  LiveWav保存ワーカー&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:14px&quot;&gt;約4秒のPCM → 書込み・FlushFileBuffers・読戻し照合&lt;br&gt;SHA-256付き確定記録 → 確定位置公開 → 保存予約解放&lt;/span&gt;" vertex="1" parent="storage" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;rounded=1;arcSize=10;fillColor=#f2eafa;strokeColor=#8866aa;">
+        <mxCell id="w-io" value="&lt;b&gt;Windows  |  LiveWav保存ワーカー&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:14px&quot;&gt;約4秒のPCM → 書込量確認・FlushFileBuffers&lt;br&gt;SHA-256付き確定記録 → 確定位置公開 → 保存予約解放&lt;/span&gt;" vertex="1" parent="storage" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;rounded=1;arcSize=10;fillColor=#f2eafa;strokeColor=#8866aa;">
           <mxGeometry x="20" y="55" width="500" height="85" as="geometry" />
         </mxCell>
         <mxCell id="m-io" value="&lt;b&gt;macOS  |  LiveWavSession + RawSegmentCommitWorker&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:14px&quot;&gt;約4秒のPCM → 書込み・fsync・読戻し照合&lt;br&gt;SHA-256付き確定記録 → 確定位置公開 → 保存予約解放&lt;/span&gt;" vertex="1" parent="storage" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;rounded=1;arcSize=10;fillColor=#f2eafa;strokeColor=#8866aa;">
           <mxGeometry x="580" y="55" width="500" height="85" as="geometry" />
         </mxCell>
-        <mxCell id="files" value="&lt;b&gt;単一のrecording.wav ＋ 保存範囲を検証する管理ファイル&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:14px&quot;&gt;single-wav-owner.json：ファイル実体の所有情報&lt;br&gt;wav-*.json：連番・範囲・PCMハッシュ／single-wav.json：検証済み末尾&lt;br&gt;共通Rust：WAVヘッダー・確定記録の形式と連続性を検査&lt;/span&gt;" vertex="1" parent="1" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;rounded=1;arcSize=10;fillColor=#f2eafa;strokeColor=#8866aa;shape=note;size=20;">
+        <mxCell id="files" value="&lt;b&gt;単一のrecording.wav ＋ 保存範囲を検証する管理ファイル&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:14px&quot;&gt;single-wav-owner.json：ファイル実体の所有情報&lt;br&gt;wav-*.json：連番・範囲・PCMハッシュ／single-wav.json：同期済み末尾&lt;br&gt;共通Rust：WAVヘッダー・確定記録の形式と連続性を検査&lt;/span&gt;" vertex="1" parent="1" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;rounded=1;arcSize=10;fillColor=#f2eafa;strokeColor=#8866aa;shape=note;size=20;">
           <mxGeometry x="220" y="1090" width="700" height="105" as="geometry" />
         </mxCell>
-        <mxCell id="publish" value="&lt;b&gt;アプリ本体で検証・会議へ登録&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:14px&quot;&gt;ヘルパー終了後に同じWAVを採用&lt;br&gt;停止後の全体再ミックスは行わない&lt;/span&gt;" vertex="1" parent="1" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;rounded=1;arcSize=10;fillColor=#e7f5eb;strokeColor=#4c8b62;">
+        <mxCell id="publish" value="&lt;b&gt;アプリ本体でPCMのSHA-256を照合&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:14px&quot;&gt;公開範囲を読取り・チェックポイントと比較&lt;br&gt;終了後に同じWAVを採用・会議へ登録&lt;/span&gt;" vertex="1" parent="1" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;rounded=1;arcSize=10;fillColor=#e7f5eb;strokeColor=#4c8b62;">
           <mxGeometry x="400" y="1235" width="340" height="80" as="geometry" />
         </mxCell>
         <mxCell id="reconnect-contract" value="&lt;b&gt;再接続の共通契約（取得・制御の実装はOS別）&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:14px&quot;&gt;切断した入力の停止・末尾排出・実終了を確認 → 再取得&lt;br&gt;他方の正常入力を維持／古い接続のコールバックは不採用&lt;/span&gt;" vertex="1" parent="1" style="whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=16;fontColor=#243247;strokeWidth=1.5;spacing=8;rounded=1;arcSize=10;fillColor=#fff8dd;strokeColor=#baa35b;">

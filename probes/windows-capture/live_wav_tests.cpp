@@ -385,7 +385,7 @@ int main(){try{
   valid_qpc_frontier_correction_remains_in_diagnostics();
   stop_waits_for_cancelled_preparation_cleanup();
   explicit_stop_bounds_bluetooth_cleanup_and_preserves_tail();
-  for(const auto* stage:{"pcm_write","pcm_sync","pcm_verify","receipt","tip","close"})failed_checkpoint_preserves_prior_prefix(stage);
+  for(const auto* stage:{"pcm_write","pcm_sync","receipt","tip","close"})failed_checkpoint_preserves_prior_prefix(stage);
   std::cout<<"live WAV native: exact PCM, single file, reservations, checkpoint failures, 100-second gated storage, closure and test WAV passed\n";
   return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

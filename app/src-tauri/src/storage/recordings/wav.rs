@@ -775,6 +775,28 @@ mod tests {
     }
 
     #[test]
+    fn published_pcm_mismatch_is_rejected_before_the_app_cursor_advances() {
+        let (_root, _storage, session, base) = fixture(true);
+        let path = base.join("recording.wav");
+        {
+            let mut file = File::options().write(true).open(&path).unwrap();
+            file.seek(SeekFrom::Start(80)).unwrap();
+            file.write_all(&[0xff]).unwrap();
+            file.sync_all().unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        let mut cursor = Cursor::default();
+        let error = cursor
+            .read(&base, &session.id, &|| false)
+            .err()
+            .expect("corrupted published PCM was accepted");
+        assert_eq!(error, "録音WAVの確定PCMが変更されています");
+        assert_eq!(cursor.frames, 0);
+        assert_eq!(cursor.sequence, 0);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
     fn canonical_live_wav_is_adopted_once_without_rewriting_pcm() {
         let (_root, s, session, base) = fixture(true);
         let before = std::fs::read(base.join("recording.wav")).unwrap();
