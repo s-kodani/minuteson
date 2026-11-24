@@ -309,7 +309,7 @@ fn ancestral_full_meeting_purge(long: bool) {
     );
     assert_eq!(fixed(&f, &parent), parent_record);
     assert_eq!(fixed(&f, &op), child_record);
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     for id in [&parent, &op] {
         assert_eq!(
             db.query_row(
@@ -351,7 +351,7 @@ fn ancestral_full_meeting_purge(long: bool) {
 
 // Canonical corruption of a private fixture. No product permission is relaxed.
 fn rewrite_audit(f: &Fixture, op: &str, mutate: impl FnOnce(&mut Record, &mut audio::Snapshot)) {
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let receipt = Receipt::load(&db, op, &crate::test_support::never_cancelled).unwrap();
     let mut reference = receipt.progress.confirmation.clone().unwrap();
     let mut budget = receipt.saved.header.snapshot_bytes;
@@ -403,7 +403,7 @@ fn rewrite_audit(f: &Fixture, op: &str, mutate: impl FnOnce(&mut Record, &mut au
         true,
     )
     .unwrap();
-    f.storage.deletion_fence.arm(&db).unwrap();
+    f.storage.deletion_fence.arm(&mut db).unwrap();
 }
 
 #[test]
@@ -713,7 +713,7 @@ fn real_lease_and_unchanged_database_metadata_are_required() {
     .is_err());
     assert!(f.path.exists());
     let lease = owner();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     db.authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
         .unwrap();
     db.execute(
@@ -721,7 +721,7 @@ fn real_lease_and_unchanged_database_metadata_are_required() {
         [&f.meeting],
     )
     .unwrap();
-    f.storage.deletion_fence.arm(&db).unwrap();
+    f.storage.deletion_fence.arm(&mut db).unwrap();
     drop(db);
     assert!(accept(
         &f.storage,
@@ -1180,7 +1180,7 @@ fn long_audio_forged_canonical_reserved_membership_is_not_a_typed_receipt() {
             .entries
             .sort_by(|a, b| a.path.cmp(&b.path));
         snapshot.historical_audio.insert(path);
-        let db = f.storage.connection.lock().unwrap();
+        let mut db = f.storage.connection.lock().unwrap();
         snapshot.validate(&db).unwrap();
         assert!(crate::storage::deletion::intent::validate_observations(
             &db,
@@ -1398,18 +1398,19 @@ fn corrupted_audit_and_orphan_audit_cannot_unfence_startup() {
         .unwrap();
         let audit = saved.audits[0].clone();
         if orphan {
-            let db = f.storage.connection.lock().unwrap();
-            let _writer = crate::storage::deletion::fence::write_audio_removal(
+            let mut db = f.storage.connection.lock().unwrap();
+            let writer = crate::storage::deletion::fence::write_audio_removal(
                 &f.storage,
-                &db,
+                &mut db,
                 &saved,
                 &lease,
                 &crate::test_support::never_cancelled,
             )
             .unwrap();
+            let conn = writer.connection();
             let copied = uuid::Uuid::new_v4().to_string();
-            db.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) SELECT ?2,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at FROM maintenance_operations WHERE id=?1",params![audit,copied]).unwrap();
-            drop(_writer);
+            conn.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at) SELECT ?2,kind,state,target_manifest_json,target_hash,consent_at,progress_json,created_at,updated_at FROM maintenance_operations WHERE id=?1",params![audit,copied]).unwrap();
+            drop(writer);
             drop(db);
             let f = f.reopen();
             assert!(crate::storage::deletion::startup::contains(
@@ -1589,17 +1590,18 @@ fn clock_rollback_and_new_reservation_collision_do_not_publish_audit() {
         let op = started(&f, &lease);
         std::fs::write(&f.path, b"NEW").unwrap();
         if future {
-            let db = f.storage.connection.lock().unwrap();
+            let mut db = f.storage.connection.lock().unwrap();
             let saved = Receipt::load(&db, &op, &crate::test_support::never_cancelled).unwrap();
-            let _writer = crate::storage::deletion::fence::write_audio_removal(
+            let writer = crate::storage::deletion::fence::write_audio_removal(
                 &f.storage,
-                &db,
+                &mut db,
                 &saved,
                 &lease,
                 &crate::test_support::never_cancelled,
             )
             .unwrap();
-            db.execute(
+            let conn = writer.connection();
+            conn.execute(
                 "UPDATE maintenance_operations SET updated_at=?2 WHERE id=?1",
                 params![op, crate::storage::now_ms().unwrap() + 86_400_000],
             )
@@ -1648,7 +1650,7 @@ fn canonical_oversized_chain_is_rejected_before_reading_its_snapshot_chunks() {
         &crate::test_support::never_cancelled,
     )
     .unwrap();
-    let db = f.storage.connection.lock().unwrap();
+    let mut db = f.storage.connection.lock().unwrap();
     let reference = saved.progress.confirmation.as_ref().unwrap();
     let mut budget = saved.saved.header.snapshot_bytes;
     let (mut record, _, _) = read_record(
@@ -1688,7 +1690,7 @@ fn canonical_oversized_chain_is_rejected_before_reading_its_snapshot_chunks() {
         true,
     )
     .unwrap();
-    f.storage.deletion_fence.arm(&db).unwrap();
+    f.storage.deletion_fence.arm(&mut db).unwrap();
     assert!(
         Receipt::load(&db, &op, &crate::test_support::never_cancelled)
             .unwrap_err()

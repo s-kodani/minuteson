@@ -674,19 +674,18 @@ fn restore_journal_drop_after_successful_publication_never_unlinks_committed_ass
     let batch = Uuid::new_v4().to_string();
     let ids = ids(&f, &batch);
     let sealed = sealed(&f, &ids);
-    let db = f.target.connection.lock().unwrap();
-    let install = recorded(&f, &db, &sealed, &ids);
+    let mut db = f.target.connection.lock().unwrap();
+    let guard = AppendOnly::new(&mut db).unwrap();
+    let db = guard.connection();
+    let install = recorded(&f, db, &sealed, &ids);
     let merge = sealed
-        .global_merge(&db, &crate::test_support::never_cancelled)
+        .global_merge(db, &crate::test_support::never_cancelled)
         .unwrap();
-    let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate).unwrap();
+    let mut tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate).unwrap();
     tx.execute_batch("PRAGMA defer_foreign_keys=ON;").unwrap();
-    append(
-        &tx,
-        sealed.connection(),
-        &crate::test_support::never_cancelled,
-    )
-    .unwrap();
+    guard
+        .append(sealed.connection(), &crate::test_support::never_cancelled)
+        .unwrap();
     merge
         .apply(&mut tx, &crate::test_support::never_cancelled)
         .unwrap();
@@ -731,9 +730,13 @@ fn restore_journal_cleanup_commit_failure_retains_markers_and_replays_missing_pa
     let sealed = sealed(&f, &ids);
     let root = f.target.root.clone();
     {
-        let db = f.target.connection.lock().unwrap();
+        let mut db = f.target.connection.lock().unwrap();
+        let interrupt_commit = Arc::new(AtomicBool::new(false));
+        let interrupt = interrupt_commit.clone();
+        db.commit_hook(Some(move || interrupt.load(Ordering::Relaxed)))
+            .unwrap();
         let install = recorded(&f, &db, &sealed, &ids);
-        db.commit_hook(Some(|| true)).unwrap();
+        interrupt_commit.store(true, Ordering::Relaxed);
         drop(install);
         assert_eq!(state(&db, &batch), "installing");
         assert!(paths(&sealed, &root).iter().all(|p| !p.exists()));
@@ -764,7 +767,7 @@ fn restore_journal_recovered_operations_are_not_rewalked_and_are_not_portable() 
     let ids = ids(&f, &batch);
     let sealed = sealed(&f, &ids);
     {
-        let db = f.target.connection.lock().unwrap();
+        let mut db = f.target.connection.lock().unwrap();
         drop(recorded(&f, &db, &sealed, &ids));
         assert_eq!(state(&db, &batch), "recovered");
         db.authorizer(Some(|context: AuthContext<'_>| match context.action {

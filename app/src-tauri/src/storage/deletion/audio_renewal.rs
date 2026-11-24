@@ -339,7 +339,7 @@ impl Review {
     ) -> Result<Self, String> {
         active(lease, check)?;
         let cancelled = || check() || lease.cancelled();
-        let db = storage
+        let mut db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
@@ -371,7 +371,7 @@ impl Review {
         check: &impl Fn() -> bool,
     ) -> Result<(), String> {
         active(lease, check)?;
-        let db = storage
+        let mut db = storage
             .connection
             .lock()
             .map_err(|_| "DBロックを取得できません")?;
@@ -414,7 +414,7 @@ fn accept_inner(
         retain_unclassified: true,
     };
     policy_valid(&review.snapshot, &policy)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -501,10 +501,11 @@ fn accept_inner(
             return Err("残り音声削除の新しい予約名が既に存在します".into());
         }
     }
-    let _writer = crate::storage::deletion::fence::write_audio_renewal(
-        storage, &db, review, lease, &cancelled,
+    let writer = crate::storage::deletion::fence::write_audio_renewal(
+        storage, &mut db, review, lease, &cancelled,
     )?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let conn = writer.connection();
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     review.verify(storage, &tx, &cancelled)?;
     let latest: i64 = tx

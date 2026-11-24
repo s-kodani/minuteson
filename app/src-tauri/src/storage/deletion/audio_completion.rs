@@ -328,7 +328,7 @@ fn finish_inner(
     event: &impl Fn(&str),
 ) -> Result<Receipt, String> {
     active(lease, check)?;
-    let db = storage
+    let mut db = storage
         .connection
         .lock()
         .map_err(|_| "DBロックを取得できません")?;
@@ -341,12 +341,13 @@ fn finish_inner(
             return Err("削除済み音声が再出現しています。確認を維持します".into());
         }
         if crate::storage::deletion::startup::contains(&db, operation)? {
-            let _writer = crate::storage::deletion::fence::write_audio_removal(
-                storage, &db, &r, lease, &cancelled,
+            let writer = crate::storage::deletion::fence::write_audio_removal(
+                storage, &mut db, &r, lease, &cancelled,
             )?;
+            let conn = writer.connection();
             active(lease, check)?;
-            r.verify_saved(&db, &cancelled)?;
-            db.execute(
+            r.verify_saved(conn, &cancelled)?;
+            conn.execute(
                 "DELETE FROM temp.mon_deletion_startup_attention WHERE operation_id=?1",
                 params![operation],
             )
@@ -357,10 +358,12 @@ fn finish_inner(
     if !r.files_removed() {
         return Err("音声ファイル処理が完了するまで利用不可を確定しません".into());
     }
-    let _writer =
-        crate::storage::deletion::fence::write_audio_removal(storage, &db, &r, lease, &cancelled)?;
-    super::verify_remaining(storage, &db, &r, &cancelled)?;
-    let tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+    let writer = crate::storage::deletion::fence::write_audio_removal(
+        storage, &mut db, &r, lease, &cancelled,
+    )?;
+    let conn = writer.connection();
+    super::verify_remaining(storage, conn, &r, &cancelled)?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     r.verify_saved(&tx, &cancelled)?;
     r.metadata(storage, &tx, &cancelled)?;
@@ -421,7 +424,7 @@ fn finish_inner(
     tx.commit().map_err(|e| e.to_string())?;
     // The commit wins a racing cancellation. Drop restores the normal fence
     // or the mandatory restart barrier BEFORE any post-commit callback.
-    drop(_writer);
+    drop(writer);
     event("audioCompletionCommitted");
     Ok(done)
 }

@@ -8,6 +8,7 @@ use restore_ids::RestoreIds;
 use rusqlite::config::DbConfig;
 use rusqlite::types::Value;
 use rusqlite::TransactionBehavior;
+use std::sync::{atomic::AtomicBool, Arc};
 
 mod files;
 pub(in crate::storage::backup) mod journal;
@@ -29,70 +30,109 @@ fn schema(db: &Connection) -> Result<Vec<(String, String, String)>, String> {
 }
 
 // Historical immutable children and edit chains cannot be recreated by ordinary
-// worker INSERT order (the worker was running then, and is interrupted now).
-// Suppress INSERT triggers only on this locked connection, not via DROP/DDL.
-// The authorizer disallows all UPDATE/DELETE/DDL/ATTACH while that capability is
-// held. Constraints/FKs remain enabled; no INSERT OR REPLACE/IGNORE is used.
-struct AppendOnly<'a>(&'a Connection);
+// worker INSERT order. Limit the trigger-free phase to portable-table inserts
+// on this locked connection. Constraints and foreign keys stay enabled.
+struct AppendOnly<'a> {
+    db: &'a mut Connection,
+    active: Arc<AtomicBool>,
+}
+
 impl<'a> AppendOnly<'a> {
-    fn begin(db: &'a Connection) -> Result<Self, String> {
+    fn new(db: &'a mut Connection) -> Result<Self, String> {
         if !db
             .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
             .map_err(|e| e.to_string())?
         {
             return Err("保存先DBの制約が無効です".into());
         }
-        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
-            .map_err(|e| e.to_string())?;
-        let guard = Self(db);
-        db.flush_prepared_statement_cache();
-        db.authorizer(Some(|context: AuthContext<'_>| match context.action {
-            AuthAction::Insert { table_name }
-                if context.database_name == Some("main")
-                    && portable::TABLES.contains(&table_name) =>
-            {
-                Authorization::Allow
+        let active = Arc::new(AtomicBool::new(false));
+        let authorizing = active.clone();
+        db.authorizer(Some(move |context: AuthContext<'_>| {
+            if !authorizing.load(Ordering::Relaxed) {
+                return Authorization::Allow;
             }
-            AuthAction::Read { .. }
-            | AuthAction::Select
-            | AuthAction::Function { .. }
-            | AuthAction::Recursive => Authorization::Allow,
-            _ => Authorization::Deny,
+            match context.action {
+                AuthAction::Insert { table_name }
+                    if context.database_name == Some("main")
+                        && portable::TABLES.contains(&table_name) =>
+                {
+                    Authorization::Allow
+                }
+                AuthAction::Read { .. }
+                | AuthAction::Select
+                | AuthAction::Function { .. }
+                | AuthAction::Recursive
+                | AuthAction::Transaction {
+                    operation: rusqlite::hooks::TransactionOperation::Rollback,
+                } => Authorization::Allow,
+                _ => Authorization::Deny,
+            }
         }))
         .map_err(|e| e.to_string())?;
-        Ok(guard)
+        Ok(Self { db, active })
     }
-    fn finish(self) -> Result<(), String> {
-        self.0
+
+    fn connection(&self) -> &Connection {
+        self.db
+    }
+
+    fn with_portable_inserts<T>(
+        &self,
+        run: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.db
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)
+            .map_err(|e| e.to_string())?;
+        self.db.flush_prepared_statement_cache();
+        self.active.store(true, Ordering::Relaxed);
+        let scope = PortableInserts(self);
+        let result = run(self.db);
+        scope.0.restore_triggers()?;
+        result
+    }
+
+    fn restore_triggers(&self) -> Result<(), String> {
+        if !self.active.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        self.db
             .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
             .map_err(|e| e.to_string())?;
-        self.0
-            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
-            .map_err(|e| e.to_string())
+        self.db.flush_prepared_statement_cache();
+        self.active.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn append(&self, source: &Connection, check: &impl Fn() -> bool) -> Result<(), String> {
+        self.with_portable_inserts(|db| append_portable(db, source, check))?;
+        super::super::salvage_schema::append_meetings(self.db, source)
     }
 }
+
+struct PortableInserts<'a, 'db>(&'a AppendOnly<'db>);
+
+impl Drop for PortableInserts<'_, '_> {
+    fn drop(&mut self) {
+        let _ = self.0.restore_triggers();
+    }
+}
+
 impl Drop for AppendOnly<'_> {
     fn drop(&mut self) {
-        // Unwinding and all error branches restore the normal guards too.
-        // If enabling triggers fails, retain the append-only authorizer.
-        if self
-            .0
-            .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, true)
-            .is_ok()
-        {
+        // Retain the restrictive authorizer if restoring triggers fails.
+        if self.restore_triggers().is_ok() {
             let _ = self
-                .0
+                .db
                 .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
         }
     }
 }
 
-pub(in crate::storage::backup) fn append(
-    db: &Connection,
+fn append_portable(
+    target: &Connection,
     source: &Connection,
     check: &impl Fn() -> bool,
 ) -> Result<(), String> {
-    let guard = AppendOnly::begin(db)?;
     for table in portable::tables(source)? {
         check_cancelled(check)?;
         let columns = table
@@ -113,7 +153,7 @@ pub(in crate::storage::backup) fn append(
             ))
             .map_err(|e| e.to_string())?;
         let mut rows = query.query([]).map_err(|e| e.to_string())?;
-        let mut insert = db
+        let mut insert = target
             .prepare(&format!(
                 "INSERT INTO \"{}\"({columns}) VALUES({})",
                 table.name,
@@ -131,8 +171,7 @@ pub(in crate::storage::backup) fn append(
                 .map_err(|e| e.to_string())?;
         }
     }
-    guard.finish()?;
-    super::super::salvage_schema::append_meetings(db, source)
+    Ok(())
 }
 
 impl Storage {
@@ -247,9 +286,11 @@ impl Storage {
         // Persist stable IDs before installing files. Per-path ownership records
         // must be durable outside the later atomic publication transaction.
         tx.commit().map_err(|e| e.to_string())?;
-        let journal = journal::Journal::begin(&db, &self.root, sealed, ids)?;
+        let append = AppendOnly::new(&mut db)?;
+        let db = append.connection();
+        let journal = journal::Journal::begin(db, &self.root, sealed, ids)?;
         let mut installed = Installed::prepare_recorded(&self.root, sealed, journal, check)?;
-        let mut tx = rusqlite::Transaction::new_unchecked(&db, TransactionBehavior::Immediate)
+        let mut tx = rusqlite::Transaction::new_unchecked(db, TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
         let operation = (|| {
             if plan.reserve(&mut tx, check)? != BatchState::Prepared {
@@ -258,7 +299,7 @@ impl Storage {
             ids.check_publication_destination(&tx, sealed.connection(), check)?;
             tx.execute_batch("PRAGMA defer_foreign_keys=ON;")
                 .map_err(|e| e.to_string())?;
-            append(&tx, sealed.connection(), check)?;
+            append.append(sealed.connection(), check)?;
             let vocabulary = merge.apply(&mut tx, check)?;
             portable::validate_scopes(&tx)?;
             ledger::validate_provenance(&tx, check)?;
@@ -273,10 +314,12 @@ impl Storage {
             {
                 return Err("追加復元の参照整合性が不正です".into());
             }
-            if schema(&tx)? != schema(sealed.connection())?
-                || !tx
-                    .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
-                    .map_err(|e| e.to_string())?
+            if schema(&tx)? != schema(sealed.connection())? {
+                return Err("追加復元後のDB定義が一致しません".into());
+            }
+            if !tx
+                .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER)
+                .map_err(|e| e.to_string())?
             {
                 return Err("追加復元後のDB制約が変化しています".into());
             }
@@ -339,7 +382,7 @@ impl Storage {
                     Ok(Some(state)) if state == "published" && db.is_autocommit() => {}
                     Ok(None) if db.is_autocommit() => return Err(error.to_string()),
                     Ok(Some(state)) if state == "prepared" && db.is_autocommit() => {
-                        return Err(error.to_string())
+                        return Err(error.to_string());
                     }
                     _ => {
                         installed.keep();
