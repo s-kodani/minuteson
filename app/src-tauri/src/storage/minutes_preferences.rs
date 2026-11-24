@@ -72,7 +72,7 @@ pub(super) fn validate(payload: &MinutesPreferences) -> Result<(), String> {
 pub(super) fn load(db: &Connection) -> Result<MinutesPreferencesSnapshot, String> {
     let row:Option<(String,String,i64)>=db.query_row("SELECT value_json,content_hash,lock_version FROM app_settings WHERE key='llama_profiles'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|e.to_string())?;
     let (payload, lock_version) = if let Some((text, hash, version)) = row {
-        if text.len() > 32 * 1024 || format!("{:x}", Sha256::digest(text.as_bytes())) != hash {
+        if text.len() > 32 * 1024 || mon_core::hash::sha256_hex(text.as_bytes()) != hash {
             return Err("議事録設定の容量・内容ハッシュが不正です".into());
         }
         let payload = serde_json::from_str(&text).map_err(|e| e.to_string())?;
@@ -120,7 +120,7 @@ impl Storage {
             return Ok(current);
         }
         let text = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-        let hash = format!("{:x}", Sha256::digest(text.as_bytes()));
+        let hash = mon_core::hash::sha256_hex(text.as_bytes());
         let version = expected
             .checked_add(1)
             .ok_or("議事録設定の版番号が範囲外です")?;

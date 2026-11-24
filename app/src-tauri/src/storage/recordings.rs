@@ -1172,7 +1172,7 @@ impl Storage {
         }
         crate::capture_manifest::validate_size(&bytes)?;
         if bytes.len() as i64 != proof.size_bytes
-            || format!("{:x}", Sha256::digest(&bytes)) != proof.hash
+            || mon_core::hash::sha256_hex(&bytes) != proof.hash
         {
             return Err("録音manifestが検証中に変更されました".into());
         }
@@ -1241,7 +1241,7 @@ impl Storage {
             {
                 return Err("録音manifestが検証中に変更されました".into());
             }
-            (bytes.len() as i64, format!("{:x}", Sha256::digest(&bytes)))
+            (bytes.len() as i64, mon_core::hash::sha256_hex(&bytes))
         };
         if size_bytes < if caf.is_some() { 16 } else { 2 } {
             return Err("録音ファイルが短すぎます".into());
@@ -1831,7 +1831,7 @@ pub(in crate::storage) mod tests {
             let mut source = crate::audio::VerifiedAudio::open(
                 File::open(path).unwrap(),
                 bytes.len() as u64,
-                &format!("{:x}", Sha256::digest(&bytes)),
+                &mon_core::hash::sha256_hex(&bytes),
             )
             .unwrap();
             let format = source.format.clone();
@@ -1866,10 +1866,10 @@ pub(in crate::storage) mod tests {
             }
             let name = format!("raw-{lane}-00000001.caf");
             std::fs::write(output.join(&name), &audio).unwrap();
-            let entry = json!({"schemaVersion":2,"ownerId":owner,"lane":lane,"sequence":1,"audioName":name,"sourceFrameStart":0,"frames":track["frames"],"sampleRate":track["sampleRate"],"channels":track["channels"],"captureOriginNanoseconds":9_000_000_000_000_i64+start*1000,"clockSegments":maps,"clockNanoseconds":clocks,"audioBytes":audio.len(),"audioSHA256":format!("{:x}",Sha256::digest(&audio)),"previousEntrySHA256":null});
+            let entry = json!({"schemaVersion":2,"ownerId":owner,"lane":lane,"sequence":1,"audioName":name,"sourceFrameStart":0,"frames":track["frames"],"sampleRate":track["sampleRate"],"channels":track["channels"],"captureOriginNanoseconds":9_000_000_000_000_i64+start*1000,"clockSegments":maps,"clockNanoseconds":clocks,"audioBytes":audio.len(),"audioSHA256":mon_core::hash::sha256_hex(&audio),"previousEntrySHA256":null});
             let bytes = serde_json::to_vec(&entry).unwrap();
             std::fs::write(output.join(format!("raw-{lane}-00000001.json")), &bytes).unwrap();
-            let mut tip = json!({"schemaVersion":2,"ownerId":owner,"lane":lane,"sealedSegments":1,"sealedFrames":track["frames"],"lastEntrySHA256":format!("{:x}",Sha256::digest(&bytes)),"producerClosed":true});
+            let mut tip = json!({"schemaVersion":2,"ownerId":owner,"lane":lane,"sealedSegments":1,"sealedFrames":track["frames"],"lastEntrySHA256":mon_core::hash::sha256_hex(&bytes),"producerClosed":true});
             std::fs::write(
                 output.join(format!("raw-{lane}.json")),
                 serde_json::to_vec(&tip).unwrap(),
@@ -2226,7 +2226,7 @@ pub(in crate::storage) mod tests {
         for (relative, size, hash) in proofs {
             let bytes = std::fs::read(storage.root.join(relative)).unwrap();
             assert_eq!(size, bytes.len() as i64);
-            assert_eq!(hash, format!("{:x}", Sha256::digest(&bytes)));
+            assert_eq!(hash, mon_core::hash::sha256_hex(&bytes));
         }
     }
 

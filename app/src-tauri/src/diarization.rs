@@ -202,10 +202,8 @@ struct ResultFile {
 pub(crate) fn manual_assignment_hash(
     lineages: &std::collections::BTreeSet<String>,
 ) -> Result<String, String> {
-    use sha2::{Digest, Sha256};
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(lineages).map_err(|e| e.to_string())?)
+    Ok(mon_core::hash::sha256_hex(
+        serde_json::to_vec(lineages).map_err(|e| e.to_string())?,
     ))
 }
 

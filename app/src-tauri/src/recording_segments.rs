@@ -278,7 +278,7 @@ fn cancelled(check: &impl Fn() -> bool) -> Result<(), String> {
     }
 }
 fn hash(value: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(value))
+    mon_core::hash::sha256_hex(value)
 }
 fn valid_hash(value: &str) -> bool {
     value.len() == 64

@@ -22,7 +22,7 @@ pulldown-cmark = { version = "0.13.6", default-features = false }
 base64 = "0.22"
 tauri = { version = "2", features = [] }
 rusqlite = { version = "0.40", features = ["bundled", "backup", "hooks"] }
-sha2 = "0.10"
+sha2 = "0.11"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 tempfile = "3"

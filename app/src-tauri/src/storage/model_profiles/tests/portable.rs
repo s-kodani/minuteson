@@ -28,10 +28,8 @@ fn portable_catalog_retains_download_origin_without_availability_or_current_host
         actual.expected_size_checked = true;
         actual.expected_hash_checked = true;
     }
-    record.source_manifest_hash = format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&record.manifest).unwrap())
-    );
+    record.source_manifest_hash =
+        mon_core::hash::sha256_hex(serde_json::to_vec(&record.manifest).unwrap());
     record.review_hash = crate::model_inspection::review_hash(
         &record.manifest,
         &record.source_manifest_hash,
@@ -52,7 +50,7 @@ fn portable_catalog_retains_download_origin_without_availability_or_current_host
                     crate::model_download_recipe::ArchiveMember {
                         format: "tar".into(),
                         expected_size: 4096,
-                        expected_hash: format!("{:x}", Sha256::digest(b"synthetic origin archive")),
+                        expected_hash: mon_core::hash::sha256_hex(b"synthetic origin archive"),
                         member_path: "bin/whisper-cli".into(),
                     }
                 }),
@@ -89,10 +87,8 @@ fn portable_catalog_retains_download_origin_without_availability_or_current_host
     let mut other_recipe = recipe.clone();
     other_recipe.manifest = historical.manifest.clone();
     historical.download = Some(other_recipe.origin(&Uuid::new_v4().to_string()).unwrap());
-    historical.source_manifest_hash = format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&historical.manifest).unwrap())
-    );
+    historical.source_manifest_hash =
+        mon_core::hash::sha256_hex(serde_json::to_vec(&historical.manifest).unwrap());
     historical.review_hash = crate::model_inspection::review_hash(
         &historical.manifest,
         &historical.source_manifest_hash,

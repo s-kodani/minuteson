@@ -88,7 +88,7 @@ fn verify_swift_fixture(
     for &(lane, first, count, expected) in samples {
         let path = output.join(format!("{lane}.caf"));
         let bytes = std::fs::read(&path).unwrap();
-        let hash = format!("{:x}", sha2::Sha256::digest(&bytes));
+        let hash = mon_core::hash::sha256_hex(&bytes);
         let mut audio = crate::audio::VerifiedAudio::open(
             std::fs::File::open(path).unwrap(),
             bytes.len() as u64,

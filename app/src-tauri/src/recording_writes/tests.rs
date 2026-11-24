@@ -30,7 +30,7 @@ fn append(path: &Path, prefix: RawPrefix, frames: u64) -> RawPrefix {
         "clockSegments":[{"sourceFrameStart":0,"sourceFrameEnd":frames,"timelineStartUs":0,
             "timelineEndUs":duration / 1000,"mappingJson":"{\"schema_version\":1,\"method\":\"linear\"}"}],
         "clockNanoseconds":[{"startNanoseconds":start,"endNanoseconds":start+duration}],
-        "audioBytes":audio.len(),"audioSHA256":format!("{:x}",Sha256::digest(&audio)),
+        "audioBytes":audio.len(),"audioSHA256":mon_core::hash::sha256_hex(&audio),
         "previousEntrySHA256":prefix.hash()})).unwrap();
     let next = prefix.prepare(&receipt).unwrap().next;
     write(

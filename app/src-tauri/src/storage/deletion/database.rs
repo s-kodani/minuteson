@@ -107,7 +107,7 @@ pub(super) fn audio_tables(
     .collect()
 }
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn uuid(s: &str) -> bool {
     uuid::Uuid::parse_str(s).is_ok_and(|id| id.to_string() == s)
@@ -341,7 +341,7 @@ fn table(
     Ok(Table {
         name: name.into(),
         rows: count,
-        sha256: format!("{:x}", hash.finalize()),
+        sha256: mon_core::hash::sha256_output_hex(hash.finalize()),
     })
 }
 
@@ -418,7 +418,7 @@ pub(super) fn detached_maintenance_hash(
         }
     }
     cancel(check)?;
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(hash.finalize()))
 }
 
 // Check every declared incoming FK, not just today's common rows. A valid
