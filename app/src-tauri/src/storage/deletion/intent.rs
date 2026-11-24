@@ -16,7 +16,7 @@ const INITIAL_PROGRESS: &str = "{\"filePhase\":\"notStarted\"}";
 const KEPT_PROGRESS: &str = "{\"filePhase\":\"notStarted\",\"kept\":true}";
 
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn valid_hash(s: &str) -> bool {
     s.len() == 64
@@ -77,7 +77,7 @@ fn paths_hash(rows: &[PathRow]) -> Result<String, String> {
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(bytes);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(digest.finalize()))
 }
 impl PathRow {
     fn from_entry(entry: &Entry) -> Result<Self, String> {

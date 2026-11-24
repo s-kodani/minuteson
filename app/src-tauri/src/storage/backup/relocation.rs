@@ -142,7 +142,7 @@ fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     }
 }
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn directory(path: &Path) -> Result<Metadata, String> {
     let m = crate::native_fs::symlink_metadata(path).map_err(|e| e.to_string())?;
@@ -225,7 +225,7 @@ fn table(db: &Connection, name: &str, cancelled: &impl Fn() -> bool) -> Result<T
     Ok(Table {
         name: name.into(),
         rows: hashes.len(),
-        hash: format!("{:x}", hash.finalize()),
+        hash: mon_core::hash::sha256_output_hex(hash.finalize()),
     })
 }
 fn census(db: &Connection, cancelled: &impl Fn() -> bool) -> Result<(String, Vec<Table>), String> {

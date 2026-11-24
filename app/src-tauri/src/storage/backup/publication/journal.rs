@@ -84,7 +84,7 @@ pub(super) struct Journal {
     id: String,
 }
 fn hash(text: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(text))
+    mon_core::hash::sha256_hex(text)
 }
 fn uuid(text: &str) -> bool {
     Uuid::parse_str(text).is_ok_and(|id| id.to_string() == text)
@@ -108,7 +108,7 @@ fn target_hash(targets: &[Target]) -> Result<String, String> {
         hash.update(serde_json::to_vec(target).map_err(|e| e.to_string())?);
         hash.update(b"\n");
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(hash.finalize()))
 }
 fn targets(sealed: &SealedWorkspace) -> Result<Vec<Target>, String> {
     let mut targets = vec![Target {
@@ -644,12 +644,9 @@ pub(in crate::storage::backup) fn recovery_evidence(
         .map_err(|e| e.to_string())?;
     let mut intent = Sha256::new();
     intent.update(serde_json::to_vec(&(id, batch, json, sha, created)).map_err(|e| e.to_string())?);
-    let status = format!(
-        "{:x}",
-        Sha256::digest(
-            serde_json::to_vec(&(&state, &error, progress, updated, &batch_state))
-                .map_err(|e| e.to_string())?
-        )
+    let status = mon_core::hash::sha256_hex(
+        serde_json::to_vec(&(&state, &error, progress, updated, &batch_state))
+            .map_err(|e| e.to_string())?,
     );
     let mut paths = std::collections::BTreeSet::new();
     let mut count = 0;
@@ -698,7 +695,7 @@ pub(in crate::storage::backup) fn recovery_evidence(
             retained: false,
         },
         state,
-        intent_hash: format!("{:x}", intent.finalize()),
+        intent_hash: mon_core::hash::sha256_output_hex(intent.finalize()),
         status_hash: status,
         live: batch_state == "published",
     })

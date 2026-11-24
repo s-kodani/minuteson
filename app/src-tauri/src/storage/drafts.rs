@@ -554,7 +554,7 @@ pub(super) fn draft_hash(serialized: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"mon-transcript-draft-v1");
     hasher.update(serialized.as_bytes());
-    format!("{:x}", hasher.finalize())
+    mon_core::hash::sha256_output_hex(hasher.finalize())
 }
 
 #[cfg(test)]

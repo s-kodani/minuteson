@@ -287,7 +287,7 @@ impl Snapshot {
         let encoded = serde_json::to_vec(&(
             1,
             "audio_only",
-            format!("{:x}", Sha256::digest(manifest)),
+            mon_core::hash::sha256_hex(manifest),
             &self.scope,
             &self.records,
             self.entries()?,
@@ -297,7 +297,7 @@ impl Snapshot {
         if encoded.len() > 64 * 1024 * 1024 {
             return Err("音声だけの削除の検査証拠が容量上限を超えています".into());
         }
-        Ok(format!("{:x}", Sha256::digest(encoded)))
+        Ok(mon_core::hash::sha256_hex(encoded))
     }
 }
 fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
@@ -594,7 +594,7 @@ impl Census {
         if encoded.len() > 64 * 1024 * 1024 {
             return Err("音声だけの削除の検査証拠が容量上限を超えています".into());
         }
-        Ok(format!("{:x}", Sha256::digest(encoded)))
+        Ok(mon_core::hash::sha256_hex(encoded))
     }
     pub(crate) fn verify(
         &self,

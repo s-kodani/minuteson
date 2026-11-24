@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 const MAX_GENERATIONS: u32 = 32;
 const AUDIT_PROGRESS: &str = "{\"confirmationRecorded\":true}";
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 fn cancel(check: &impl Fn() -> bool) -> Result<(), String> {
     if check() {

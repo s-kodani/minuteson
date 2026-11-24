@@ -480,7 +480,7 @@ pub(super) fn working_hash(
     let mut hash = Sha256::new();
     hash.update(b"mon-minutes-working-input-v1");
     hash.update(serialized);
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(mon_core::hash::sha256_output_hex(hash.finalize()))
 }
 
 pub(super) fn lineage_map(

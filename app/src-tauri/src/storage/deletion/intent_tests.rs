@@ -651,7 +651,7 @@ fn deletion_intent_read_validates_manifest_fields_even_when_outer_hash_is_recomp
             params![
                 f.operation,
                 altered,
-                format!("{:x}", Sha256::digest(altered.as_bytes()))
+                mon_core::hash::sha256_hex(altered.as_bytes())
             ],
         )
         .unwrap();

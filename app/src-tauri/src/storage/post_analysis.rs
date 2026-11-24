@@ -133,7 +133,7 @@ fn record_fixed(
     }
     let now = now_ms()?;
     tx.execute("INSERT INTO post_analysis_intents(id,meeting_id,analysis_id,current_analysis_id,working_hash,spec_json,spec_hash,phase,completion_operation_id,matching_operation_id,error_message,created_at,updated_at) VALUES(?1,?2,?3,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11) ON CONFLICT(analysis_id) DO NOTHING",
-        params![Uuid::new_v4().to_string(),meeting,analysis,working_hash,text,format!("{:x}",Sha256::digest(text.as_bytes())),phase,Uuid::new_v4().to_string(),Uuid::new_v4().to_string(),error,now]).map_err(|e|e.to_string())?;
+        params![Uuid::new_v4().to_string(),meeting,analysis,working_hash,text,mon_core::hash::sha256_hex(text.as_bytes()),phase,Uuid::new_v4().to_string(),Uuid::new_v4().to_string(),error,now]).map_err(|e|e.to_string())?;
     Ok(())
 }
 pub(super) fn record_after_completion(
@@ -159,7 +159,7 @@ fn read(db: &Connection, id: &str) -> Result<Intent, String> {
     db.query_row("SELECT id,meeting_id,analysis_id,current_analysis_id,working_hash,phase,completion_operation_id,matching_operation_id,completion_job_id,matching_job_id,spec_json,spec_hash FROM post_analysis_intents WHERE id=?1",[id],|r|{
         let text:String=r.get(10)?;let hash:String=r.get(11)?;
         let decode=|e:String|rusqlite::Error::FromSqlConversionFailure(10,rusqlite::types::Type::Text,Box::new(std::io::Error::other(e)));
-        if text.len()>1024*1024 || format!("{:x}",Sha256::digest(text.as_bytes()))!=hash {return Err(decode("後続処理の固定条件が変更されています".into()));}
+        if text.len()>1024*1024 || mon_core::hash::sha256_hex(text.as_bytes())!=hash {return Err(decode("後続処理の固定条件が変更されています".into()));}
         let policy:Policy=serde_json::from_str(&text).map_err(|e|decode(e.to_string()))?;
         if policy.schema_version!=1 || !jobs::valid_hash(&policy.book_hash) {return Err(decode("未対応または不正な後続処理形式です".into()));}
         policy.completion.validate().and_then(|_|policy.matching.validate()).map_err(decode)?;

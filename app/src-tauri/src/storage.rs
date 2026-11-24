@@ -1154,7 +1154,7 @@ fn canonical_schema_sql() -> &'static str {
 
 fn schema_checksum() -> &'static str {
     static CHECKSUM: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CHECKSUM.get_or_init(|| format!("{:x}", Sha256::digest(canonical_schema_sql().as_bytes())))
+    CHECKSUM.get_or_init(|| mon_core::hash::sha256_hex(canonical_schema_sql().as_bytes()))
 }
 
 pub(crate) fn verify_database_schema(connection: &Connection) -> Result<(), Box<dyn Error>> {
@@ -1176,7 +1176,7 @@ fn hash_file(path: &Path) -> Result<(i64, String), String> {
             .ok_or("ファイルが大きすぎます")?;
         hasher.update(&buffer[..count]);
     }
-    Ok((size, format!("{:x}", hasher.finalize())))
+    Ok((size, mon_core::hash::sha256_output_hex(hasher.finalize())))
 }
 
 fn now_ms() -> Result<i64, String> {

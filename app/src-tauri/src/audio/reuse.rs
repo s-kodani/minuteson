@@ -199,7 +199,7 @@ mod tests {
             .collect();
         let bytes = crate::audio::tests::caf_fixture(48000, 1, 3, 32, 4, &samples);
         std::fs::write(&path, &bytes).unwrap();
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let hash = mon_core::hash::sha256_hex(&bytes);
         (root, path, bytes, hash)
     }
     fn read(path: &std::path::Path, hash: &str) -> Result<VerifiedAudio, String> {
@@ -281,7 +281,7 @@ mod tests {
     #[ignore = "read-only benchmark of a local FLAC; set MON_AUDIO_BENCH"]
     fn verified_audio_reuse_benchmark() {
         let path = std::path::PathBuf::from(std::env::var("MON_AUDIO_BENCH").unwrap());
-        let hash = format!("{:x}", Sha256::digest(std::fs::read(&path).unwrap()));
+        let hash = mon_core::hash::sha256_hex(std::fs::read(&path).unwrap());
         let scope = Scope::enter().unwrap();
         let start = std::time::Instant::now();
         let mut cold = read(&path, &hash).unwrap();

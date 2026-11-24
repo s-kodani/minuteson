@@ -12,7 +12,7 @@ const INT8: &[u8] = b"synthetic INT8 segmentation";
 const ARCHIVE_URL: &str = "https://fixture.invalid/shared-segmentation.tar";
 
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    mon_core::hash::sha256_hex(bytes)
 }
 
 fn archive() -> Vec<u8> {

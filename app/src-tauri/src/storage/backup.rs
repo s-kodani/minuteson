@@ -549,7 +549,7 @@ fn validate_database_contents(
             check_cancelled(cancelled)?;
             let json: String = row.get(0).map_err(|e| e.to_string())?;
             let expected: String = row.get(1).map_err(|e| e.to_string())?;
-            if format!("{:x}", Sha256::digest(json.as_bytes())) != expected {
+            if mon_core::hash::sha256_hex(json.as_bytes()) != expected {
                 return Err("保存済み設定・処理記録・編集履歴が変更されています".into());
             }
         }
@@ -751,7 +751,7 @@ fn stream_inner(
     if size != expected {
         return Err("管理ファイルのサイズが変更されています".into());
     }
-    Ok((size, format!("{:x}", hash.finalize())))
+    Ok((size, mon_core::hash::sha256_output_hex(hash.finalize())))
 }
 
 fn copy_asset(
