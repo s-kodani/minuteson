@@ -37,7 +37,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, CatalogEntry, Recipe) {
         model_files.push(crate::model_placement::ModelFileIdentity {
             role: file.role,
             size: data.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(&data)),
+            sha256: mon_core::hash::sha256_hex(&data),
         });
     }
     let entry = CatalogEntry {
@@ -77,7 +77,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, CatalogEntry, Recipe) {
     for file in &mut recipe.manifest.files {
         let data = bytes(&file.relative_path);
         file.expected_size = Some(data.len() as u64);
-        file.expected_hash = Some(format!("{:x}", Sha256::digest(data)));
+        file.expected_hash = Some(mon_core::hash::sha256_hex(data));
     }
     recipe.sources = recipe
         .manifest
@@ -145,7 +145,7 @@ fn windows_reused_model_files_keep_pins_hash_checks_and_cancellation() {
     let candidate = &found[0];
     let relative = &candidate.relative;
     let data = bytes(relative);
-    let hash = format!("{:x}", Sha256::digest(&data));
+    let hash = mon_core::hash::sha256_hex(&data);
     let package = models.join(&entry.package_id);
     let path = crate::native_fs::join(&package, relative);
     let mut output = tempfile::tempfile().unwrap();

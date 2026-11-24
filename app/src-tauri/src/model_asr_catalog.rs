@@ -103,7 +103,7 @@ pub(crate) fn fetch(
         output.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
     }
     source.verify()?;
-    if count != size || format!("{:x}", digest.finalize()) != hash {
+    if count != size || mon_core::hash::sha256_output_hex(digest.finalize()) != hash {
         return Err("ASRランタイムの容量・SHAが不正です".into());
     }
     Ok(())

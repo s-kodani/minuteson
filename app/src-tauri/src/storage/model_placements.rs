@@ -9,7 +9,7 @@ fn bytes(record: &PlacementRecord) -> Result<(String, String), String> {
     if json.len() > 65_536 {
         return Err("モデル配置記録が上限を超えています".into());
     }
-    let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+    let hash = mon_core::hash::sha256_hex(json.as_bytes());
     Ok((json, hash))
 }
 
@@ -80,7 +80,7 @@ pub(super) fn load_history(
         return Ok(None);
     };
     if json.len() > 65_536
-        || format!("{:x}", Sha256::digest(json.as_bytes())) != hash
+        || mon_core::hash::sha256_hex(json.as_bytes()) != hash
         || !matches!(source_type.as_str(), "manual_import" | "download")
         || !matches!(
             state.as_str(),

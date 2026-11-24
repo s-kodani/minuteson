@@ -57,7 +57,7 @@ fn ui_preferences_rejects_absent_or_invalid_color_without_rewriting() {
         .unwrap()
         .execute(
             "INSERT INTO app_settings VALUES(?1,?2,?3,1,1)",
-            params![KEY, json, format!("{:x}", Sha256::digest(json.as_bytes()))],
+            params![KEY, json, mon_core::hash::sha256_hex(json.as_bytes())],
         )
         .unwrap();
     let before = rows(&storage);
@@ -85,7 +85,7 @@ fn ui_preferences_invalid_display_records_remain_unmodified_instead_of_defaultin
             .unwrap()
             .execute(
                 "INSERT INTO app_settings VALUES(?1,?2,?3,1,1)",
-                params![KEY, json, format!("{:x}", Sha256::digest(json.as_bytes()))],
+                params![KEY, json, mon_core::hash::sha256_hex(json.as_bytes())],
             )
             .unwrap();
         let before = rows(&storage);
@@ -242,7 +242,7 @@ fn ui_preferences_corrupt_or_unsupported_saved_settings_are_not_overwritten() {
     ] {
         let root = tempfile::tempdir().unwrap();
         let storage = Storage::open(root.path().into()).unwrap();
-        let hash = format!("{:x}", Sha256::digest(json.as_bytes()));
+        let hash = mon_core::hash::sha256_hex(json.as_bytes());
         storage
             .connection
             .lock()
@@ -306,7 +306,7 @@ fn ui_preferences_size_limit_and_save_failure_do_not_create_or_replace_settings(
         .unwrap()
         .execute(
             "INSERT INTO app_settings VALUES(?1,?2,?3,1,1)",
-            params![KEY, json, format!("{:x}", Sha256::digest(json.as_bytes()))],
+            params![KEY, json, mon_core::hash::sha256_hex(json.as_bytes())],
         )
         .unwrap();
     let before = rows(&storage);

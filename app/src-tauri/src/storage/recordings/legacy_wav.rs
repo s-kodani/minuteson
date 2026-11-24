@@ -199,7 +199,7 @@ pub(super) fn migrate_registered(
     let (bytes, stamp) = directory
         .read_legacy_native_manifest()?
         .ok_or("旧録音manifestがありません")?;
-    if format!("{:x}", Sha256::digest(&bytes)) != proof.hash {
+    if mon_core::hash::sha256_hex(&bytes) != proof.hash {
         return Err("旧録音manifestが検証中に変更されました".into());
     }
     let document = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
@@ -280,7 +280,7 @@ pub(super) fn save(
             .ok_or("旧録音manifestがありません")?;
         if expected.relative != base.join("manifest.json")
             || u64::try_from(expected.size_bytes).ok() != Some(bytes.len() as u64)
-            || expected.hash != format!("{:x}", Sha256::digest(&bytes))
+            || expected.hash != mon_core::hash::sha256_hex(&bytes)
             || serde_json::from_slice::<serde_json::Value>(&bytes)
                 .map_err(|error| error.to_string())?
                 != document
@@ -297,17 +297,18 @@ pub(super) fn save(
         .iter()
         .map(Prefix::review_hash)
         .collect::<Result<Vec<_>, _>>()?;
-    let key = format!(
-        "{:x}",
-        Sha256::digest(
-            serde_json::to_vec(&serde_json::json!({
-                "version":1,"policy":"legacy_capture_constant_gain_v1","owner":session.id,
-                "origin":origin_ns,"durationUs":duration_us,"prefixes":generations,
-                "localGenerations":local_generations,
-                "partialReview":document["partialRecovery"]["reviewHash"],
-            }))
-            .map_err(|error| error.to_string())?
-        )
+    let key = mon_core::hash::sha256_hex(
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "policy": "legacy_capture_constant_gain_v1",
+            "owner": session.id,
+            "origin": origin_ns,
+            "durationUs": duration_us,
+            "prefixes": generations,
+            "localGenerations": local_generations,
+            "partialReview": document["partialRecovery"]["reviewHash"],
+        }))
+        .map_err(|error| error.to_string())?,
     );
     let frames = (duration_us as u64)
         .checked_mul(16000)
@@ -424,7 +425,7 @@ pub(super) fn save(
             .get_ref()
             .sync_all()
             .map_err(|error| error.to_string())?;
-        format!("{:x}", hash.finalize())
+        mon_core::hash::sha256_output_hex(hash.finalize())
     };
     pending.complete(hash.clone())?;
     audio.verify_sources()?;
@@ -452,7 +453,7 @@ pub(super) fn save(
             .map_err(|_| "旧録音WAVの記録先が管理領域外です")?
             .join("legacy-canonical-wav.json"),
         size_bytes: manifest_bytes.len() as i64,
-        hash: format!("{:x}", Sha256::digest(&manifest_bytes)),
+        hash: mon_core::hash::sha256_hex(&manifest_bytes),
     };
     let wave = CapturedFile {
         relative: pending

@@ -138,7 +138,9 @@ impl Candidate {
             digest.update(&buffer[..n]);
         }
         check(&cancelled)?;
-        Ok(count == size && format!("{:x}", digest.finalize()) == hash && self.verify().is_ok())
+        Ok(count == size
+            && mon_core::hash::sha256_output_hex(digest.finalize()) == hash
+            && self.verify().is_ok())
     }
 }
 
