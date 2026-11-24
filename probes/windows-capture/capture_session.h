@@ -5,6 +5,7 @@ struct CaptureSession {
   Settings s;
   explicit CaptureSession(Settings settings):s(std::move(settings)){}
   int run(){
+  ScopedAudioPriority audio_priority;
   Json manifest,journal_persistence=nullptr;std::unique_ptr<MetadataWorker> metadata;
   auto storage_pending=std::make_shared<StoragePending>();std::shared_ptr<RawCommitWorker> commits;
   std::shared_ptr<LiveWav> live_wav;

@@ -58,6 +58,7 @@ class LiveWav {
   }
   void stage(const char* name,const Job& job){if(hook_)hook_(name,job.after.frames);}
   void run(){
+    ScopedAudioPriority priority;
     try{
       // Deny directory replacement while path-based atomic metadata writes
       // accompany the pinned audio handle. Reparse points are never followed.

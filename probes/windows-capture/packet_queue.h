@@ -15,6 +15,12 @@ namespace product {
 struct InputDataFault : std::runtime_error {
   explicit InputDataFault(const char* reason):std::runtime_error(reason){}
 };
+// The OS or disk could not keep up with this input. Accepted audio stays
+// queued and is never discarded; only this input is reacquired, so the
+// recording continues and the unacquired span is stored as a recorded gap.
+struct InputOverload : InputDataFault {
+  using InputDataFault::InputDataFault;
+};
 inline void require_input_pcm(const float* samples,std::uint32_t frames,std::uint32_t channels,bool silent=false){
   if(!mon_capture_pcm_geometry(48000,channels,frames))throw InputDataFault("invalid PCM geometry");
   if(!silent&&!mon_capture_pcm_samples(samples,std::size_t(frames)*channels))throw InputDataFault("invalid PCM samples");
@@ -59,7 +65,7 @@ class PacketIngressBudget {
   void acquire(std::uint64_t bytes,std::uint64_t duration){
     std::lock_guard lock(mutex_);
     if(!mon_capture_permits_pending(bytes_,nanoseconds_,packets_,bytes,duration))
-      throw std::runtime_error("PC音声の取得待ちが上限に達しました。確定済み音声は保持しています");
+      throw InputOverload("PC音声の取得待ちが上限に達しました。入力を取得し直します。確定済み音声は保持しています");
     bytes_+=bytes;nanoseconds_+=duration;++packets_;
   }
   void release(std::uint64_t bytes,std::uint64_t duration,std::uint32_t packets=1){
@@ -89,7 +95,7 @@ class PacketQueue {
     const auto duration=(std::uint64_t(packet.frames)*1000000000+47999)/48000;
     if(!mon_capture_permits_pending(bytes_,nanoseconds_,
         static_cast<std::uint32_t>(packets_.size()),bytes,duration))
-      throw std::runtime_error("音声の保存待ちが上限に達しました。保存先の負荷を確認してください。確定済み音声は保持しています");
+      throw InputOverload("音声の保存待ちが上限に達しました。入力を取得し直します。保存先の負荷を確認してください。確定済み音声は保持しています");
     if(ingress_)ingress_->acquire(bytes,duration);
     try{
       if(storage_)packet.storage_end=storage_->acquire(lane_,packet.frames);

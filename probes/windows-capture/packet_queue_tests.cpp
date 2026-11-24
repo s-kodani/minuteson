@@ -25,12 +25,17 @@ int main(){
     product::PacketQueue bounded;
     for(unsigned i=0;i<10;++i){product::CapturePacket packet;packet.frames=96000;packet.flags=2;bounded.push(std::move(packet));}
     product::CapturePacket extra;extra.frames=1;extra.flags=2;
-    bool overflow=false;try{bounded.push(std::move(extra));}catch(const std::runtime_error&){overflow=true;}
+    bool overflow=false;try{bounded.push(std::move(extra));}catch(const product::InputOverload&){overflow=true;}
     require(overflow&&bounded.pop()->frames==96000,"overflow replaced already captured audio");
+    { // Overload is recoverable per input, unlike storage or disk failures.
+      product::PacketQueue probe;probe.fail(std::make_exception_ptr(product::InputOverload("overload")));
+      bool recoverable=false;try{probe.pop();}catch(const product::InputDataFault&){recoverable=true;}
+      require(recoverable,"queue overload must use the input recovery path");
+    }
     product::PacketQueue bytes;
     for(unsigned i=0;i<8;++i){product::CapturePacket large;large.frames=65536;large.samples.resize(65536*8);bytes.push(std::move(large));}
     product::CapturePacket one;one.frames=1;one.samples.push_back(0.25f);
-    overflow=false;try{bytes.push(std::move(one));}catch(const std::runtime_error&){overflow=true;}
+    overflow=false;try{bytes.push(std::move(one));}catch(const product::InputOverload&){overflow=true;}
     require(overflow&&bytes.pop()->samples.size()==65536*8,"byte overflow discarded accepted audio");
     product::CapturePacket released;released.frames=1;released.samples.push_back(0.5f);bytes.push(std::move(released));
     for(unsigned i=0;i<7;++i)bytes.pop();

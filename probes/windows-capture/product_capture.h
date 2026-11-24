@@ -7,6 +7,7 @@
 #include "endpoint_mixer.h"
 #include "synthetic_driver.h"
 #include <avrt.h>
+#include "audio_priority.h"
 #include <functiondiscoverykeys_devpkey.h>
 #include <tlhelp32.h>
 #include <audiopolicy.h>
