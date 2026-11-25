@@ -188,29 +188,35 @@ fn quiet_drop_preexec_child() {
         assert!(!path.exists());
     }
 }
+// CLOEXEC writer descriptions can survive in unrelated children until exec.
+// Open these test leases in a process with only the selected test running.
+fn run_in_isolated_process(test: &str) -> bool {
+    const CHILD: &str = "MON_ISOLATED_CAPTURE_JOURNAL_TEST";
+    if std::env::var(CHILD).as_deref() == Ok(test) {
+        return false;
+    }
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--test-threads=1"])
+        .env(CHILD, test)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "isolated journal test failed: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed; 0 failed") && stdout.contains(test),
+        "the isolated journal test did not run: {stdout}"
+    );
+    true
+}
+
 #[test]
 fn durable_test_ownership_is_single_allocated_private_and_never_replays_removed_ids() {
-    const CHILD: &str = "MON_DURABLE_JOURNAL_FIXTURE";
     const TEST: &str = "capture_test::journal::tests::durable_test_ownership_is_single_allocated_private_and_never_replays_removed_ids";
-    if std::env::var(CHILD).as_deref() != Ok(TEST) {
-        // Other parallel tests can fork while this writer lease is held. Create
-        // it after exec in a single-test child so unrelated CLOEXEC copies
-        // cannot delay quiet ownership. Keep every ownership assertion below.
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", TEST, "--test-threads=1"])
-            .env(CHILD, TEST)
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            output.status.success(),
-            "isolated durable ownership fixture failed: {stdout}\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            stdout.contains("1 passed; 0 failed") && stdout.contains(TEST),
-            "the isolated durable ownership test did not run: {stdout}"
-        );
+    if run_in_isolated_process(TEST) {
         return;
     }
     let fixture = tempfile::tempdir().unwrap();
@@ -364,6 +370,10 @@ fn restored_record_keeps_exact_inputs_and_cannot_restart_capture() {
 }
 #[test]
 fn completion_requires_the_same_live_quiet_guard_and_an_absent_payload() {
+    const TEST: &str = "capture_test::journal::tests::completion_requires_the_same_live_quiet_guard_and_an_absent_payload";
+    if run_in_isolated_process(TEST) {
+        return;
+    }
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
     let a = Registry::open(first.path())
