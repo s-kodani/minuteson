@@ -49,8 +49,10 @@ jobs:
       full: true
       build_release: ${{ vars.RELEASE_AUTOMATION_ENABLED == 'true' && github.event.repository.private == false }}
   security:
-    needs: guard
-    if: needs.guard.outputs.reuse == 'false'
+    needs: [guard, ci]
+    if: |
+      needs.guard.outputs.reuse == 'false' &&
+      (needs.guard.outputs.build != 'true' || needs.ci.result == 'success')
     permissions:
       contents: read
       security-events: write
