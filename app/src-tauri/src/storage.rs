@@ -464,7 +464,7 @@ impl Storage {
         for (sql, reason) in [
             ("SELECT EXISTS(SELECT 1 FROM maintenance_operations WHERE state IN ('prepared','installing','cleanup','attention') OR (state='completed' AND json_extract(progress_json,'$.version')=4 AND (kind='delete_meeting' OR json_extract(progress_json,'$.phase')='removing')))", "削除・復元などの保守操作が未完了です"),
             ("SELECT EXISTS(SELECT 1 FROM restore_batches WHERE state='prepared')", "バックアップからの復元が未完了です"),
-            ("SELECT EXISTS(SELECT 1 FROM recording_sessions WHERE state!='saved')", "録音・音声変換の再確認が必要です"),
+            (RECORDING_REBINDING_PENDING_SQL, "録音・音声変換の再確認が必要です"),
             ("SELECT EXISTS(SELECT 1 FROM audio_imports WHERE state!='ready')", "音声取り込みの再確認が必要です"),
             ("SELECT EXISTS(SELECT 1 FROM processing_jobs WHERE state IN ('queued','running','pausing','paused','interrupted'))", "解析処理が未完了です"),
             ("SELECT EXISTS(SELECT 1 FROM model_packages WHERE state='preparing')", "モデル配置が未完了です"),
@@ -690,6 +690,8 @@ impl Storage {
                         .is_some_and(startup_diagnostics::structural_database_error);
                     return Err(error.to_string());
                 }
+                reconcile_stale_recording_session_states(&tx)
+                    .map_err(|error| error.to_string())?;
                 let now = now_ms()?;
                 tx.execute("UPDATE model_compatibility_checks SET state='interrupted',error_message='前回の互換性確認は未完了です。明示的に再確認してください',finished_at=max(created_at,?1) WHERE state='preparing'", params![now]).map_err(|error| error.to_string())?;
                 // Never resume execution from an old placement/check record.
@@ -1003,6 +1005,54 @@ impl Storage {
         let (size_bytes, content_hash) = hash_file(&actual)?;
         Ok(size_bytes == asset.size_bytes && content_hash == asset.content_hash)
     }
+}
+
+#[cfg(any(target_os = "macos", windows))]
+const RECORDING_REBINDING_PENDING_SQL: &str = "\
+SELECT EXISTS(
+    SELECT 1 FROM recording_sessions r
+    JOIN meetings m ON m.id = r.meeting_id
+    LEFT JOIN meeting_audio_commits a ON a.meeting_id = m.id
+        AND r.audio_manifest_hash IS NOT NULL
+        AND a.manifest_hash = r.audio_manifest_hash
+    WHERE m.source_type = 'recording'
+    AND NOT EXISTS(
+        SELECT 1 FROM restore_provenance p
+        WHERE p.meeting_id = m.id AND p.domain = 'meetings' AND p.entity_key = m.id
+    )
+    AND (
+        r.state IN ('preparing','recording','stopping')
+        OR (
+            r.state IN ('interrupted','failed')
+            AND (
+                (r.audio_manifest_hash IS NULL AND m.lifecycle IN ('recording','draft'))
+                OR (
+                    r.audio_manifest_hash IS NOT NULL
+                    AND m.lifecycle = 'recorded'
+                    AND COALESCE(a.phase, '') != 'cleaned'
+                )
+            )
+        )
+    )
+)";
+
+fn reconcile_stale_recording_session_states(db: &Connection) -> Result<(), rusqlite::Error> {
+    let now = now_ms().map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
+    db.execute(
+        "UPDATE recording_sessions SET state='saved', updated_at=?1
+         WHERE state='interrupted'
+         AND audio_manifest_hash IS NOT NULL
+         AND EXISTS (
+            SELECT 1 FROM meetings m
+            JOIN meeting_audio_commits a ON a.meeting_id = m.id AND a.manifest_hash = recording_sessions.audio_manifest_hash
+            WHERE m.id = recording_sessions.meeting_id
+            AND m.source_type = 'recording'
+            AND m.lifecycle = 'recorded'
+            AND a.phase = 'cleaned'
+         )",
+        params![now],
+    )?;
+    Ok(())
 }
 
 fn normalize_startup_states(

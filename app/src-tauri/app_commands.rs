@@ -105,6 +105,8 @@ pub const COMMANDS: &[&str] = &[
     "dismiss_recorder_operation_notice",
     "get_meeting_list_diagnostics",
     "get_storage_write_state",
+    "recheck_startup_recovery",
+    "restart_after_recovery_review",
     "list_meetings",
     "get_meeting",
     "rename_meeting",

@@ -260,6 +260,13 @@ impl Bootstrap {
                 Storage::ancillary_binding_changed(&actual.path, &actual.path, &self.config)
             };
             if !changed {
+                if previous
+                    .recovery
+                    .as_ref()
+                    .is_some_and(Recovery::needs_review)
+                {
+                    let _ = self.reconcile_recovery_review(&mut state)?;
+                }
                 return Ok(());
             }
         }
@@ -283,9 +290,6 @@ impl Bootstrap {
         verify_observation(&actual.path, &source_observation)?;
         if previous.pending_move.is_some() {
             pending.push("保存先移動が未完了です".into());
-        }
-        if let Some(recovery) = &previous.recovery {
-            pending.extend(recovery.pending.clone());
         }
         pending.sort();
         pending.dedup();
@@ -388,6 +392,64 @@ impl Bootstrap {
             Some(recovery) => recovery.verify(&self.config),
             None => Ok(self.config.clone()),
         }
+    }
+
+    fn recovery_pending_for_record(&self, actual: &Root, record: &Record) -> Result<Vec<String>, String> {
+        let cache_root = record
+            .recovery
+            .as_ref()
+            .map(|recovery| recovery.verify(&self.config))
+            .transpose()?
+            .unwrap_or_else(|| self.config.clone());
+        let mut pending = Storage::inspect_rebinding(&actual.path, &cache_root)?;
+        if record.pending_move.is_some() {
+            pending.push("保存先移動が未完了です".into());
+        }
+        pending.sort();
+        pending.dedup();
+        Ok(pending)
+    }
+
+    fn reconcile_recovery_review(&self, state: &mut State) -> Result<bool, String> {
+        self.guard(state)?;
+        let Some(loaded) = &state.loaded else {
+            return Ok(false);
+        };
+        let record = &loaded.record;
+        let Some(recovery) = &record.recovery else {
+            return Ok(false);
+        };
+        if !recovery.needs_review() {
+            return Ok(false);
+        }
+        record.current.verify()?;
+        let actual = Root::inspect(&record.current.path)?;
+        if actual != record.current {
+            return Ok(false);
+        }
+        let pending = self.recovery_pending_for_record(&actual, record)?;
+        if pending == recovery.pending {
+            return Ok(false);
+        }
+        let mut next = record.clone();
+        next.revision = next
+            .revision
+            .checked_add(1)
+            .ok_or("起動設定の版が上限です")?;
+        next.recovery = Some(Recovery {
+            pending,
+            ..recovery.clone()
+        });
+        self.write(state, next)?;
+        Ok(true)
+    }
+
+    pub(crate) fn recheck_recovery_review(&self) -> Result<bool, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "起動設定ロックを取得できません")?;
+        self.reconcile_recovery_review(&mut state)
     }
 
     pub(super) fn open_recovered_storage(

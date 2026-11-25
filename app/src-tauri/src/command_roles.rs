@@ -106,6 +106,8 @@ pub fn permits(command: &str, role: &str) -> bool {
         "dismiss_recorder_operation_notice" => matches!(role, "main"),
         "get_meeting_list_diagnostics" => matches!(role, "main"),
         "get_storage_write_state" => matches!(role, "main"),
+        "recheck_startup_recovery" => matches!(role, "main"),
+        "restart_after_recovery_review" => matches!(role, "main"),
         "list_meetings" => matches!(role, "main"),
         "get_meeting" => matches!(role, "main"),
         "rename_meeting" => matches!(role, "main"),

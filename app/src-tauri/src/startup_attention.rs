@@ -297,6 +297,8 @@ impl Startup {
                     command,
                     "get_internal_logs"
                         | "get_recording_recovery"
+                        | "recheck_startup_recovery"
+                        | "restart_after_recovery_review"
                         | "get_storage_bootstrap"
                         | "list_meetings"
                         | "get_meeting_list_diagnostics"

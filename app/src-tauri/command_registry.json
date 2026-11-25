@@ -2484,6 +2484,38 @@
       }
     },
     {
+      "name": "recheck_startup_recovery",
+      "handler": "startup_recovery_review::recheck_startup_recovery",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<startup_recovery_review::RecheckRecoveryReviewResult,mon_contracts::AppError>",
+          "ok": "startup_recovery_review::RecheckRecoveryReviewResult",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
+      "name": "restart_after_recovery_review",
+      "handler": "startup_recovery_review::restart_after_recovery_review",
+      "roles": [
+        "main"
+      ],
+      "signature": {
+        "async": false,
+        "arguments": [],
+        "response": {
+          "type": "Result<(),mon_contracts::AppError>",
+          "ok": "()",
+          "error": "mon_contracts::AppError"
+        }
+      }
+    },
+    {
       "name": "list_meetings",
       "handler": "list_meetings",
       "roles": [
