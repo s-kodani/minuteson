@@ -355,6 +355,20 @@ export function SalvageEntry({
   </>;
 }
 
+interface RecheckRecoveryReviewResult {
+  updated: boolean;
+  restartRequired: boolean;
+  reviewRequired: boolean;
+  reasons: string[];
+}
+
+function assertRecheckRecoveryReviewResult(value: unknown): asserts value is RecheckRecoveryReviewResult {
+  const v = value as RecheckRecoveryReviewResult | null;
+  if (!v || typeof v.updated !== "boolean" || typeof v.restartRequired !== "boolean"
+    || typeof v.reviewRequired !== "boolean" || !Array.isArray(v.reasons)
+    || v.reasons.some(reason => typeof reason !== "string" || !reason)) throw Error("保存先の再確認結果を確認できませんでした。");
+}
+
 export function StorageRecoveryNotice({ state, disabled, onRecheck, relocationGuidance }: {
   state: StorageWriteState;
   disabled: boolean;
@@ -362,17 +376,39 @@ export function StorageRecoveryNotice({ state, disabled, onRecheck, relocationGu
   relocationGuidance?: string;
 }) {
   const [checking, setChecking] = useState(false);
+  const [restartPending, setRestartPending] = useState(false);
+  const [error, setError] = useState("");
   const recheck = async () => {
     setChecking(true);
-    try { await onRecheck(); }
+    setError("");
+    try {
+      try {
+        const result = await invoke("recheck_startup_recovery");
+        assertRecheckRecoveryReviewResult(result);
+        if (result.restartRequired) setRestartPending(true);
+      } catch (cause) {
+        setError(String(cause));
+      }
+      await onRecheck();
+    }
+    finally { setChecking(false); }
+  };
+  const restart = async () => {
+    setChecking(true);
+    setError("");
+    try { await invoke("restart_after_recovery_review"); }
+    catch (cause) { setError(String(cause)); }
     finally { setChecking(false); }
   };
   return <section className="workspace-warning meeting-list-notice storage-recovery-notice" aria-label="保存先の警告">
     <p role="status">{state.salvageAvailable ? "保存先は閲覧専用です。会議を閲覧するか、新しい保存先へデータを復元できます。" : "保存先は閲覧専用です。会議を閲覧できます。"}</p>
     {state.salvageAvailable ? <SalvageEntry mode="ready" reasons={state.reasons} disabled={disabled} /> : <>
-      <button type="button" className="secondary" disabled={checking} onClick={() => void recheck()}>保存先の状態を再確認</button>
+      <button type="button" className="secondary" disabled={checking || disabled} onClick={() => void recheck()}>保存先の状態を再確認</button>
+      {restartPending && <p role="status">中断操作の確認が完了しました。再起動すると通常どおり利用できます。</p>}
+      {restartPending && <button type="button" disabled={checking || disabled} onClick={() => void restart()}>再起動して書き込みを再開</button>}
       {relocationGuidance && <p>{relocationGuidance}</p>}
       {checking && <p role="status">保存先の状態を確認しています。</p>}
+      {error && <p role="alert">{error}</p>}
     </>}
   </section>;
 }
