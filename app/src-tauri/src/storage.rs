@@ -1041,6 +1041,11 @@ fn reconcile_stale_recording_session_states(db: &Connection) -> Result<(), rusql
         "UPDATE recording_sessions SET state='saved', updated_at=?1
          WHERE state='interrupted'
          AND audio_manifest_hash IS NOT NULL
+         AND NOT EXISTS (
+            SELECT 1 FROM audio_tracks t
+            WHERE t.session_id = recording_sessions.id
+            AND json_type(t.processing_config_json, '$.partial_recovery') IS NOT NULL
+         )
          AND EXISTS (
             SELECT 1 FROM meetings m
             JOIN meeting_audio_commits a ON a.meeting_id = m.id AND a.manifest_hash = recording_sessions.audio_manifest_hash
