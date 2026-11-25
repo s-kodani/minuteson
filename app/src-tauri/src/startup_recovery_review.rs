@@ -41,7 +41,9 @@ pub(crate) fn recheck_startup_recovery(
             reasons,
         })
     })();
-    result.map_err(|message| mon_contracts::AppError::from_command("recheck_startup_recovery", message))
+    result.map_err(|message| {
+        mon_contracts::AppError::from_command("recheck_startup_recovery", message)
+    })
 }
 
 #[tauri::command]

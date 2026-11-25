@@ -690,8 +690,7 @@ impl Storage {
                         .is_some_and(startup_diagnostics::structural_database_error);
                     return Err(error.to_string());
                 }
-                reconcile_stale_recording_session_states(&tx)
-                    .map_err(|error| error.to_string())?;
+                reconcile_stale_recording_session_states(&tx).map_err(|error| error.to_string())?;
                 let now = now_ms()?;
                 tx.execute("UPDATE model_compatibility_checks SET state='interrupted',error_message='前回の互換性確認は未完了です。明示的に再確認してください',finished_at=max(created_at,?1) WHERE state='preparing'", params![now]).map_err(|error| error.to_string())?;
                 // Never resume execution from an old placement/check record.

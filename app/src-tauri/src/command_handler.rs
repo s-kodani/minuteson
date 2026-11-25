@@ -104,9 +104,7 @@ tauri::generate_handler![
     recorder_operation_notices::dismiss_recorder_operation_notice,
     get_meeting_list_diagnostics,
     get_storage_write_state,
-    #[cfg(any(target_os = "macos", windows))]
     startup_recovery_review::recheck_startup_recovery,
-    #[cfg(any(target_os = "macos", windows))]
     startup_recovery_review::restart_after_recovery_review,
     list_meetings,
     get_meeting,

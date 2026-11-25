@@ -2493,8 +2493,8 @@
         "async": false,
         "arguments": [],
         "response": {
-          "type": "Result<startup_recovery_review::RecheckRecoveryReviewResult,mon_contracts::AppError>",
-          "ok": "startup_recovery_review::RecheckRecoveryReviewResult",
+          "type": "Result<RecheckRecoveryReviewResult,mon_contracts::AppError>",
+          "ok": "RecheckRecoveryReviewResult",
           "error": "mon_contracts::AppError"
         }
       }

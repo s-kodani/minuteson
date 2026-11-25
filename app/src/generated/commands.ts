@@ -104,6 +104,8 @@ export interface CommandArguments {
   "dismiss_recorder_operation_notice": { "source": unknown; "expectedRevision": number; "eventId": string };
   "get_meeting_list_diagnostics": Record<string, never>;
   "get_storage_write_state": Record<string, never>;
+  "recheck_startup_recovery": Record<string, never>;
+  "restart_after_recovery_review": Record<string, never>;
   "list_meetings": Record<string, never>;
   "get_meeting": { "id": string };
   "rename_meeting": { "id": string; "title": string; "expectedLockVersion": number };
@@ -1913,6 +1915,24 @@ export const commandContracts = {
     "response": {
       "type": "Result<storage::startup_diagnostics::StorageWriteState,mon_contracts::AppError>",
       "ok": "storage::startup_diagnostics::StorageWriteState",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "recheck_startup_recovery": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<RecheckRecoveryReviewResult,mon_contracts::AppError>",
+      "ok": "RecheckRecoveryReviewResult",
+      "error": "mon_contracts::AppError"
+    }
+  },
+  "restart_after_recovery_review": {
+    "async": false,
+    "arguments": [],
+    "response": {
+      "type": "Result<(),mon_contracts::AppError>",
+      "ok": "()",
       "error": "mon_contracts::AppError"
     }
   },

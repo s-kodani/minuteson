@@ -394,7 +394,11 @@ impl Bootstrap {
         }
     }
 
-    fn recovery_pending_for_record(&self, actual: &Root, record: &Record) -> Result<Vec<String>, String> {
+    fn recovery_pending_for_record(
+        &self,
+        actual: &Root,
+        record: &Record,
+    ) -> Result<Vec<String>, String> {
         let cache_root = record
             .recovery
             .as_ref()

@@ -69,10 +69,10 @@ mod speaker_completion;
 mod speaker_features;
 mod startup_attention;
 mod startup_instance;
-mod startup_reset;
-mod startup_salvage;
 #[cfg(any(target_os = "macos", windows))]
 mod startup_recovery_review;
+mod startup_reset;
+mod startup_salvage;
 mod startup_window;
 mod storage;
 mod transcription;
