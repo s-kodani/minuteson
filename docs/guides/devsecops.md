@@ -64,9 +64,11 @@ make check-security
 
 ### picomatchの期限付き例外
 
-1.0.6の公開に向け、所有者`s-kodani`が2026-11-18に[修正版未提供のCVE-2026-112366](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)の期限付きリスク受容を承認しました。[例外定義](../../.github/security-exceptions.json)は`npm:picomatch@4.0.7`の当該指摘だけに限定し、2026-11-25（UTC）に失効します。
+1.0.6の公開に向け、所有者`s-kodani`が2026-11-18に`npm:picomatch@4.0.7`の`CVE-2026-112366`に限って期限付きリスク受容を承認しました。例外は2026-11-25（UTC）に失効しました。
 
-固定された単一コピーはVite・tinyglobby・fdir・json-schema-to-typescript経由の開発・ビルド・契約型生成用です。製品ソースからの直接参照は見つからず、Tauriは生成済み`dist`を同梱します。細工されたglobによる開発・ビルド処理の停止リスクは残り、到達不能や脆弱性修正を意味しません。上流の修正版を確認して依存更新と再検査を行い、例外を除去します。他の指摘・版・検査の停止条件は維持します。
+[GitHub Advisory Database](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)は2026-11-18にこの指摘を撤回しました。2026-11-25（UTC）にOSV APIでnpmの`picomatch@4.0.7`を照会し、有効な指摘が返らないことを確認して[例外定義](../../.github/security-exceptions.json)から削除しました。[CVE公開記録](https://www.cve.org/CVERecord?id=CVE-2026-112366)は残っています。
+
+アプリのlockfileには開発・ビルド・契約型生成用の`picomatch@4.0.7`が1コピーあります。該当する指摘が今後スキャナーに返った場合は、通常のセキュリティゲートで判定します。
 
 ### GLibの対象プラットフォーム
 
