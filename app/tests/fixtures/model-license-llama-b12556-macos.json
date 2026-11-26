@@ -1,0 +1,452 @@
+[
+  {
+    "schemaVersion": 1,
+    "engine": "llama.cpp",
+    "engineVersion": "b12556",
+    "modelName": "Qwen3-8B",
+    "modelVersion": "7c41481f57cb95916b40956ab2f0b139b296d974",
+    "quantization": "Q4_K_M",
+    "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3 Apache-2.0: https://huggingface.co/Qwen/Qwen3-8B-GGUF/blob/7c41481f57cb95916b40956ab2f0b139b296d974/LICENSE ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。",
+    "target": "macos_aarch64",
+    "files": [
+      {
+        "relativePath": "llama-completion",
+        "role": "executable",
+        "expectedSize": 33472,
+        "expectedHash": "37bd17f568b4b9632f7ab998ccb9bf3e70af9aa037b60cfc832580634f92c5d6"
+      },
+      {
+        "relativePath": "libllama-completion-impl.dylib",
+        "role": "runtime_library",
+        "expectedSize": 121744,
+        "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+      },
+      {
+        "relativePath": "libllama-common.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 8299144,
+        "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+      },
+      {
+        "relativePath": "libllama.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 3895536,
+        "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+      },
+      {
+        "relativePath": "libggml.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 60016,
+        "expectedHash": "7d3702e5e30ba6a7b342bee26496a018bc289d44c90c6c5627b75dd9862b2cde"
+      },
+      {
+        "relativePath": "libggml-base.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 770888,
+        "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+      },
+      {
+        "relativePath": "libggml-cpu.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 976384,
+        "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+      },
+      {
+        "relativePath": "libggml-blas.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 58776,
+        "expectedHash": "8bfc2b86400db027c4d85571e838c149bd09e66093d707405f9be37fd51bdccc"
+      },
+      {
+        "relativePath": "libggml-metal.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 5705080,
+        "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+      },
+      {
+        "relativePath": "libggml-rpc.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 243488,
+        "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+      },
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 5027783488,
+        "expectedHash": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11544,
+        "expectedHash": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd"
+      }
+    ]
+  },
+  {
+    "schemaVersion": 1,
+    "engine": "llama.cpp",
+    "engineVersion": "b12556",
+    "modelName": "Qwen3-4B",
+    "modelVersion": "bc640142c66e1fdd12af0bd68f40445458f3869b",
+    "quantization": "Q4_K_M",
+    "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3 Apache-2.0: https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/bc640142c66e1fdd12af0bd68f40445458f3869b/LICENSE ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。",
+    "target": "macos_aarch64",
+    "files": [
+      {
+        "relativePath": "llama-completion",
+        "role": "executable",
+        "expectedSize": 33472,
+        "expectedHash": "37bd17f568b4b9632f7ab998ccb9bf3e70af9aa037b60cfc832580634f92c5d6"
+      },
+      {
+        "relativePath": "libllama-completion-impl.dylib",
+        "role": "runtime_library",
+        "expectedSize": 121744,
+        "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+      },
+      {
+        "relativePath": "libllama-common.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 8299144,
+        "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+      },
+      {
+        "relativePath": "libllama.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 3895536,
+        "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+      },
+      {
+        "relativePath": "libggml.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 60016,
+        "expectedHash": "7d3702e5e30ba6a7b342bee26496a018bc289d44c90c6c5627b75dd9862b2cde"
+      },
+      {
+        "relativePath": "libggml-base.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 770888,
+        "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+      },
+      {
+        "relativePath": "libggml-cpu.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 976384,
+        "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+      },
+      {
+        "relativePath": "libggml-blas.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 58776,
+        "expectedHash": "8bfc2b86400db027c4d85571e838c149bd09e66093d707405f9be37fd51bdccc"
+      },
+      {
+        "relativePath": "libggml-metal.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 5705080,
+        "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+      },
+      {
+        "relativePath": "libggml-rpc.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 243488,
+        "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+      },
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 2497280256,
+        "expectedHash": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11544,
+        "expectedHash": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd"
+      }
+    ]
+  },
+  {
+    "schemaVersion": 1,
+    "engine": "llama.cpp",
+    "engineVersion": "b12556",
+    "modelName": "Qwen3.5-4B",
+    "modelVersion": "e87f176479d0855a907a41277aca2f8ee7a09523",
+    "quantization": "Q4_K_M",
+    "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3.5 Apache-2.0: https://huggingface.co/Qwen/Qwen3.5-4B/blob/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/LICENSE ; GGUF: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/tree/e87f176479d0855a907a41277aca2f8ee7a09523 ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。",
+    "target": "macos_aarch64",
+    "files": [
+      {
+        "relativePath": "llama-completion",
+        "role": "executable",
+        "expectedSize": 33472,
+        "expectedHash": "37bd17f568b4b9632f7ab998ccb9bf3e70af9aa037b60cfc832580634f92c5d6"
+      },
+      {
+        "relativePath": "libllama-completion-impl.dylib",
+        "role": "runtime_library",
+        "expectedSize": 121744,
+        "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+      },
+      {
+        "relativePath": "libllama-common.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 8299144,
+        "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+      },
+      {
+        "relativePath": "libllama.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 3895536,
+        "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+      },
+      {
+        "relativePath": "libggml.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 60016,
+        "expectedHash": "7d3702e5e30ba6a7b342bee26496a018bc289d44c90c6c5627b75dd9862b2cde"
+      },
+      {
+        "relativePath": "libggml-base.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 770888,
+        "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+      },
+      {
+        "relativePath": "libggml-cpu.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 976384,
+        "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+      },
+      {
+        "relativePath": "libggml-blas.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 58776,
+        "expectedHash": "8bfc2b86400db027c4d85571e838c149bd09e66093d707405f9be37fd51bdccc"
+      },
+      {
+        "relativePath": "libggml-metal.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 5705080,
+        "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+      },
+      {
+        "relativePath": "libggml-rpc.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 243488,
+        "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+      },
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 2740937888,
+        "expectedHash": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11544,
+        "expectedHash": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+      }
+    ]
+  },
+  {
+    "schemaVersion": 1,
+    "engine": "llama.cpp",
+    "engineVersion": "b12556",
+    "modelName": "Qwen3.5-9B",
+    "modelVersion": "3885219b6810b007914f3a7950a8d1b469d598a5",
+    "quantization": "Q4_K_M",
+    "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/edd6e2bbdad5930899a93db8fa73c3b61c7b9bcc/LICENSE ; Qwen3.5 Apache-2.0: https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/LICENSE ; GGUF: https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/3885219b6810b007914f3a7950a8d1b469d598a5 ; 本文はnoticesに保持。ファイルSHAは固定版の照合値で、配布元署名の認証ではない。",
+    "target": "macos_aarch64",
+    "files": [
+      {
+        "relativePath": "llama-completion",
+        "role": "executable",
+        "expectedSize": 33472,
+        "expectedHash": "37bd17f568b4b9632f7ab998ccb9bf3e70af9aa037b60cfc832580634f92c5d6"
+      },
+      {
+        "relativePath": "libllama-completion-impl.dylib",
+        "role": "runtime_library",
+        "expectedSize": 121744,
+        "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+      },
+      {
+        "relativePath": "libllama-common.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 8299144,
+        "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+      },
+      {
+        "relativePath": "libllama.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 3895536,
+        "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+      },
+      {
+        "relativePath": "libggml.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 60016,
+        "expectedHash": "7d3702e5e30ba6a7b342bee26496a018bc289d44c90c6c5627b75dd9862b2cde"
+      },
+      {
+        "relativePath": "libggml-base.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 770888,
+        "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+      },
+      {
+        "relativePath": "libggml-cpu.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 976384,
+        "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+      },
+      {
+        "relativePath": "libggml-blas.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 58776,
+        "expectedHash": "8bfc2b86400db027c4d85571e838c149bd09e66093d707405f9be37fd51bdccc"
+      },
+      {
+        "relativePath": "libggml-metal.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 5705080,
+        "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+      },
+      {
+        "relativePath": "libggml-rpc.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 243488,
+        "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+      },
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 5680522464,
+        "expectedHash": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Qwen-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11544,
+        "expectedHash": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+      }
+    ]
+  },
+  {
+    "schemaVersion": 1,
+    "engine": "llama.cpp",
+    "engineVersion": "b12556",
+    "modelName": "gemma-4-E4B-it",
+    "modelVersion": "bfc15c382204943c3a8fff0c750b94ae2364d7a3",
+    "quantization": "Q4_K_M",
+    "licenseRef": "llama.cpp MIT: https://github.com/ggml-org/llama.cpp/blob/8642541b255bfb5dc39cd351a178be09013a55d6/LICENSE ; Model: https://huggingface.co/google/gemma-4-E4B-it/tree/ee0ef6023621cff504d758262d4e04895a5af4a2 ; License text: https://raw.githubusercontent.com/google/gemma_pytorch/014acb7ac4563a5f77c76d7ff98f31b568c16508/LICENSE ; 本文はnoticesに保持。容量・SHAは配布ファイルの照合値で、配布元署名の認証ではない。",
+    "target": "macos_aarch64",
+    "files": [
+      {
+        "relativePath": "llama-completion",
+        "role": "executable",
+        "expectedSize": 33472,
+        "expectedHash": "37bd17f568b4b9632f7ab998ccb9bf3e70af9aa037b60cfc832580634f92c5d6"
+      },
+      {
+        "relativePath": "libllama-completion-impl.dylib",
+        "role": "runtime_library",
+        "expectedSize": 121744,
+        "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+      },
+      {
+        "relativePath": "libllama-common.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 8299144,
+        "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+      },
+      {
+        "relativePath": "libllama.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 3895536,
+        "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+      },
+      {
+        "relativePath": "libggml.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 60016,
+        "expectedHash": "7d3702e5e30ba6a7b342bee26496a018bc289d44c90c6c5627b75dd9862b2cde"
+      },
+      {
+        "relativePath": "libggml-base.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 770888,
+        "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+      },
+      {
+        "relativePath": "libggml-cpu.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 976384,
+        "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+      },
+      {
+        "relativePath": "libggml-blas.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 58776,
+        "expectedHash": "8bfc2b86400db027c4d85571e838c149bd09e66093d707405f9be37fd51bdccc"
+      },
+      {
+        "relativePath": "libggml-metal.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 5705080,
+        "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+      },
+      {
+        "relativePath": "libggml-rpc.1.dylib",
+        "role": "runtime_library",
+        "expectedSize": 243488,
+        "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+      },
+      {
+        "relativePath": "model.gguf",
+        "role": "llm",
+        "expectedSize": 4977171584,
+        "expectedHash": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87"
+      },
+      {
+        "relativePath": "notices/llama-MIT.txt",
+        "role": "notice",
+        "expectedSize": 1078,
+        "expectedHash": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "relativePath": "notices/Gemma-Apache-2.0.txt",
+        "role": "notice",
+        "expectedSize": 11357,
+        "expectedHash": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      }
+    ]
+  }
+]

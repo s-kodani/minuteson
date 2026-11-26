@@ -213,7 +213,7 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const gemma = options.find(o => o.id === "llama-b11960-gemma4-e4b-it-q4km")!;
   assert.equal(gemma.label, "Gemma 4 E4B IT · Q4_K_M");
   assert.deepEqual(gemma.tokenLimits, { maxInputTokens: 131072, maxOutputTokens: 32768, maxContextTokens: 131072, tokenizer: "gguf" });
-  assert.equal(gemma.review.manifest.engineVersion, "b12556");
+  assert.equal(gemma.review.manifest.engineVersion, "b12604");
   assert.equal(gemma.review.manifest.quantization, "Q4_K_M");
   assert.equal(gemma.review.manifest.files.filter(f => f.role === "notice").length, 2);
   assert.equal(gemma.review.ready, false);
@@ -231,18 +231,18 @@ test("built-in choices bind fixed recipes and archives without downloaded or rea
   const qwen3 = options.find(o => o.id === "llama-b11533-qwen3-8b-q4km")!;
   assert.equal(qwen3.label, "Qwen 3 8B · Q4_K_M");
   assert.deepEqual(qwen3.tokenLimits, { maxInputTokens: 40960, maxOutputTokens: 32768, maxContextTokens: 40960, tokenizer: "utf8_byte_bpe" });
-  assert.equal(qwen3.review.recipeHash, "3dac185509b8baa483b55c2cb0af54f315427a82f8d1b75299fb755df6217583");
+  assert.equal(qwen3.review.recipeHash, "d0a02ee504058795770ab1e92a31caf51fad096e7b1d7942345bc5f75aa44f11");
   assert.equal(qwen3.review.manifest.files.find(file => file.role === "llm")?.expectedHash, "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785");
   const qwen3_4b = options.find(o => o.id === "llama-b11533-qwen3-4b-q4km")!;
   assert.equal(qwen3_4b.label, "Qwen 3 4B · Q4_K_M");
   assert.deepEqual(qwen3_4b.tokenLimits, qwen3.tokenLimits);
-  assert.equal(qwen3_4b.review.recipeHash, "29b2c7cb6ec73039e2bfc5c97797e3e1a090c6d8c0cd27e8300574391bcd065f");
+  assert.equal(qwen3_4b.review.recipeHash, "6dd006b4d82b4806fa2e32decaf386c5be60421bef07db25d6ccb60ec16816f1");
   const model4b = qwen3_4b.review.manifest.files.find(file => file.role === "llm")!;
   assert.equal(model4b.expectedHash, "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5");
   assert.equal(model4b.expectedSize, 2_497_280_256);
   for (const [size, bytes, hash, recipeHash] of [
-    ["4B", 2_740_937_888, "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4", "80d2c542ae08d0c91f45f732f74e468a5a369906128f6823dee8fc8b14b1a365"],
-    ["9B", 5_680_522_464, "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", "8e6b9e8ee758acfc197825bcbc9aa8cca62a84f2c96166cc9810bd6d6778de6d"],
+    ["4B", 2_740_937_888, "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4", "289b9313d03112f7cd3f42d79577ee84ed2ec05a7a251eb6b3c0f89e2ceabd45"],
+    ["9B", 5_680_522_464, "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", "99f5f2f02b96897dbadbb52f58b8da4d3b31f778252bf2f9d8664420e14c2e6c"],
   ] as const) {
     const option = options.find(o => o.id === `llama-b11533-qwen35-${size.toLowerCase()}-q4km`)!;
     assert.equal(option.label, `Qwen 3.5 ${size} · Q4_K_M`);

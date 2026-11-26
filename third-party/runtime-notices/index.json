@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "licenseReview": "not_verified",
   "distributionReady": false,
-  "llamaArchiveSha256": "98882a3ca45688ffa585c3adba49213ca90c5b2dbbf1bc2af41ac437a0987d17",
+  "llamaArchiveSha256": "a090197174bdd049e0dee79ef6208775befb316966bef32977affb96e7af50bb",
   "libomp": {
     "sha256": "1e4222f195d84e7355109d778e751dfe3c085e42c947f7fe3d7853181329dd40",
-    "version": "bundled-b12556",
-    "versionEvidence": "Exact DLL from pinned llama.cpp b12556 Windows archive; strings identify Clang 22.1 and LLVM OpenMP API 5.0 but do not uniquely identify an LLVM source release. The accompanying LICENSE-LLVM-OpenMP is byte-identical to the retained llvm-openmp-20.1.8-LICENSE.txt (SHA256 fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4).",
+    "version": "bundled-b12604",
+    "versionEvidence": "Exact DLL from pinned llama.cpp b12604 Windows archive; strings identify Clang 22.1 and LLVM OpenMP API 5.0 but do not uniquely identify an LLVM source release. The accompanying LICENSE-LLVM-OpenMP is byte-identical to the retained llvm-openmp-20.1.8-LICENSE.txt (SHA256 fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4).",
     "license": "Apache-2.0 WITH LLVM-exception (and retained legacy notices in upstream LICENSE.TXT)",
     "sourceUrl": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-20.1.8/openmp/LICENSE.TXT"
   },
