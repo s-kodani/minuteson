@@ -16,7 +16,7 @@ sources:
 
 ## 前提
 
-macOS 15以降・Apple Silicon、Node.js 24、Rust stable、Python 3.12、CMake、Swift 6.2以上を含むXcodeを用意します。コマンドはリポジトリルートから実行します。
+macOS 15以降・Apple Silicon、Node.js 24、rustupで管理するRust（[固定版](development-workflow.md#rustの版の固定)）、Python 3.12、CMake、Swift 6.2以上を含むXcodeを用意します。コマンドはリポジトリルートから実行します。
 
 ```sh
 xcode-select -p

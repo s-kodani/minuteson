@@ -21,7 +21,7 @@ Windows 11 24H2以降・x64でPowerShellを使います。
 | --- | --- |
 | Git・Node.js | Windows版Git、Node.js 24とnpm |
 | Python | 3.12 |
-| Rust | stable、`x86_64-pc-windows-msvc` |
+| Rust | [固定版](development-workflow.md#rustの版の固定)、`x86_64-pc-windows-msvc` |
 | Visual Studio Build Tools | 2022、C++開発、MSVC x64/x86、Windows SDK |
 | CMake | 3.21以上。CTestも必要 |
 | WebView2 | Microsoft Edge WebView2 Runtime |
