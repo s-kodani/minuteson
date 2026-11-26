@@ -108,7 +108,7 @@ fn read_only_catalog_and_review_separate_bundle_network_and_unverified_readiness
     assert_eq!(catalog[0]["review"]["bundledBytes"], bytes.len());
     assert_eq!(
         catalog[6]["review"]["recipeHash"],
-        "6dd006b4d82b4806fa2e32decaf386c5be60421bef07db25d6ccb60ec16816f1"
+        "a63d532a5582d336aa7e3849a9b852e191d714df76e76a23c6ef0dff50fd3bbf"
     );
     assert_eq!(
         catalog[3]["review"]["recipeHash"],

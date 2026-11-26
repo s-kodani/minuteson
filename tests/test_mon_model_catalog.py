@@ -43,7 +43,7 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertEqual(len(llms), 5)
             for choice in llms:
                 manifest = choice['recipe']['manifest']
-                self.assertEqual(manifest['engineVersion'], 'b12604')
+                self.assertEqual(manifest['engineVersion'], 'b12658')
                 engine = 'llama'
                 executable = next(f for f in manifest['files'] if f['role'] == 'executable')
                 self.assertEqual(executable['expectedHash'], hashlib.sha256(engine.encode()).hexdigest())
@@ -53,7 +53,7 @@ class ModelCatalogTests(unittest.TestCase):
 
     def test_generated_macos_recipes_bind_the_reviewed_runtime_and_preserve_asr(self):
         expected = {
-            'macos.json': ('base', '00e8c10c9fd9edb7e6f53129661eb6efaaa9ad0b9a5c7374076839e863ee22d8'),
+            'macos.json': ('base', '133bd1518bce9337ad50adb988476704b4e2cdec655b10d729cde92b3a3fb5ee'),
             'asr-transducer.json': ('asr', 'd72e39de3b7a96da478e4d267bf88f83400dee5fc64cb35d4deaade73eadc8a1'),
         }
         for name, (group, golden) in expected.items():
@@ -65,7 +65,7 @@ class ModelCatalogTests(unittest.TestCase):
         identity = 'sherpa-1138-pyannote3-int8-titanet-small'
         mac = catalog.compile_target('macos_aarch64')
         self.assertEqual(canonical_hash([c for c in mac if c['id'] != identity]),
-                         '6a564479db5593e16a7068d48ef8562e5f7619279a16bc3685629cc58ceae34f')
+                         'f2c19f2a5f8485c6be02e0e1080e9edf35f0dc73c5b06d0573ae377a93e4bd50')
         for target, prefix in [('macos_aarch64', ''), ('windows_x86_64', 'windows-')]:
             choice = next(c for c in catalog.compile_target(target) if c['id'] == prefix + identity)
             files = choice['recipe']['manifest']['files']

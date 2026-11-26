@@ -259,7 +259,7 @@ fn disclosure_hash_matches_renderer_golden_with_original_notice_bytes() {
     let manifest = qwen();
     assert_eq!(
         official(&manifest).unwrap().unwrap().disclosure_hash,
-        "d505e7e5c3884f2bd0b5f4d4780d12d3515595f5149a4bb291e7442a7b2970f8"
+        "49e1995361b02b28b19161defb870fb57fd76159975551a090054559f4acd587"
     );
     let gemma = fixed()
         .into_iter()

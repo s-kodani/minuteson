@@ -40,7 +40,7 @@ class NativeOutputTests(unittest.TestCase):
             root = Path(temporary)
             model = root / 'model.gguf'; model.write_bytes(b'synthetic')
             choice = dict(id='llama-b11533-qwen3-4b-q4km', recipe=dict(manifest=dict(
-                engineVersion='b12604', files=[dict(role='llm', expectedHash='model-sha')])) )
+                engineVersion='b12658', files=[dict(role='llm', expectedHash='model-sha')])) )
             def run(arguments, **kwargs):
                 if 'input' not in kwargs:
                     kwargs['stdout'].write(b'{"ok":true}')
@@ -57,7 +57,7 @@ class NativeOutputTests(unittest.TestCase):
             with patch.object(native, 'prepare', return_value=(root / 'cli', model)), \
                     patch.object(native.subprocess, 'run', side_effect=run):
                 report = native.check(choice, root, None, None, root / 'worker', False)
-            self.assertEqual(report['engineVersion'], 'b12604')
+            self.assertEqual(report['engineVersion'], 'b12658')
             self.assertEqual(report['modelSha256'], 'model-sha')
             self.assertGreaterEqual(report['directSeconds'], 0)
             self.assertGreaterEqual(report['residentThreeRequestsSeconds'], 0)
@@ -138,7 +138,7 @@ class NativeArchiveTests(unittest.TestCase):
                           expectedHash=hashlib.sha256(self.weights.read_bytes()).hexdigest()))
         sources.append(dict(url='https://example.invalid/model.gguf'))
         return dict(id='llama-b11533-qwen3-4b-q4km', recipe=dict(
-            manifest=dict(engineVersion='b12604', files=files), sources=sources))
+            manifest=dict(engineVersion='b12658', files=files), sources=sources))
 
     def fetch(self):
         return Mock(timings={}, acquire=Mock(side_effect=lambda url, size, sha:
@@ -247,7 +247,7 @@ class NativeFailureReportTests(unittest.TestCase):
                                if native.os.name == 'nt' else 'app/model-catalog/macos.json')
         catalog.parent.mkdir(parents=True, exist_ok=True)
         catalog.write_text(json.dumps([
-            dict(id=ident, recipe=dict(manifest=dict(engineVersion='b12604')))
+            dict(id=ident, recipe=dict(manifest=dict(engineVersion='b12658')))
             for ident in native.REPRESENTATIVES]))
 
     def invoke(self):

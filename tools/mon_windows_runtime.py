@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / '.cache/windows-runtime'
 PACKAGE = CACHE / 'package'
 URI = 'mon-bundled://windows-runtime-v1/runtime.tar'
-LLAMA_12604 = ('https://github.com/ggml-org/llama.cpp/releases/download/b12604/llama-b12604-bin-win-cpu-x64.zip', 25011009, 'a090197174bdd049e0dee79ef6208775befb316966bef32977affb96e7af50bb')
+LLAMA_12658 = ('https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-win-cpu-x64.zip', 25100249, '4d4d84a55dc6cf47ae22b3ff8b933b2f889e98452977924cf17dc409b620b6a8')
 SHERPA = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-no-tts.tar.bz2',23271851,'4b0a94f7b5c606b1b64a19a831c2127559e4b3d34e195465ebc7be73d9ed4783')
 LLAMA_NATIVE_FILES = {'llama-completion.exe','llama-completion-impl.dll','llama-common.dll','llama.dll','ggml.dll','ggml-base.dll','libomp.dll','ggml-cpu-x64.dll','ggml-cpu-haswell.dll','ggml-cpu-skylakex.dll','ggml-cpu-zen4.dll','ggml-cpu-sapphirerapids.dll','vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll'}
 VC_RUNTIME_FILES = ('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
@@ -37,7 +37,7 @@ def write_native_notices(redist_files, redist_source=None):
     """Bind the OpenMP notice to known upstream bytes; retain CRT conditions."""
     directory = ROOT / 'third-party/runtime-notices'
     manifest = json.loads((directory / 'index.json').read_text(encoding='utf8'))
-    if manifest['schemaVersion'] != 1 or manifest['llamaArchiveSha256'] != LLAMA_12604[2]:
+    if manifest['schemaVersion'] != 1 or manifest['llamaArchiveSha256'] != LLAMA_12658[2]:
         raise ValueError('native license provenance does not match the pinned llama archive')
     libomp = PACKAGE / 'llama/libomp.dll'
     if not libomp.is_file() or digest(libomp) != manifest['libomp']['sha256']:
@@ -56,7 +56,7 @@ def write_native_notices(redist_files, redist_source=None):
     provenance = {
         'schemaVersion': 1, 'licenseReview': 'not_verified', 'distributionReady': False,
         'libomp': manifest['libomp'],
-        'llamaArchiveSha256': LLAMA_12604[2],
+        'llamaArchiveSha256': LLAMA_12658[2],
         'visualCpp': {
             'source': redist_source or 'Visual Studio 2022 VC/Redist/MSVC/<version>/x64/Microsoft.VC143.CRT',
             'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in redist_files.items()},
@@ -175,7 +175,7 @@ def upstream_engines():
         raise ValueError('runtime subtree must not be a link')
     if destination.exists():
         shutil.rmtree(destination)
-    with zipfile.ZipFile(acquire(*LLAMA_12604)) as archive:
+    with zipfile.ZipFile(acquire(*LLAMA_12658)) as archive:
         for name in archive.namelist():
             leaf = Path(name).name
             if leaf in LLAMA_NATIVE_FILES or leaf == 'LICENSE':

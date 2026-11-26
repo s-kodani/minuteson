@@ -17,12 +17,12 @@
       "name": "llama-MIT.txt",
       "text": "MIT License\n\nCopyright (c) 2023-2026 The ggml authors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n",
       "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12604/llama-b12604-bin-macos-arm64.tar.gz"
+      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz"
     }
   ],
   "official": true,
-  "disclosureHash": "d505e7e5c3884f2bd0b5f4d4780d12d3515595f5149a4bb291e7442a7b2970f8",
+  "disclosureHash": "49e1995361b02b28b19161defb870fb57fd76159975551a090054559f4acd587",
   "targetBinding": {
-    "recipeHash": "6dd006b4d82b4806fa2e32decaf386c5be60421bef07db25d6ccb60ec16816f1"
+    "recipeHash": "a63d532a5582d336aa7e3849a9b852e191d714df76e76a23c6ef0dff50fd3bbf"
   }
 }
