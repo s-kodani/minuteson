@@ -244,7 +244,50 @@ pub(crate) fn guard_entry() -> Option<i32> {
 }
 pub(crate) struct StableFile {
     path: PathBuf,
-    metadata: crate::native_fs::Metadata,
+    size: u64,
+    sha256: String,
+    // Re-based only after a change-time-only difference was physically re-hashed.
+    metadata: std::sync::Mutex<crate::native_fs::Metadata>,
+}
+
+/// Physically confirm that a file whose only observed difference is its
+/// metadata change time still holds the pinned bytes, and return the settled
+/// metadata. Windows Code Integrity writes a signature-cache extended attribute
+/// (`$KERNEL.PURGE.ESBCACHE`) on an executable's first image load, updating
+/// NTFS ChangeTime without touching content. This never consults the job
+/// verification cache, so callers may hold that cache while re-hashing.
+pub(crate) fn reverify_change_time(
+    path: &Path,
+    content: &str,
+    size: u64,
+    sha256: &str,
+) -> Result<crate::native_fs::Metadata, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let before = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
+    if !before.is_file()
+        || before.len() != size
+        || crate::audio::reuse::content_stamp(&before) != content
+    {
+        return Err("固定したモデル・実行ファイルの実体が一致しません".into());
+    }
+    let mut hash = Sha256::new();
+    let mut buffer = vec![0; 65536];
+    loop {
+        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buffer[..n]);
+    }
+    let after = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
+    if crate::audio::reuse::stamp(&before) != crate::audio::reuse::stamp(&after)
+        || mon_core::hash::sha256_output_hex(hash.finalize()) != sha256
+    {
+        return Err("固定したモデル・実行ファイルのハッシュが一致しません".into());
+    }
+    Ok(before)
 }
 
 impl StableFile {
@@ -259,15 +302,21 @@ impl StableFile {
         }
         Ok(Self {
             path: proof.path.clone(),
-            metadata,
+            size: proof.size,
+            sha256: proof.sha256.clone(),
+            metadata: std::sync::Mutex::new(metadata),
         })
     }
 
     pub(crate) fn verify(&self) -> Result<(), String> {
         let current = crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?;
-        if current.len() != self.metadata.len()
+        let mut baseline = self
+            .metadata
+            .lock()
+            .map_err(|_| "モデル・実行ファイルの監視状態が不正です".to_string())?;
+        if current.len() != baseline.len()
             || current.modified().map_err(|e| e.to_string())?
-                != self.metadata.modified().map_err(|e| e.to_string())?
+                != baseline.modified().map_err(|e| e.to_string())?
         {
             return Err("実行中にモデル・実行ファイルが変更されました".into());
         }
@@ -275,12 +324,16 @@ impl StableFile {
         {
             #[cfg(unix)]
             use std::os::unix::fs::MetadataExt;
-            if current.dev() != self.metadata.dev()
-                || current.ino() != self.metadata.ino()
-                || current.ctime() != self.metadata.ctime()
-                || current.ctime_nsec() != self.metadata.ctime_nsec()
-            {
+            if current.dev() != baseline.dev() || current.ino() != baseline.ino() {
                 return Err("実行中にモデル・実行ファイルが差し替えられました".into());
+            }
+            if current.ctime() != baseline.ctime() || current.ctime_nsec() != baseline.ctime_nsec()
+            {
+                // A change time alone is a reason to re-read, not proof of
+                // replacement: content restored under an old mtime still fails here.
+                let content = crate::audio::reuse::content_stamp(&baseline);
+                *baseline = reverify_change_time(&self.path, &content, self.size, &self.sha256)
+                    .map_err(|_| "実行中にモデル・実行ファイルが差し替えられました".to_string())?;
             }
         }
         Ok(())
@@ -300,5 +353,124 @@ impl Drop for ManagedChild {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// Update only a file's metadata change time, as Windows Code Integrity does
+/// when it caches an executable's signature on first launch.
+#[cfg(test)]
+pub(crate) fn touch_change_time(path: &Path) {
+    let change_time = |path: &Path| {
+        let m = crate::native_fs::symlink_metadata(path).unwrap();
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        (
+            m.ctime(),
+            m.ctime_nsec(),
+            crate::audio::reuse::content_stamp(&m),
+        )
+    };
+    let before = change_time(path);
+    // Leave the original (NTFS or coarse kernel) clock tick so the change
+    // time is distinct.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let original = std::fs::metadata(path).unwrap().permissions();
+    #[cfg(unix)]
+    let changed = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::Permissions::from_mode(original.mode() ^ 0o100)
+    };
+    #[cfg(windows)]
+    let changed = {
+        let mut changed = original.clone();
+        changed.set_readonly(true);
+        changed
+    };
+    std::fs::set_permissions(path, changed).unwrap();
+    std::fs::set_permissions(path, original).unwrap();
+    let after = change_time(path);
+    assert_ne!(
+        (before.0, before.1),
+        (after.0, after.1),
+        "change time must move"
+    );
+    assert_eq!(before.2, after.2, "content identity must not move");
+}
+
+#[cfg(test)]
+mod stable_file_tests {
+    use super::*;
+
+    #[test]
+    fn change_time_only_update_is_rehashed_but_restored_mtime_tamper_is_rejected() {
+        let t = tempfile::tempdir().unwrap();
+        let path = t.path().canonicalize().unwrap().join("worker");
+        std::fs::write(&path, b"original").unwrap();
+        let proof = Fingerprint::capture(&path, &|| false).unwrap();
+        let watched = StableFile::watch(&proof).unwrap();
+        touch_change_time(&path);
+        watched.verify().unwrap();
+        // The settled baseline is reused without another physical change.
+        watched.verify().unwrap();
+
+        let old = crate::native_fs::metadata(&path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&path, b"tampered").unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        assert!(watched.verify().is_err());
+    }
+
+    #[test]
+    fn renamed_replacement_with_identical_bytes_is_still_rejected() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().canonicalize().unwrap();
+        let path = root.join("worker");
+        std::fs::write(&path, b"original").unwrap();
+        let proof = Fingerprint::capture(&path, &|| false).unwrap();
+        let watched = StableFile::watch(&proof).unwrap();
+        let old = crate::native_fs::metadata(&path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        std::fs::rename(&path, root.join("retained")).unwrap();
+        std::fs::write(&path, b"original").unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        assert!(watched.verify().is_err());
+    }
+
+    /// Regression for the Microsoft Store build: launching a freshly copied
+    /// executable lets Code Integrity add `$KERNEL.PURGE.ESBCACHE`, which moves
+    /// NTFS ChangeTime while the bytes stay identical.
+    #[cfg(windows)]
+    #[test]
+    fn first_launch_of_freshly_copied_executable_keeps_its_watch_valid() {
+        let system = std::env::var_os("SystemRoot").unwrap();
+        let source = PathBuf::from(system).join("System32").join("whoami.exe");
+        let t = tempfile::tempdir().unwrap();
+        let path = t.path().canonicalize().unwrap().join("probe.exe");
+        std::fs::copy(&source, &path).unwrap();
+        let proof = Fingerprint::capture(&path, &|| false).unwrap();
+        let watched = StableFile::watch(&proof).unwrap();
+        let status = Command::new(&path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        watched.verify().unwrap();
+        proof.verify(&|| false).unwrap();
     }
 }

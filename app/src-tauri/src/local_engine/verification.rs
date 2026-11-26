@@ -23,13 +23,21 @@ struct Cache {
     bytes: u64,
     reused_bytes: u64,
     hash_ms: u128,
-    inventories: BTreeMap<PathBuf, Vec<(PathBuf, String)>>,
+    inventories: BTreeMap<PathBuf, Vec<Item>>,
 }
 struct Entry {
     proof: Fingerprint,
     watched: StableFile,
     audit: File,
     stamp: String,
+    content: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Item {
+    path: PathBuf,
+    stamp: String,
+    content: String,
+    file: bool,
 }
 pub(crate) struct Scope {
     enabled: bool,
@@ -73,25 +81,11 @@ impl Scope {
         }
         // Temporarily remove evidence so final validation physically reads all
         // retained files, even when nested model/package checks use this API.
-        let cache = CACHE
+        let mut cache = CACHE
             .with(|c| c.borrow_mut().take())
             .ok_or("検証セッションがありません")?;
         let final_started = std::time::Instant::now();
-        let result = (|| {
-            for (path, inventory) in &cache.inventories {
-                if &inventory_of(path)? != inventory {
-                    return Err("処理中にモデルパッケージの構成が変更されました".into());
-                }
-            }
-            for e in cache.entries.values() {
-                e.watched.verify()?;
-                verify_audit(e)?;
-                e.proof.verify(cancelled)?;
-                e.watched.verify()?;
-                verify_audit(e)?;
-            }
-            Ok(())
-        })();
+        let result = final_check(&mut cache, cancelled);
         self.final_ms.set(final_started.elapsed().as_millis());
         if result.is_ok() {
             self.final_bytes
@@ -110,11 +104,67 @@ impl Drop for Scope {
         }
     }
 }
-fn verify_audit(e: &Entry) -> Result<(), String> {
-    if crate::audio::reuse::stamp(&crate::native_fs::metadata(&e.audit).map_err(|e| e.to_string())?)
-        != e.stamp
-    {
-        return Err("処理中に検証済みファイルが変更されました".into());
+fn final_check(cache: &mut Cache, cancelled: &impl Fn() -> bool) -> Result<(), String> {
+    let Cache {
+        inventories,
+        entries,
+        ..
+    } = cache;
+    for (path, inventory) in inventories.iter_mut() {
+        let current = inventory_of(path)?;
+        same_inventory(inventory, &current, entries)?;
+        *inventory = current;
+    }
+    for e in entries.values_mut() {
+        e.watched.verify()?;
+        verify_audit(e)?;
+        e.proof.verify(cancelled)?;
+        e.watched.verify()?;
+        verify_audit(e)?;
+    }
+    Ok(())
+}
+fn verify_audit(e: &mut Entry) -> Result<(), String> {
+    const CHANGED: &str = "処理中に検証済みファイルが変更されました";
+    let current = crate::native_fs::metadata(&e.audit).map_err(|e| e.to_string())?;
+    if crate::audio::reuse::stamp(&current) == e.stamp {
+        return Ok(());
+    }
+    // Only the change time moved (e.g. Windows Code Integrity cached the
+    // signature of a just-launched worker): accept it only after re-hashing.
+    if !current.is_file() || crate::audio::reuse::content_stamp(&current) != e.content {
+        return Err(CHANGED.into());
+    }
+    let proof = &e.proof;
+    let settled = super::reverify_change_time(&proof.path, &e.content, proof.size, &proof.sha256)
+        .map_err(|_| CHANGED.to_string())?;
+    e.stamp = crate::audio::reuse::stamp(&settled);
+    Ok(())
+}
+/// Package inventories stay strict about added, removed or rewritten entries.
+/// A change-time-only difference is absorbed only by a retained, hash-pinned
+/// file, which is physically re-hashed before the package is accepted.
+fn same_inventory(
+    old: &[Item],
+    current: &[Item],
+    entries: &mut BTreeMap<PathBuf, Entry>,
+) -> Result<(), String> {
+    const CHANGED: &str = "処理中にモデルパッケージの構成が変更されました";
+    if old.len() != current.len() {
+        return Err(CHANGED.into());
+    }
+    for (old, current) in old.iter().zip(current) {
+        if old.path != current.path || old.file != current.file || old.content != current.content {
+            return Err(CHANGED.into());
+        }
+        if old.stamp != current.stamp {
+            let e = entries
+                .get_mut(&current.path)
+                .filter(|_| current.file)
+                .ok_or(CHANGED)?;
+            e.watched.verify()?;
+            verify_audit(e)?;
+        }
     }
     Ok(())
 }
@@ -132,7 +182,7 @@ pub(crate) fn hash(
     let hit = CACHE.with(|c| -> Result<Option<String>, String> {
         let mut c = c.borrow_mut();
         let Some(c) = c.as_mut() else { return Ok(None) };
-        if let Some(e) = c.entries.get(path) {
+        if let Some(e) = c.entries.get_mut(path) {
             e.watched.verify()?;
             verify_audit(e)?;
             if e.stamp != identity {
@@ -186,6 +236,7 @@ pub(crate) fn hash(
                         watched,
                         audit: file.try_clone().map_err(|e| e.to_string())?,
                         stamp: identity,
+                        content: crate::audio::reuse::content_stamp(&before),
                     },
                 );
             }
@@ -195,7 +246,7 @@ pub(crate) fn hash(
     Ok(hash)
 }
 
-fn inventory_of(root: &Path) -> Result<Vec<(PathBuf, String)>, String> {
+fn inventory_of(root: &Path) -> Result<Vec<Item>, String> {
     let mut pending = vec![root.to_path_buf()];
     let mut result = Vec::new();
     while let Some(path) = pending.pop() {
@@ -203,7 +254,12 @@ fn inventory_of(root: &Path) -> Result<Vec<(PathBuf, String)>, String> {
         if m.file_type().is_symlink() {
             return Err("モデルパッケージ内にリンクがあります".into());
         }
-        result.push((path.clone(), crate::audio::reuse::stamp(&m)));
+        result.push(Item {
+            path: path.clone(),
+            stamp: crate::audio::reuse::stamp(&m),
+            content: crate::audio::reuse::content_stamp(&m),
+            file: m.is_file(),
+        });
         if result.len() > 16384 {
             return Err("モデルパッケージの構成上限です".into());
         }
@@ -223,13 +279,16 @@ pub(crate) fn inventory(root: &Path) -> Result<(), String> {
     let value = inventory_of(root)?;
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
-        let c = c.as_mut().ok_or("検証セッションがありません")?;
-        if let Some(old) = c.inventories.get(root) {
-            if old != &value {
-                return Err("処理中にモデルパッケージの構成が変更されました".into());
-            }
+        let Cache {
+            inventories,
+            entries,
+            ..
+        } = c.as_mut().ok_or("検証セッションがありません")?;
+        if let Some(old) = inventories.get_mut(root) {
+            same_inventory(old, &value, entries)?;
+            *old = value;
         } else {
-            c.inventories.insert(root.into(), value);
+            inventories.insert(root.into(), value);
         }
         Ok(())
     })
@@ -271,6 +330,48 @@ mod tests {
         assert!(scope.finish(&|| false).is_err());
     }
     #[test]
+    fn change_time_only_update_of_retained_file_is_rehashed_across_reuse_inventory_and_finish() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().canonicalize().unwrap();
+        let p = root.join("worker");
+        std::fs::write(&p, b"original").unwrap();
+        let scope = Scope::enter(true).unwrap();
+        inventory(&root).unwrap();
+        let proof = Fingerprint::capture_retained(&p, &|| false).unwrap();
+        // Same bytes, same mtime: only the change time moved, as after the
+        // first launch of a freshly copied Windows worker.
+        super::super::touch_change_time(&p);
+        proof.verify(&|| false).unwrap();
+        inventory(&root).unwrap();
+        scope.finish(&|| false).unwrap();
+        assert_eq!(CACHE.with(|c| c.borrow().as_ref().unwrap().hits), 1);
+
+        let old = crate::native_fs::metadata(&p).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&p, b"tampered").unwrap();
+        File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old))
+            .unwrap();
+        assert!(proof.verify(&|| false).is_err());
+        assert!(inventory(&root).is_err());
+        assert!(scope.finish(&|| false).is_err());
+    }
+    #[test]
+    fn change_time_only_update_of_unpinned_package_file_still_fails_inventory() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().canonicalize().unwrap();
+        let p = root.join("unpinned");
+        std::fs::write(&p, b"data").unwrap();
+        let scope = Scope::enter(true).unwrap();
+        inventory(&root).unwrap();
+        super::super::touch_change_time(&p);
+        assert!(inventory(&root).is_err());
+        assert!(scope.finish(&|| false).is_err());
+    }
+    #[test]
     fn temporary_capture_is_not_retained_and_legacy_scopes_remain_disabled() {
         let t = tempfile::tempdir().unwrap();
         let p = t.path().join("temporary");
@@ -291,7 +392,7 @@ pub(crate) fn release(path: &Path) -> Result<(), String> {
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if let Some(cache) = c.as_mut() {
-            if let Some(e) = cache.entries.get(&path) {
+            if let Some(e) = cache.entries.get_mut(&path) {
                 e.watched.verify()?;
                 verify_audit(e)?;
             }
