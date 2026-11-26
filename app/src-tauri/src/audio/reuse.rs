@@ -107,6 +107,29 @@ pub(crate) fn stamp(m: &Metadata) -> String {
         format!("{}:{:?}:{:?}", m.len(), m.modified(), m.created())
     }
 }
+/// The data-bearing part of `stamp`: object identity, size and modification
+/// time. A difference only in change time (for example Windows Code Integrity
+/// recording its signature cache attribute on an executable's first image
+/// load) never proves unchanged bytes by itself; callers must re-hash first.
+pub(crate) fn content_stamp(m: &Metadata) -> String {
+    #[cfg(any(unix, windows))]
+    {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        format!(
+            "{}:{}:{}:{}:{}",
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec()
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        format!("{}:{:?}", m.len(), m.modified())
+    }
+}
 pub(super) fn open(
     file: &File,
     size: u64,

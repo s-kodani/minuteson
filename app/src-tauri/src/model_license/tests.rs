@@ -122,39 +122,49 @@ fn current_and_pre_update_eres2net_packages_keep_offline_terms() {
 fn previous_llama_runtime_packages_keep_offline_terms_by_weight_identity() {
     use crate::model_inspection::PackageManifestExt;
 
-    // Exact pre-update Mac catalog manifests from 5d76e2ab, including their
-    // runtime files and notices. A target-only Windows conversion is invalid.
-    let previous: Vec<PackageManifest> = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/model-license-llama-b11960-macos.json"
-    ))
-    .unwrap();
-    assert_eq!(previous.len(), 5);
-    assert_eq!(
-        previous
-            .iter()
-            .map(|m| &m.model_name)
-            .collect::<BTreeSet<_>>()
-            .len(),
-        5
-    );
+    // Exact pre-update Mac catalog manifests (b11960 from 5d76e2ab, b12556 from
+    // f3702c6f), including their runtime files and notices. A target-only
+    // Windows conversion is invalid.
+    let fixtures = [
+        (
+            "b11960",
+            include_str!("../../../tests/fixtures/model-license-llama-b11960-macos.json"),
+        ),
+        (
+            "b12556",
+            include_str!("../../../tests/fixtures/model-license-llama-b12556-macos.json"),
+        ),
+    ];
     let current_catalog = fixed();
-    for manifest in previous {
-        assert_eq!(manifest.engine, Engine::Llama);
-        assert_eq!(manifest.target, Target::MacosAarch64);
-        assert_eq!(manifest.engine_version, "b11960");
-        manifest.validate(Target::MacosAarch64).unwrap();
-        let current_manifest = current_catalog
-            .iter()
-            .find(|m| m.engine == manifest.engine && m.model_name == manifest.model_name)
-            .unwrap();
-        assert_ne!(manifest.engine_version, current_manifest.engine_version);
-        let previous = official(&manifest).unwrap().unwrap();
-        let current = official(current_manifest).unwrap().unwrap();
-        assert!(previous.official);
-        assert_eq!(previous.disclosure_hash, current.disclosure_hash);
-        // Preserved model terms do not authorize an old runtime as the current
-        // catalog package; installed package identity remains exact.
-        assert!(!installed(&manifest, &current_catalog).unwrap().official);
+    for (version, fixture) in fixtures {
+        let previous: Vec<PackageManifest> = serde_json::from_str(fixture).unwrap();
+        assert_eq!(previous.len(), 5);
+        assert_eq!(
+            previous
+                .iter()
+                .map(|m| &m.model_name)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            5
+        );
+        for manifest in previous {
+            assert_eq!(manifest.engine, Engine::Llama);
+            assert_eq!(manifest.target, Target::MacosAarch64);
+            assert_eq!(manifest.engine_version, version);
+            manifest.validate(Target::MacosAarch64).unwrap();
+            let current_manifest = current_catalog
+                .iter()
+                .find(|m| m.engine == manifest.engine && m.model_name == manifest.model_name)
+                .unwrap();
+            assert_ne!(manifest.engine_version, current_manifest.engine_version);
+            let previous = official(&manifest).unwrap().unwrap();
+            let current = official(current_manifest).unwrap().unwrap();
+            assert!(previous.official);
+            assert_eq!(previous.disclosure_hash, current.disclosure_hash);
+            // Preserved model terms do not authorize an old runtime as the current
+            // catalog package; installed package identity remains exact.
+            assert!(!installed(&manifest, &current_catalog).unwrap().official);
+        }
     }
 }
 #[test]
@@ -249,7 +259,7 @@ fn disclosure_hash_matches_renderer_golden_with_original_notice_bytes() {
     let manifest = qwen();
     assert_eq!(
         official(&manifest).unwrap().unwrap().disclosure_hash,
-        "f1e9cb42cf6429e7a7f61d731057f1dce9bb2d5259889d3f60a1e47e8ac2ec39"
+        "49e1995361b02b28b19161defb870fb57fd76159975551a090054559f4acd587"
     );
     let gemma = fixed()
         .into_iter()

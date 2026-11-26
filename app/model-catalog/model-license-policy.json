@@ -83,7 +83,7 @@
       "file": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d.txt",
       "bytes": 1078,
       "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
+      "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz"
     },
     {
       "name": "whisper-MIT.txt",
@@ -275,7 +275,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -304,7 +304,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -333,7 +333,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -362,7 +362,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Qwen-Apache-2.0.txt",
@@ -391,7 +391,7 @@
         {
           "name": "llama-MIT.txt",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
-          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz"
+          "sourceUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz"
         },
         {
           "name": "Gemma-Apache-2.0.txt",

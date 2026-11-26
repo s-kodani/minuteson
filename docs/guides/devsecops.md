@@ -58,7 +58,7 @@ make check-security
 
 例外は[例外定義](../../.github/security-exceptions.json)の`exceptions`へ追加します。`tool`は`osv`または`codeql`、`id`は指摘ID、`target`はレポートの完全一致対象、`reason`は影響しない根拠、`owner`は担当者です。`created`と`expires`はUTCの日付を`YYYY-MM-DD`で記載し、作成日から最長30日、期限日は無効とします。理由と担当者を含む全項目を必須にし、包括的な除外は認めません。重大度不明を無条件に低と見なさず、確認結果を残します。Gitleaksの一括除外は行いません。既知の非秘密値は、ファイルと検出値を完全に限定した設定で扱います。現在の除外は履歴内のSQLite設定キー`meeting_mix_v1_initialized`だけです。
 
-公式カタログとWindows生成資材の議事録エンジンは、RPCサーバーの[CVE-2026-118375](https://github.com/ggml-org/llama.cpp/pull/30399)・[CVE-2026-119052](https://github.com/ggml-org/llama.cpp/pull/31204)、モデル読込みの[CVE-2026-133710](https://github.com/ggml-org/llama.cpp/pull/32601)の修正を含む`llama.cpp b12556`へ統一しています。常駐workerも同じ固定修正コミットから構築します。旧`b11533`の取得定義と2件の期限付き例外は除去しています。Windowsは固定版を取得し、許可したCLI・ライブラリ・通知だけを新しいパッケージ領域へ配置します。復元キャッシュの旧DLLを成果物へ混ぜません。
+公式カタログとWindows生成資材の議事録エンジンは、RPCサーバーの[CVE-2026-118375](https://github.com/ggml-org/llama.cpp/pull/30399)・[CVE-2026-119052](https://github.com/ggml-org/llama.cpp/pull/31204)、モデル読込みの[CVE-2026-133710](https://github.com/ggml-org/llama.cpp/pull/32601)、文法パーサーの[CVE-2026-137057](https://github.com/ggml-org/llama.cpp/pull/32551)、RPCサーバーの[CVE-2026-137567](https://github.com/ggml-org/llama.cpp/pull/32651)の修正を含む`llama.cpp b12658`へ統一しています。常駐workerも同じ固定修正コミットから構築します。旧`b11533`の取得定義と2件の期限付き例外は除去しています。Windowsは固定版を取得し、許可したCLI・ライブラリ・通知だけを新しいパッケージ領域へ配置します。復元キャッシュの旧DLLを成果物へ混ぜません。
 
 議事録処理は固定引数で起動し、継承環境を消去する境界を維持します。今後RPCを導入する場合は到達性を再評価します。更新時は取得元・実バイトの容量とSHA、レシピ、モデルデータの再利用、開始済みジョブの条件固定、両OSの互換性を確認します。代表モデルの実行検査は[テスト運用](testing.md#議事録ランタイムの実資材検証)を参照してください。
 
@@ -102,7 +102,7 @@ Dependabotは[定義](../../.github/dependabot.yml)に従い、npm・Cargo・Git
 
 ## 自動配布の初期設定
 
-配布条件と確認状況は[製品概要](../spec/overview.md#配布と評価の確認状況)を参照してください。`RELEASE_AUTOMATION_ENABLED=true`でmainの正式配布物保存と下書きへの添付を有効化します。公開は担当者のPublish releaseです。旧`RELEASE_PUBLISH_ENABLED`と`release-publish` Environmentは新フローで参照せず、自動Publishは行いません。
+公開状況は[GitHub Releases](https://github.com/s-kodani/minuteson/releases)を参照してください。`RELEASE_AUTOMATION_ENABLED=true`でmainの正式配布物保存と下書きへの添付を有効化します。公開は担当者のPublish releaseです。旧`RELEASE_PUBLISH_ENABLED`と`release-publish` Environmentは新フローで参照せず、自動Publishは行いません。
 
 Environmentの構成は次のとおりです。いずれもdeployment branchesを**mainのみ**に限定します。
 

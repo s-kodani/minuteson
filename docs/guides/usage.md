@@ -24,7 +24,7 @@ sources:
 
 ## 最初の準備
 
-対象OSに合ったアプリを準備します。配布状況は[製品概要](../spec/overview.md#配布と評価の確認状況)、自分で構築する場合は[macOS](build-macos.md)／[Windows](build-windows.md)の手順を参照してください。
+対象OSに合ったアプリを準備します。配布状況は[GitHub Releases](https://github.com/s-kodani/minuteson/releases)、自分で構築する場合は[macOS](build-macos.md)／[Windows](build-windows.md)の手順を参照してください。
 
 1. 「設定 → ローカルAI」で文字起こし・話者分離・議事録用のモデルを選びます。
 2. 未導入なら「ダウンロードして使用」を押します。条件の概要と全文を読み、「モデルと実行エンジンの利用条件を確認しました」をチェックして続行します。空き容量を確保し、照合・動作確認・設定適用の終了を待ちます。

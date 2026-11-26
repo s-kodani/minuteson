@@ -150,20 +150,20 @@
             {
               "relativePath": "libllama-completion-impl.dylib",
               "role": "runtime_library",
-              "expectedSize": 121744,
-              "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+              "expectedSize": 123584,
+              "expectedHash": "345205e9ad877cfad3b9dcadce9cb0e0fe3f15c6a24f84ade918ca72e92965c2"
             },
             {
               "relativePath": "libllama-common.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 8299144,
-              "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+              "expectedSize": 8375384,
+              "expectedHash": "e1dcd6735a2ab496bad91585eb174f4b3cb286767895068f06a21c5bed7af532"
             },
             {
               "relativePath": "libllama.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 3895536,
-              "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+              "expectedSize": 3942192,
+              "expectedHash": "405a9a5499308a4d9d45438527ab2b19f5897b0185e2568dda4d75812d143b89"
             },
             {
               "relativePath": "libggml.1.dylib",
@@ -174,14 +174,14 @@
             {
               "relativePath": "libggml-base.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 770888,
-              "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+              "expectedSize": 770920,
+              "expectedHash": "45941a7a0daefa6cc5dd9f2041c98f4c3782bede0694af000cb88a69ccf518e0"
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 976384,
-              "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+              "expectedSize": 976448,
+              "expectedHash": "6636de017f92a89c4a6466c1113f56eab74ee92d98254a5cb967cf9c00cf3740"
             },
             {
               "relativePath": "libggml-blas.1.dylib",
@@ -193,114 +193,114 @@
               "relativePath": "libggml-metal.1.dylib",
               "role": "runtime_library",
               "expectedSize": 5705080,
-              "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+              "expectedHash": "072d36cd371406654118e1d4454f6b70b72695d87e334448ff6bc90efbeca13f"
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 243488,
-              "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+              "expectedSize": 264928,
+              "expectedHash": "99e5e03de7e6d2b509a1545e40c1335e4027b10e55ebb1e778392eda9e6ff839"
             }
           ],
           "sources": [
             {
               "relativePath": "llama-completion",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/llama-completion"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/llama-completion"
               }
             },
             {
               "relativePath": "libllama-completion-impl.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-completion-impl.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-completion-impl.dylib"
               }
             },
             {
               "relativePath": "libllama-common.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-common.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-common.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libllama.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-base.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-base.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-base.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-cpu.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-cpu.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-blas.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-blas.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-blas.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-metal.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-metal.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-metal.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-rpc.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-rpc.1.0.0.dylib"
               }
             }
           ],
@@ -331,20 +331,20 @@
             {
               "relativePath": "libllama-completion-impl.dylib",
               "role": "runtime_library",
-              "expectedSize": 121744,
-              "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+              "expectedSize": 123584,
+              "expectedHash": "345205e9ad877cfad3b9dcadce9cb0e0fe3f15c6a24f84ade918ca72e92965c2"
             },
             {
               "relativePath": "libllama-common.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 8299144,
-              "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+              "expectedSize": 8375384,
+              "expectedHash": "e1dcd6735a2ab496bad91585eb174f4b3cb286767895068f06a21c5bed7af532"
             },
             {
               "relativePath": "libllama.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 3895536,
-              "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+              "expectedSize": 3942192,
+              "expectedHash": "405a9a5499308a4d9d45438527ab2b19f5897b0185e2568dda4d75812d143b89"
             },
             {
               "relativePath": "libggml.1.dylib",
@@ -355,14 +355,14 @@
             {
               "relativePath": "libggml-base.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 770888,
-              "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+              "expectedSize": 770920,
+              "expectedHash": "45941a7a0daefa6cc5dd9f2041c98f4c3782bede0694af000cb88a69ccf518e0"
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 976384,
-              "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+              "expectedSize": 976448,
+              "expectedHash": "6636de017f92a89c4a6466c1113f56eab74ee92d98254a5cb967cf9c00cf3740"
             },
             {
               "relativePath": "libggml-blas.1.dylib",
@@ -374,114 +374,114 @@
               "relativePath": "libggml-metal.1.dylib",
               "role": "runtime_library",
               "expectedSize": 5705080,
-              "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+              "expectedHash": "072d36cd371406654118e1d4454f6b70b72695d87e334448ff6bc90efbeca13f"
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 243488,
-              "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+              "expectedSize": 264928,
+              "expectedHash": "99e5e03de7e6d2b509a1545e40c1335e4027b10e55ebb1e778392eda9e6ff839"
             }
           ],
           "sources": [
             {
               "relativePath": "llama-completion",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/llama-completion"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/llama-completion"
               }
             },
             {
               "relativePath": "libllama-completion-impl.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-completion-impl.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-completion-impl.dylib"
               }
             },
             {
               "relativePath": "libllama-common.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-common.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-common.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libllama.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-base.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-base.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-base.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-cpu.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-cpu.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-blas.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-blas.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-blas.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-metal.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-metal.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-metal.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-rpc.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-rpc.1.0.0.dylib"
               }
             }
           ],
@@ -512,20 +512,20 @@
             {
               "relativePath": "libllama-completion-impl.dylib",
               "role": "runtime_library",
-              "expectedSize": 121744,
-              "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+              "expectedSize": 123584,
+              "expectedHash": "345205e9ad877cfad3b9dcadce9cb0e0fe3f15c6a24f84ade918ca72e92965c2"
             },
             {
               "relativePath": "libllama-common.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 8299144,
-              "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+              "expectedSize": 8375384,
+              "expectedHash": "e1dcd6735a2ab496bad91585eb174f4b3cb286767895068f06a21c5bed7af532"
             },
             {
               "relativePath": "libllama.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 3895536,
-              "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+              "expectedSize": 3942192,
+              "expectedHash": "405a9a5499308a4d9d45438527ab2b19f5897b0185e2568dda4d75812d143b89"
             },
             {
               "relativePath": "libggml.1.dylib",
@@ -536,14 +536,14 @@
             {
               "relativePath": "libggml-base.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 770888,
-              "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+              "expectedSize": 770920,
+              "expectedHash": "45941a7a0daefa6cc5dd9f2041c98f4c3782bede0694af000cb88a69ccf518e0"
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 976384,
-              "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+              "expectedSize": 976448,
+              "expectedHash": "6636de017f92a89c4a6466c1113f56eab74ee92d98254a5cb967cf9c00cf3740"
             },
             {
               "relativePath": "libggml-blas.1.dylib",
@@ -555,114 +555,114 @@
               "relativePath": "libggml-metal.1.dylib",
               "role": "runtime_library",
               "expectedSize": 5705080,
-              "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+              "expectedHash": "072d36cd371406654118e1d4454f6b70b72695d87e334448ff6bc90efbeca13f"
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 243488,
-              "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+              "expectedSize": 264928,
+              "expectedHash": "99e5e03de7e6d2b509a1545e40c1335e4027b10e55ebb1e778392eda9e6ff839"
             }
           ],
           "sources": [
             {
               "relativePath": "llama-completion",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/llama-completion"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/llama-completion"
               }
             },
             {
               "relativePath": "libllama-completion-impl.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-completion-impl.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-completion-impl.dylib"
               }
             },
             {
               "relativePath": "libllama-common.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-common.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-common.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libllama.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-base.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-base.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-base.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-cpu.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-cpu.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-blas.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-blas.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-blas.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-metal.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-metal.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-metal.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-rpc.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-rpc.1.0.0.dylib"
               }
             }
           ],
@@ -693,20 +693,20 @@
             {
               "relativePath": "libllama-completion-impl.dylib",
               "role": "runtime_library",
-              "expectedSize": 121744,
-              "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+              "expectedSize": 123584,
+              "expectedHash": "345205e9ad877cfad3b9dcadce9cb0e0fe3f15c6a24f84ade918ca72e92965c2"
             },
             {
               "relativePath": "libllama-common.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 8299144,
-              "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+              "expectedSize": 8375384,
+              "expectedHash": "e1dcd6735a2ab496bad91585eb174f4b3cb286767895068f06a21c5bed7af532"
             },
             {
               "relativePath": "libllama.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 3895536,
-              "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+              "expectedSize": 3942192,
+              "expectedHash": "405a9a5499308a4d9d45438527ab2b19f5897b0185e2568dda4d75812d143b89"
             },
             {
               "relativePath": "libggml.1.dylib",
@@ -717,14 +717,14 @@
             {
               "relativePath": "libggml-base.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 770888,
-              "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+              "expectedSize": 770920,
+              "expectedHash": "45941a7a0daefa6cc5dd9f2041c98f4c3782bede0694af000cb88a69ccf518e0"
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 976384,
-              "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+              "expectedSize": 976448,
+              "expectedHash": "6636de017f92a89c4a6466c1113f56eab74ee92d98254a5cb967cf9c00cf3740"
             },
             {
               "relativePath": "libggml-blas.1.dylib",
@@ -736,114 +736,114 @@
               "relativePath": "libggml-metal.1.dylib",
               "role": "runtime_library",
               "expectedSize": 5705080,
-              "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+              "expectedHash": "072d36cd371406654118e1d4454f6b70b72695d87e334448ff6bc90efbeca13f"
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 243488,
-              "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+              "expectedSize": 264928,
+              "expectedHash": "99e5e03de7e6d2b509a1545e40c1335e4027b10e55ebb1e778392eda9e6ff839"
             }
           ],
           "sources": [
             {
               "relativePath": "llama-completion",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/llama-completion"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/llama-completion"
               }
             },
             {
               "relativePath": "libllama-completion-impl.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-completion-impl.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-completion-impl.dylib"
               }
             },
             {
               "relativePath": "libllama-common.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-common.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-common.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libllama.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-base.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-base.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-base.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-cpu.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-cpu.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-blas.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-blas.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-blas.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-metal.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-metal.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-metal.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-rpc.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-rpc.1.0.0.dylib"
               }
             }
           ],
@@ -984,20 +984,20 @@
             {
               "relativePath": "libllama-completion-impl.dylib",
               "role": "runtime_library",
-              "expectedSize": 121744,
-              "expectedHash": "5c3176d6445225410e47c33ab729092290e5ffa25654e2ba9c8a50096568deb9"
+              "expectedSize": 123584,
+              "expectedHash": "345205e9ad877cfad3b9dcadce9cb0e0fe3f15c6a24f84ade918ca72e92965c2"
             },
             {
               "relativePath": "libllama-common.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 8299144,
-              "expectedHash": "c8f3a1e00bbcc942cc2345d3175c8e0fe683a9c682bbebdd10c059ef45830156"
+              "expectedSize": 8375384,
+              "expectedHash": "e1dcd6735a2ab496bad91585eb174f4b3cb286767895068f06a21c5bed7af532"
             },
             {
               "relativePath": "libllama.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 3895536,
-              "expectedHash": "cd589e860dd77a50bd730071e2543dff7d8c7bc3da410a9924cf342db023e50e"
+              "expectedSize": 3942192,
+              "expectedHash": "405a9a5499308a4d9d45438527ab2b19f5897b0185e2568dda4d75812d143b89"
             },
             {
               "relativePath": "libggml.1.dylib",
@@ -1008,14 +1008,14 @@
             {
               "relativePath": "libggml-base.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 770888,
-              "expectedHash": "8e2e4a3968227dd07db0633ec831b7d8f92acde1f6660aac5f8ba379df6b437a"
+              "expectedSize": 770920,
+              "expectedHash": "45941a7a0daefa6cc5dd9f2041c98f4c3782bede0694af000cb88a69ccf518e0"
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 976384,
-              "expectedHash": "ba20732e5fd82e00a01d3e3c9abd2c79babb31d025f93a916f55b8098001be82"
+              "expectedSize": 976448,
+              "expectedHash": "6636de017f92a89c4a6466c1113f56eab74ee92d98254a5cb967cf9c00cf3740"
             },
             {
               "relativePath": "libggml-blas.1.dylib",
@@ -1027,114 +1027,114 @@
               "relativePath": "libggml-metal.1.dylib",
               "role": "runtime_library",
               "expectedSize": 5705080,
-              "expectedHash": "c11c8f3fd6a943bc1e77e8c7e46a560d902ce3e6e063d6fb75d6b543f3419ec8"
+              "expectedHash": "072d36cd371406654118e1d4454f6b70b72695d87e334448ff6bc90efbeca13f"
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
               "role": "runtime_library",
-              "expectedSize": 243488,
-              "expectedHash": "c1bef32eef9c6165ee283032f27ff998c30b804cd46cedb37d01a27732b52363"
+              "expectedSize": 264928,
+              "expectedHash": "99e5e03de7e6d2b509a1545e40c1335e4027b10e55ebb1e778392eda9e6ff839"
             }
           ],
           "sources": [
             {
               "relativePath": "llama-completion",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/llama-completion"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/llama-completion"
               }
             },
             {
               "relativePath": "libllama-completion-impl.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-completion-impl.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-completion-impl.dylib"
               }
             },
             {
               "relativePath": "libllama-common.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama-common.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama-common.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libllama.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libllama.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libllama.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-base.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-base.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-base.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-cpu.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-cpu.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-cpu.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-blas.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-blas.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-blas.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-metal.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-metal.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-metal.1.0.0.dylib"
               }
             },
             {
               "relativePath": "libggml-rpc.1.dylib",
-              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12556/llama-b12556-bin-macos-arm64.tar.gz",
+              "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12658/llama-b12658-bin-macos-arm64.tar.gz",
               "archive": {
                 "format": "tar",
-                "expectedSize": 16449908,
-                "expectedHash": "eb92254d5ada74c6753bd6ef0d23f498ffe2872b7222043eb48743abcaac8333",
-                "memberPath": "llama-b12556/libggml-rpc.1.0.0.dylib"
+                "expectedSize": 16647882,
+                "expectedHash": "39902f26edc23d67819a7a92a5d6e80eb57518ad238619244641d53f99f87b81",
+                "memberPath": "llama-b12658/libggml-rpc.1.0.0.dylib"
               }
             }
           ],

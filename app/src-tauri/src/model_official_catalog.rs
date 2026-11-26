@@ -176,19 +176,19 @@ mod tests {
                     "b2ac4fcbd3527ffe7776601b28eb6198d922164cc383340cc67a9cec2e16ceb7"
                 }
                 "llama-b11533-qwen3-8b-q4km" => {
-                    "3dac185509b8baa483b55c2cb0af54f315427a82f8d1b75299fb755df6217583"
+                    "c66efebe9750cac5c8d51b3ea6131f70eba6d7cc38ce12923fb12c0d189904fc"
                 }
                 "llama-b11533-qwen3-4b-q4km" => {
-                    "29b2c7cb6ec73039e2bfc5c97797e3e1a090c6d8c0cd27e8300574391bcd065f"
+                    "a63d532a5582d336aa7e3849a9b852e191d714df76e76a23c6ef0dff50fd3bbf"
                 }
                 "llama-b11533-qwen35-4b-q4km" => {
-                    "80d2c542ae08d0c91f45f732f74e468a5a369906128f6823dee8fc8b14b1a365"
+                    "bace3ad76dc491728a73bd60cb3ffa490d5ba489c626cf91d0d13309acdbb277"
                 }
                 "llama-b11533-qwen35-9b-q4km" => {
-                    "8e6b9e8ee758acfc197825bcbc9aa8cca62a84f2c96166cc9810bd6d6778de6d"
+                    "e13a7cb33fc51d31f585ee346d411a68acdfe6be30598f02f2826d4fe4bf7499"
                 }
                 "llama-b11960-gemma4-e4b-it-q4km" => {
-                    "be0dcb833bfcc307124ace43b1059e6418832fefeed99b2f3a7630ec30a59316"
+                    "70a5cf8940c31ccc11331bee6d779a727956d04c9b7a9285b7d550fb90128745"
                 }
                 _ => panic!("unverified catalog choice"),
             };
