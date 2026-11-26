@@ -17,5 +17,6 @@
 - [ADR 0012 起動時の案内と明示操作の分離](0012-startup-notices.md) — 旧ランタイムの更新案内に関する過去の判断。
 - [ADR 0013 録音音声を分割CAFへ一本化する](0013-single-recording-segments.md) — 旧分割CAF方式の設計と救出条件。
 - [ADR 0014 録音と取り込みを直接WAVへ保存する](0014-direct-wav-recording.md) — 録音中に単一WAVを合成し、確定証拠と専用の旧音声救出で保存を保つ。
+- [ADR 0015 リリースの確認状況を文書へ記載しない](0015-release-status-outside-docs.md) — 版ごとの準備・配布・評価の確認状況を製品概要から外し、公開状況はGitHub Releasesで確認する。
 
 [ドキュメント目次へ戻る](../index.md)

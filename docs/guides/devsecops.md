@@ -102,7 +102,7 @@ Dependabotは[定義](../../.github/dependabot.yml)に従い、npm・Cargo・Git
 
 ## 自動配布の初期設定
 
-配布条件と確認状況は[製品概要](../spec/overview.md#配布と評価の確認状況)を参照してください。`RELEASE_AUTOMATION_ENABLED=true`でmainの正式配布物保存と下書きへの添付を有効化します。公開は担当者のPublish releaseです。旧`RELEASE_PUBLISH_ENABLED`と`release-publish` Environmentは新フローで参照せず、自動Publishは行いません。
+公開状況は[GitHub Releases](https://github.com/s-kodani/minuteson/releases)を参照してください。`RELEASE_AUTOMATION_ENABLED=true`でmainの正式配布物保存と下書きへの添付を有効化します。公開は担当者のPublish releaseです。旧`RELEASE_PUBLISH_ENABLED`と`release-publish` Environmentは新フローで参照せず、自動Publishは行いません。
 
 Environmentの構成は次のとおりです。いずれもdeployment branchesを**mainのみ**に限定します。
 
