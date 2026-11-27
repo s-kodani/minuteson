@@ -49,7 +49,7 @@ MinutesOn **1.0.11** のリリース準備中です。公開版は[GitHub Releas
 
 ## 開発と保守
 
-Node.js 24、Rust stable、Python 3.12とOS別の開発環境が必要です。
+Node.js 24、rustupで管理するRust（[固定版](docs/guides/development-workflow.md#rustの版の固定)）、Python 3.12とOS別の開発環境が必要です。
 
 ```sh
 git clone https://github.com/s-kodani/minuteson.git minuteson

@@ -45,6 +45,23 @@ flowchart TD
     store --> poll[提出IDでGET状況照会]
 ```
 
+## Rustの版の固定
+
+使うRustの版は[`rust-toolchain.toml`](../../rust-toolchain.toml)で固定します。リポジトリ内で`cargo`・`rustc`を実行すると、rustupがこの版を選びます。未導入の場合は取得するため通信が必要です。環境変数`RUSTUP_TOOLCHAIN`と`cargo +<版>`の指定は固定より優先されるため、通常の開発では使いません。
+
+指定のない`stable`を使うと、手元だけが新しい版になり、CIと違う結果になります。固定版より新しい1.100系には次の非互換があります。
+
+| 対象 | 内容 | 確認状況 |
+| --- | --- | --- |
+| Windowsの録音ヘルパー | Rust標準ライブラリが`synchronization.lib`を要求するようになりました。[CMake定義](../../probes/windows-capture/CMakeLists.txt)がRustの静的ライブラリ向けに指定するOSライブラリに含まれないため、`WaitOnAddress`などが未解決でリンクに失敗します。 | 1.100.0でのQAビルドで再現 |
+| テスト補助処理 | Cargoのビルド出力の配置が変わり、`target/debug/deps`が作られません。[macOSの所有エンジン検査](../../app/src-tauri/src/local_engine/guard_tests.rs)はテスト実行ファイルと同じ場所の`libc`ライブラリを探し、[Rustテストのキャッシュ整理](../../tools/mon_rust_tests.py)は`debug/deps`を対象にします。 | 配置の変化はWindowsの1.100.0で確認。2つの処理への影響はコードの確認で、macOSでは未再現 |
+
+版を上げる場合は、上の非互換への対応と次の更新を同じPRで行い、全件CIで確認します。
+
+1. `rust-toolchain.toml`の`channel`を更新します。
+2. `.github/workflows/`で`dtolnay/rust-toolchain`を使う箇所の`toolchain`と固定コミットを同じ版へ揃えます。`rust-toolchain.toml`はワークフローの指定より優先されるため、片方だけを変えると指定と実際の版が食い違います。
+3. この節の非互換の記述を更新します。
+
 ## Issue・PRの形式
 
 本文は日本語を既定とし、1つの目的に絞ります。大きな変更は先にIssueで課題・目的・範囲を共有し、PRには関連Issueを記載します。
