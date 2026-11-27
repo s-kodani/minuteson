@@ -25,9 +25,11 @@ export function updateSource(status: AppUpdateStatus): string {
   return status.channel === "windows_store" ? "Microsoft Store" : status.channel === "macos_release" ? "GitHub Releases" : "対象外";
 }
 export function updateInstructions(status: AppUpdateStatus): string {
-  if (status.channel === "windows_store") return "起動中は更新の適用を延期します。録音・解析・保存を終え、アプリの「終了」から終了してください。";
+  if (status.channel === "windows_store") return "起動中は更新のインストールを延期します。「Microsoft Storeを開く」からアプリの終了も選べます。録音・解析・保存を終えてから終了してください。";
   const version = status.availableVersion ? `バージョン${status.availableVersion}` : "更新";
   if (status.state === "ready") return `${version}を取得しました。録音・解析・保存が完了したら「再起動して更新」を押してください。`;
   if (status.state === "installing") return `${version}を適用しています。完了後にアプリを再起動します。`;
   return `${version}は自動で取得します。録音・解析・保存が完了したら「再起動して更新」を押してください。`;
 }
+/** Store's UpdateWhileInUse=defer keeps installation pending until the app exits. */
+export const storeUpdateNotice = "アプリを一度終了するまで、Microsoft Storeでの更新のインストールは完了しません。";

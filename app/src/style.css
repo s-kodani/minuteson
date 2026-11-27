@@ -133,6 +133,9 @@
 .common-modal-body[hidden] { display:none; }
 .action-confirmation .confirmation-impact { white-space:pre-wrap; overflow-wrap:anywhere; }
 .confirmation-target { overflow-wrap:anywhere; }
+.confirmation-lead { font-weight:600; overflow-wrap:anywhere; }
+/* With a lead, match the space above the actions to the title-to-lead space. */
+.action-confirmation:has(> .confirmation-lead) > .confirmation-actions { margin-top:24px; }
 .split-dialog .common-modal-body > label, .speaker-add-dialog .common-modal-body > label { display:grid; gap:8px; margin:12px 0; font-size:12px; }
 .heading-with-info > h2, .heading-with-info > h3 { margin:0; }
 .data-save > .heading-with-info > h2, .deletion-panel > .heading-with-info > h2, .recovery-panel > .heading-with-info > h2 { font-size:17px; }

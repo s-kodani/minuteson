@@ -3,7 +3,8 @@ import { SavedEditsCancelled } from "./confirmed-action.ts";
 export type ConfirmationPhase = "choosing" | "running" | "failed";
 export type ConfirmationOutcome = "cancelled" | "completed" | "unconfirmed";
 export type ConfirmationOptions = {
-  title: string; target: string; message: string; confirmLabel: string;
+  /** Omit `target` when the subject is obvious; `lead` is the question the choice answers. */
+  title: string; target?: string; lead?: string; message: string; confirmLabel: string;
   action: (numSpeakers?: number | null) => Promise<void>;
   speakerCount?: number | null;
   onSpeakerCountChange?: (value: number | null) => void;
@@ -14,7 +15,7 @@ export type ConfirmationOptions = {
   progressAction?: { label: string; action: () => Promise<void> };
   alternativeAction?: { label: string; action: () => Promise<void> };
 };
-export type Confirmation<Parent, Opener> = Pick<ConfirmationOptions, "title" | "target" | "message" | "confirmLabel" | "inlineErrors" | "speakerCount"> & {
+export type Confirmation<Parent, Opener> = Pick<ConfirmationOptions, "title" | "target" | "lead" | "message" | "confirmLabel" | "inlineErrors" | "speakerCount"> & {
   id: string; owner: object; parent: Parent | null; opener: Opener | null;
   scrollTop: number;
   phase: ConfirmationPhase; error: string; errorReported?: boolean;
@@ -36,7 +37,7 @@ export class ConfirmationController<Parent, Opener> {
     if (this.snapshot) return Promise.resolve<ConfirmationOutcome>("cancelled");
     return new Promise<ConfirmationOutcome>(resolve => {
       this.pending = { options, resolve };
-      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, message: options.message, confirmLabel: options.confirmLabel, inlineErrors: options.inlineErrors, speakerCount: options.speakerCount, phase: "choosing", error: "", progressLabel: options.progressAction?.label, alternativeLabel: options.alternativeAction?.label });
+      this.publish({ id: `action-confirm-${++this.sequence}`, owner, parent, opener, scrollTop, title: options.title, target: options.target, lead: options.lead, message: options.message, confirmLabel: options.confirmLabel, inlineErrors: options.inlineErrors, speakerCount: options.speakerCount, phase: "choosing", error: "", progressLabel: options.progressAction?.label, alternativeLabel: options.alternativeAction?.label });
     });
   }
   setSpeakerCount(id: string, value: number | null) {

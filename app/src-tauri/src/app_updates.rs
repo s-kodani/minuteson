@@ -207,6 +207,8 @@ pub(crate) async fn open_app_update_page(
 }
 
 /// Ask the main window to save edits; never install directly from this command.
+/// The Store package only requests the normal quit path; Microsoft Store installs the
+/// deferred update after the app has exited.
 #[tauri::command]
 pub(crate) fn apply_app_update(window: WebviewWindow) -> Result<(), mon_contracts::AppError> {
     let result: Result<(), String> = (|| {
@@ -222,7 +224,13 @@ pub(crate) fn apply_app_update(window: WebviewWindow) -> Result<(), mon_contract
                 )
                 .map_err(|e| e.to_string())
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
+        {
+            policy::require_store_quit(window.state::<Updates>().snapshot().channel)?;
+            crate::residency::quit(window.app_handle());
+            Ok(())
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         Err("この配布版はアプリ内更新の対象外です".into())
     })();
     result.map_err(|e| mon_contracts::AppError::from_command("apply_app_update", e))
