@@ -49,7 +49,8 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
   const openStore = async () => {
     let quit = false;
     const launch = async () => {
-      try { await invoke("open_app_update_page"); } catch { throw Error("配布元を開けませんでした。もう一度お試しください。"); }
+      // The dialog shows String(cause); throwing an Error would put "Error: " in front of this message.
+      try { await invoke("open_app_update_page"); } catch { throw "配布元を開けませんでした。もう一度お試しください。"; }
     };
     const outcome = await confirm({
       title: "Microsoft Storeで更新します",

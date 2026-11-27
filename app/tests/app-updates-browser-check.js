@@ -111,6 +111,8 @@ async(page)=>{
   await storeButton().click();
   await storeChoice.getByRole("button",{name:"Storeを開いてアプリを終了",exact:true}).click();
   await storeChoice.getByText(/配布元を開けませんでした。もう一度お試しください。/).waitFor();
+  const failureText=await storeChoice.getByRole("alert").textContent();
+  check(failureText==="処理を完了できませんでした。配布元を開けませんでした。もう一度お試しください。 元の画面で状態を再確認してください。自動再実行はしません。",`Store launch failure shows unexpected text: ${failureText}`);
   check(await count("apply_app_update")===1,"failed Store launch still requested exit");
   await storeChoice.getByRole("button",{name:"確認を閉じる",exact:true}).click();
   await page.evaluate(()=>{const f=window.appUpdateFixture;f.failOpen=false;f.failApply=true;});
