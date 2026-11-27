@@ -8,7 +8,8 @@ export function ConfirmationBody({ value }: { value: Confirmation<HTMLDialogElem
   const showFailure = value.phase === "failed" && !value.errorReported;
   return <div className="action-confirmation">
     <h2 id={`${value.id}-title`} tabIndex={-1}>{value.title}</h2>
-    <p className="confirmation-target">対象: {displayNativePathsInText(value.target)}</p>
+    {value.target && <p className="confirmation-target">対象: {displayNativePathsInText(value.target)}</p>}
+    {value.lead && <p className="confirmation-lead">{value.lead}</p>}
     {value.message && <p className="confirmation-impact">{displayNativePathsInText(value.message)}</p>}
     {value.speakerCount !== undefined && <div className="speaker-count-fields"><SpeakerCountSelect label="会議全体の話者数" value={value.speakerCount} disabled={value.phase !== "choosing"} onChange={count => confirmations.setSpeakerCount(value.id, count)} /></div>}
     {value.phase === "running" && <p role="status">処理中です。完了応答を待っています。</p>}

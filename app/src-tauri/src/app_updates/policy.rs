@@ -129,6 +129,16 @@ impl Model {
     }
 }
 
+/// Store installs a deferred update only after the app exits; quit through the normal path.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn require_store_quit(channel: Channel) -> Result<(), String> {
+    if channel == Channel::WindowsStore {
+        Ok(())
+    } else {
+        Err("この配布版はアプリ内更新の対象外です".into())
+    }
+}
+
 fn stable(value: &str) -> Result<semver::Version, String> {
     let parsed = semver::Version::parse(value).map_err(|_| "公開版のバージョンを確認できません")?;
     if !parsed.pre.is_empty() || !parsed.build.is_empty() {
@@ -190,6 +200,13 @@ mod tests {
         assert!(m.destination().is_err());
         let mut unsupported = Model::new(Channel::Unsupported, "1.0.1".into());
         assert!(!unsupported.begin(t));
+    }
+    #[test]
+    fn store_quit_is_limited_to_the_store_channel() {
+        assert!(require_store_quit(Channel::WindowsStore).is_ok());
+        for channel in [Channel::MacosRelease, Channel::Unsupported] {
+            assert!(require_store_quit(channel).is_err());
+        }
     }
     #[test]
     fn downloads_require_stable_version_fixed_origin_and_supported_cpu() {

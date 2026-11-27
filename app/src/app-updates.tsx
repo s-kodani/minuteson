@@ -2,7 +2,8 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { listen } from "@tauri-apps/api/event";
 import { invoke, isTauri } from "./ipc";
 import { ActionIcon, IconButton } from "./action-icon";
-import { checkedAppUpdateStatus, updateHeading, updateInstructions, updateSource, type AppUpdateStatus } from "./app-update-state";
+import { checkedAppUpdateStatus, storeUpdateNotice, updateHeading, updateInstructions, updateSource, type AppUpdateStatus } from "./app-update-state";
+import { useActionConfirmation } from "./confirmation-service";
 import "./app-updates.css";
 
 interface UpdateContext {
@@ -43,11 +44,29 @@ export function AppUpdateProvider({ children }: { children: ReactNode }) {
     void load();
     return () => { disposed = true; mounted.current = false; unlisten?.(); };
   }, []);
+  const confirm = useActionConfirmation(false);
+  // Store defers installation while the app runs, so offer the normal quit path after opening it.
+  const openStore = async () => {
+    let quit = false;
+    const launch = async () => {
+      try { await invoke("open_app_update_page"); } catch { throw Error("配布元を開けませんでした。もう一度お試しください。"); }
+    };
+    const outcome = await confirm({
+      title: "Microsoft Storeで更新します",
+      lead: "更新前にアプリを終了しますか？", message: storeUpdateNotice, confirmLabel: "Storeを開いてアプリを終了", inlineErrors: true,
+      action: async () => { await launch(); quit = true; },
+      alternativeAction: { label: "Storeを開くだけ", action: launch },
+    });
+    if (outcome !== "completed" || !quit) return;
+    try { await invoke("apply_app_update"); }
+    catch { if (mounted.current) setActionError("アプリの終了を開始できませんでした。常駐アイコンの「終了」から終了してください。"); }
+  };
   const act = async (kind: "check" | "open") => {
     if (acting.current) return;
     acting.current = true; setBusy(true); setActionError("");
     try {
       if (kind === "check") accept(await invoke("check_app_update"));
+      else if (status?.channel === "windows_store") await openStore();
       else await invoke(status?.channel === "macos_release" ? "apply_app_update" : "open_app_update_page");
     } catch (cause) { if (mounted.current) setActionError(kind === "open" && status?.channel === "macos_release" ? String(cause) : kind === "check" ? "更新の確認を開始できませんでした。もう一度お試しください。" : "配布元を開けませんでした。もう一度お試しください。"); }
     finally { acting.current = false; if (mounted.current) setBusy(false); }
@@ -85,7 +104,7 @@ export function AppUpdateBanner() {
     <ActionIcon name="download" />
     <div className="app-update-banner-copy">
       <p className="app-update-title">{status.state === "unavailable" || status.state === "checking" ? "前回の確認で利用可能な更新が見つかりました" : updateHeading(status)}</p>
-      <p>{status.channel === "windows_store" ? "録音・解析は続けられます。起動中は更新の適用を延期します。" : updateInstructions(status)}</p>
+      <p>{status.channel === "windows_store" ? "録音・解析は続けられます。更新はアプリを終了するまでインストールされません。" : updateInstructions(status)}</p>
       <UpdateProgress status={status} />
       <OpenUpdateButton />
       {status.state === "failed" && <RetryUpdateButton />}
