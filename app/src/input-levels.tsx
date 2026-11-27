@@ -1,40 +1,24 @@
-import {invoke,isTauri} from "./ipc.ts";
+import {isTauri} from "./ipc.ts";
 import {useEffect,useState} from "react";
-import {InputLevelClock,InputLevelSession,type InputLevels,type VisibleLevel} from "./input-level-state";
+import type {VisibleLevel} from "./input-level-state";
+import {startInputLevelPoller,type LevelDisplay} from "./input-level-poller.ts";
 
+type Window="main"|"recorder";
 const unavailable=()=>({microphone:{state:"unavailable"} as VisibleLevel,system:{state:"unavailable"} as VisibleLevel});
-export function useRecordingLevels(owner:string|null){
-  return useOwnedLevels(owner,"recording");
+export function useRecordingLevels(owner:string|null,windowLabel:Window){
+  return useOwnedLevels(owner,"recording",windowLabel);
 }
+// The 5-second capture test is shown only in the main window.
 export function useCaptureTestLevels(owner:string|null){
-  return useOwnedLevels(owner,"test");
+  return useOwnedLevels(owner,"test","main");
 }
-function useOwnedLevels(owner:string|null,kind:"recording"|"test"){
-  const [display,setDisplay]=useState<{owner:string|null;revision:number|null;microphone:VisibleLevel;system:VisibleLevel}>({owner:null,revision:null,...unavailable()});
+function useOwnedLevels(owner:string|null,kind:"recording"|"test",windowLabel:Window){
+  const [display,setDisplay]=useState<LevelDisplay>({owner:null,revision:null,...unavailable()});
   useEffect(()=>{
-    let disposed=false,inFlight=false,failed=true,revision:number|null=null;
-    const session=new InputLevelSession();
-    try{session.reset(owner);}catch{setDisplay({owner,revision:null,...unavailable()});return;}
-    const clock=new InputLevelClock(performance.now(),Date.now());
-    const now=()=>clock.read(performance.now(),Date.now());
     setDisplay({owner,revision:null,...unavailable()});
     if(!owner||!isTauri())return;
-    const paint=()=>{if(!disposed)setDisplay({owner,revision,...(failed?unavailable():session.read(now()))});};
-    const poll=async()=>{
-      if(disposed||inFlight)return;
-      inFlight=true;
-      // Include RPC latency in freshness, including the very first read.
-      const requestedAt=now();
-      try{
-        const result=await invoke<unknown>(kind==="recording"?"get_recording_levels":"get_capture_test_levels",kind==="recording"?{sessionId:owner}:{runId:owner});
-        if(!disposed){if(session.accept(result,requestedAt))revision=(result as InputLevels).revision;failed=false;}
-      }catch{if(!disposed)failed=true;}
-      finally{inFlight=false;paint();}
-    };
-    void poll();
-    const timer=window.setInterval(()=>{paint();void poll();},100);
-    return()=>{disposed=true;window.clearInterval(timer);};
-  },[owner,kind]);
+    return startInputLevelPoller({owner,kind,windowLabel,onUpdate:setDisplay});
+  },[owner,kind,windowLabel]);
   return display.owner===owner?display:{revision:null,...unavailable()};
 }
 

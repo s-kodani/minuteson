@@ -1,49 +1,90 @@
 import {invoke,isTauri} from "./ipc.ts";
 import {createContext,useContext,useEffect,useRef,useState,type ReactNode} from "react";
 import {useRecordingSession} from "./session";
-import {InputLevelClock} from "./input-level-state";
-import {RecordingInputSession,inputLabel,type InputKind,type VisibleInput} from "./recording-input-state";
-import {InputJournalSession,InputJournalFailures} from "./input-journal-state";
+import {RecordingInputSession,checkedInputStatus,inputLabel,type InputKind,type VisibleInput} from "./recording-input-state";
+import {InputJournalSession,InputJournalFailures,checkedJournalReport,type JournalView} from "./input-journal-state";
 import "./recording-input-status.css";
-import {InputDiagnosticLog} from "./input-diagnostic-log";
+import {InputDiagnosticLog,type InputReadStage} from "./input-diagnostic-log";
+import {RecoverableRead,sharedClock,type RecoverableAnomaly} from "./recoverable-read.ts";
+import {advanceSharedRecordingClock} from "./recording-input-advance.ts";
+
 type View={owner:string|null;microphone:VisibleInput;system:VisibleInput};
 const unknown=()=>({microphone:{state:"unknown"} as VisibleInput,system:{state:"unknown"} as VisibleInput});
 const empty=():View=>({owner:null,...unknown()});
 const Context=createContext<View>(empty());
+
+class JournalSessionAdapter{
+  private session:InputJournalSession;
+  constructor(owner:string){this.session=new InputJournalSession(owner);}
+  reset(owner:string|null){if(owner)this.session=new InputJournalSession(owner);}
+  accept(value:unknown,at:number){this.session.accept(value,at);return true;}
+  read(at:number):JournalView{return this.session.read(at);}
+  fail(){this.session.fail();}
+}
+
 export function RecordingInputProvider({children,windowLabel}:{children:ReactNode;windowLabel:"main"|"recorder"}){
   const recording=useRecordingSession(),owner=recording.kind==="ready"&&["preparing","recording"].includes(recording.snapshot.phase)?recording.snapshot.sessionId:null;
   const phaseRef=useRef(recording.kind==="ready"?recording.snapshot.phase:"idle");phaseRef.current=recording.kind==="ready"?recording.snapshot.phase:"idle";
   const [view,setView]=useState<View>(empty());
   useEffect(()=>{
-    let disposed=false,inFlight=false,failed=true;const session=new RecordingInputSession(),clock=new InputLevelClock(performance.now(),Date.now());
-    setView({...empty(),owner});try{session.reset(owner);}catch{return;}if(!owner||!isTauri())return;
-    const journal=new InputJournalSession(owner),journalFailures=new InputJournalFailures(),diagnosticLog=new InputDiagnosticLog();let journalInFlight=false;
-    const now=()=>clock.read(performance.now(),Date.now());
+    let disposed=false;
+    setView({...empty(),owner});
+    if(!owner||!isTauri())return;
+    const diagnosticLog=new InputDiagnosticLog();
+    diagnosticLog.bindWindow(windowLabel);
+    const mono=()=>performance.now();
+    const wall=()=>Date.now();
+    const clock=sharedClock(mono(),wall());
+    const statusSession=new RecordingInputSession();
+    let journalSession:JournalSessionAdapter;
+    try{
+      statusSession.reset(owner);
+      journalSession=new JournalSessionAdapter(owner);
+    }catch{
+      return()=>{diagnosticLog.dispose();};
+    }
+    const journalFailures=new InputJournalFailures();
+    const reportAnomaly=(stage:InputReadStage)=>(kind:RecoverableAnomaly,detail:Record<string,unknown>)=>diagnosticLog.reportAnomaly(stage,owner,kind,detail);
+    const statusPoll=new RecoverableRead(owner,statusSession,clock,{
+      mono,wall,
+      invoke:()=>invoke("get_recording_input_status",{sessionId:owner}),
+      revision:value=>{try{const r=checkedInputStatus(value,owner);return {revision:r.revision,reportAgeMs:r.reportAgeMs};}catch{return null;}},
+      onAnomaly:reportAnomaly("live-status"),
+      // Each changed read error and its recovery are logged at once, as before.
+      onRead:error=>diagnosticLog.report("live-status",owner,error),
+      onAdopted:()=>{if(!disposed)paint();},
+    });
+    const journalPoll=new RecoverableRead<JournalView>(owner,journalSession,clock,{
+      mono,wall,
+      invoke:()=>invoke("get_recording_input_history_status",{sessionId:owner}),
+      revision:value=>{try{const r=checkedJournalReport(value,owner);return {revision:r.revision,reportAgeMs:r.reportAgeMs};}catch{return null;}},
+      onAnomaly:reportAnomaly("live-journal"),
+      onRead:error=>diagnosticLog.report("live-journal",owner,error,error===null?{}:{command:"get_recording_input_history_status"}),
+      onAdopted:()=>{if(journalPoll.failed)journalSession.fail();if(!disposed)paint();},
+    });
     const logJournal=(at:number)=>{
-      const view=journal.read(at);
-      const failure=journalFailures.read(view,phaseRef.current,at);
+      const journalView=journalPoll.failed?{state:"unknown" as const,problem:false}:journalPoll.read();
+      const failure=journalFailures.read(journalView,phaseRef.current,at);
       if(failure){
         const message=failure==="failed"
           ?"マイク・PC音声の中断・再開履歴を保存できませんでした。"
           :"マイク・PC音声の中断・再開履歴に不整合が見つかり、保存を停止しました。";
         diagnosticLog.report("live-journal-notice",owner,message,{state:failure});
-      }else if(view.state==="confirmed")diagnosticLog.report("live-journal-notice",owner,null);
+      }else if(journalView.state==="confirmed")diagnosticLog.report("live-journal-notice",owner,null);
     };
     const paint=()=>{
-      if(disposed)return;const at=now(),raw=failed?unknown():session.read(at);
+      if(disposed)return;
+      const at=clock.read(mono(),wall()),read=statusPoll.failed?unknown():statusPoll.read() as {microphone:VisibleInput;system:VisibleInput};
       logJournal(at);
-      setView({owner,microphone:raw.microphone,system:raw.system});
+      setView({owner,microphone:read.microphone,system:read.system});
     };
-    const poll=async()=>{if(disposed||inFlight)return;inFlight=true;const requestedAt=now();
-      try{const report=await invoke("get_recording_input_status",{sessionId:owner});if(!disposed){session.accept(report,requestedAt);failed=false;diagnosticLog.report("live-status",owner,null);}}
-      catch(error){if(!disposed){failed=true;diagnosticLog.report("live-status",owner,error);}}finally{inFlight=false;paint();}
-    };
-    const pollJournal=async()=>{if(disposed||journalInFlight)return;journalInFlight=true;const at=now();
-      try{const value=await invoke("get_recording_input_history_status",{sessionId:owner});if(!disposed){journal.accept(value,at);diagnosticLog.report("live-journal",owner,null);}}
-      catch(error){if(!disposed){journal.fail();diagnosticLog.report("live-journal",owner,error,{command:"get_recording_input_history_status"});}}finally{journalInFlight=false;if(!disposed)paint();}
-    };
-    void poll();void pollJournal();const painting=window.setInterval(paint,100),polling=window.setInterval(()=>{void poll();void pollJournal();},500);
-    return()=>{disposed=true;window.clearInterval(painting);window.clearInterval(polling);};
+    // Freshness, clock reversal and hung reads are checked every 100 ms; the
+    // native status files are still read at the existing 500 ms cadence.
+    const tick=()=>{advanceSharedRecordingClock(clock,statusPoll,journalPoll,mono,wall);paint();};
+    const poll=()=>{statusPoll.poll();journalPoll.poll();};
+    tick();poll();
+    const painting=window.setInterval(tick,100),polling=window.setInterval(poll,500);
+    return()=>{disposed=true;window.clearInterval(painting);window.clearInterval(polling);statusPoll.dispose();journalPoll.dispose();diagnosticLog.dispose();};
   },[owner,windowLabel]);
   return <Context.Provider value={view.owner===owner?view:{...empty(),owner}}>{children}</Context.Provider>;
 }

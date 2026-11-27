@@ -17,6 +17,8 @@ async (page,capturePath=path=>`output/recorder-panel-ui/${path}`)=>{
   },[microphone,system]);await page.clock.runFor(100);};
   const states=(m,s)=>page.waitForFunction(([m,s])=>{const waves=document.querySelectorAll('.mini-waveform');return waves[0]?.dataset.levelState===m&&waves[1]?.dataset.levelState===s;},[m,s]);
   const bars=input=>page.locator(`[data-source="${input}"] .mini-waveform line`);
+  // The right-most slot is x=254; a gap without fresh samples is drawn as nothing.
+  const rightEdge=async input=>Number(await bars(input).last().getAttribute("x2"));
   await page.evaluate(async()=>{
     const f=window.closeFixture;
     await f.recordChanged({phase:"recording",sessionId:crypto.randomUUID(),meetingId:crypto.randomUUID(),elapsedMs:24000});
@@ -38,13 +40,15 @@ async (page,capturePath=path=>`output/recorder-panel-ui/${path}`)=>{
   results.push("separate native measurements drive gray bars without duplicating immutable revisions");
   await report(0,"waiting");await states("measured","waiting");
   await page.waitForFunction(()=>document.querySelectorAll('[data-source="microphone"] .mini-waveform line').length===2);
-  check(await bars("microphone").last().getAttribute("y1")==="17"&&await bars("system").count()===0,"silence or missing PC audio fabricated a signal");
+  check(await bars("microphone").last().getAttribute("y1")==="17"&&await rightEdge("microphone")===254,"received silence did not draw a flat current bar");
+  check(await bars("system").count()===1&&await rightEdge("system")<254,"missing PC audio fabricated a signal or kept its old bar at the right edge");
   check(!(await page.locator('.mini-shell').innerText()).match(/要対応|マイク|PC音声|録音中|未受信|確認不可/),"absent PC signal added unwanted text");
   check(await page.getByRole('img',{name:'マイク',exact:true}).count()===1&&await page.getByRole('img',{name:'PC音声',exact:true}).count()===1,"source icons lost accessible names");
   results.push("received silence stays flat and a missing PC signal stays quiet without hiding its accessible icon");
   await page.clock.runFor(1100);await states("stale","waiting");
-  check(await bars("microphone").count()===0,"stale telemetry retained a live waveform");
-  results.push("expired telemetry removes the previous live waveform");
+  // Old bars stay, but blank slots now follow them.
+  check(await bars("microphone").count()===2&&await rightEdge("microphone")<254,"expired telemetry erased prior bars or left an old bar at the right edge");
+  results.push("expired telemetry keeps prior bars while blank slots advance at the right edge");
   await page.evaluate(()=>{
     const f=window.closeFixture,values=[.04,.09,.36,.81,.25,.16,.64,.49,.09,.01,.25,.64,.36,.16,.04,.49];let i=0;
     window.miniWaveformFixtureTimer=setInterval(()=>{
@@ -68,8 +72,11 @@ async (page,capturePath=path=>`output/recorder-panel-ui/${path}`)=>{
     results.push(`${theme}: centered six-dot grip has no divider; controls and matching gray waveforms fit 227×101`);
   }
   await page.evaluate(()=>{clearInterval(window.miniWaveformFixtureTimer);window.closeFixture.failInputLevels=true;});await page.clock.runFor(100);await states("unavailable","unavailable");
-  check(await bars("microphone").count()===0&&await bars("system").count()===0,"failed level RPC retained old waveform");
-  results.push("failed telemetry clears both waveforms");
+  check(await bars("microphone").count()>0&&await bars("system").count()>0&&await rightEdge("microphone")<254&&await rightEdge("system")<254,"failed level RPC cleared history or kept an old bar at the right edge");
+  // 64 slots of the observed 100 ms spacing scroll every old bar out.
+  await page.clock.runFor(6600);
+  check(await bars("microphone").count()===0&&await bars("system").count()===0,"failed level RPC never scrolled old bars out");
+  results.push("failed telemetry blanks the right edge, then scrolls both old waveforms out");
   await page.evaluate(()=>window.closeFixture.recordChanged({phase:"stopping"}));
   await page.locator('.mini-stop').waitFor({state:"detached"});
   await page.clock.runFor(16);await states("unavailable","unavailable");

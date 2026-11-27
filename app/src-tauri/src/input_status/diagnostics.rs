@@ -84,6 +84,8 @@ fn validate(
             "live-status"
                 | "live-journal"
                 | "live-journal-notice"
+                | "live-levels"
+                | "test-levels"
                 | "archived-page"
                 | "archived-rows"
                 | "archived-validation"
@@ -96,6 +98,13 @@ fn validate(
         return Err("録音の確認ログの対象または内容が不正です".into());
     }
     Ok(())
+}
+
+fn ui_stage(stage: &str, window_label: &str) -> String {
+    match stage {
+        "live-levels" | "test-levels" => format!("ui-{stage}-{window_label}"),
+        _ => format!("ui-{stage}"),
+    }
 }
 
 #[tauri::command]
@@ -113,7 +122,7 @@ pub(crate) fn record_input_diagnostic_log(
             message.as_deref(),
         )?;
         read_result(
-            &format!("ui-{stage}"),
+            &ui_stage(&stage, window.label()),
             session_id.as_deref(),
             None,
             message.as_deref(),
@@ -139,6 +148,8 @@ mod tests {
         )
         .is_ok());
         assert!(validate("recorder", "live-journal", Some(owner), None).is_ok());
+        assert!(validate("main", "live-levels", Some(owner), None).is_ok());
+        assert!(validate("recorder", "test-levels", Some(owner), None).is_ok());
         for (label, stage, id) in [
             ("recorder-info", "live-journal", Some(owner)),
             ("main", "arbitrary", None),
@@ -153,5 +164,16 @@ mod tests {
             Some(&"x".repeat(16 * 1024 + 1))
         )
         .is_err());
+    }
+
+    #[test]
+    fn level_stages_include_window_label_for_dedup() {
+        let owner = "73500000-0000-4000-8000-000000000001";
+        let main = ui_stage("live-levels", "main");
+        let recorder = ui_stage("live-levels", "recorder");
+        assert_eq!(main, "ui-live-levels-main");
+        assert_eq!(recorder, "ui-live-levels-recorder");
+        assert_ne!(format!("{main}:{owner}"), format!("{recorder}:{owner}"));
+        assert_eq!(ui_stage("live-status", "main"), "ui-live-status");
     }
 }

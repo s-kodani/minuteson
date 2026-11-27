@@ -36,7 +36,7 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
   const phaseText=state.kind!=="ready"?"録音状態を確認できていません":{idle:"録音準備",preparing:"録音を準備しています",recording:"録音中",stopping:"録音を停止しています",saving:"録音を保存しています",error:"録音の状態を確認してください"}[phase];
   const active=owns&&!["idle","error"].includes(phase);
   const telemetryOwner=owns&&["preparing","recording"].includes(phase)?snapshot.sessionId:null;
-  const levels=useRecordingLevels(telemetryOwner);
+  const levels=useRecordingLevels(telemetryOwner,"main");
   const writes=useRecordingWrites(telemetryOwner);
   return <section className="recording-workspace" data-recording-active={active} aria-label="録音状態" tabIndex={-1}>
     <div className="recording-workspace-heading">
