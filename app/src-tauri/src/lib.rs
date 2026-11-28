@@ -124,6 +124,7 @@ use recording_confirmation::StopDecisionStore;
 use recording_confirmation_window::{
     decide_recording_confirmation, get_recording_confirmation, request_recording_confirmation,
 };
+use session::commands::get_recording_snapshot;
 use session::{RecordingSnapshot, SessionStore};
 use std::sync::atomic::{AtomicBool, Ordering};
 use storage::{AnalysisPresentation, Meeting, Storage, TranscriptDraft, TranscriptDraftPayload};
@@ -2288,10 +2289,6 @@ async fn finish_main_close(
     result.map_err(|message| mon_contracts::AppError::from_command("finish_main_close", message))
 }
 
-#[tauri::command]
-fn get_recording_snapshot(store: State<'_, SessionStore>) -> RecordingSnapshot {
-    store.snapshot()
-}
 #[tauri::command]
 async fn get_capture_test_snapshot(
     window: WebviewWindow,
