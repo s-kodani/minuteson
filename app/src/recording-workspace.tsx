@@ -1,6 +1,6 @@
 import { ActionIcon } from "./action-icon";
 import {useLayoutEffect,useRef,type ReactNode} from "react";
-import {formatElapsed,type BridgeState} from "./session";
+import {formatElapsed,type RecordingSnapshot} from "./session";
 import type {RecordingPreparation} from "./recording-preparation-state";
 import {InfoPopover} from "./info-popover";
 import "./recording-workspace.css";
@@ -9,8 +9,9 @@ import {RecordingWriteStatus,RecordingWriteValue,useRecordingWrites} from "./rec
 import {RecordingInputStatus} from "./recording-input-status";
 import {overlayOpen} from "./keyboard";
 
-export function RecordingWorkspace({preparation,title,state,owner,locked,canStart,canStop,onTitle,onStart,onStop,onSettings,onConfirmResult,inputs,activeMicrophone,test,vocabulary,notices}:{
-  preparation:RecordingPreparation|null;title:string;state:BridgeState;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
+export function RecordingWorkspace({preparation,title,snapshot,owner,locked,canStart,canStop,onTitle,onStart,onStop,onSettings,onConfirmResult,inputs,activeMicrophone,test,vocabulary,notices}:{
+  preparation:Pick<RecordingPreparation,"id"|"title"|"submitted">|null;title:string;
+  snapshot:Pick<RecordingSnapshot,"meetingId"|"sessionId"|"phase"|"elapsedMs">|null;owner:string|null;locked:boolean;canStart:boolean;canStop:boolean;
   onTitle:(title:string)=>void;onStart:()=>void;onStop:(source:HTMLButtonElement)=>void;onSettings:()=>void;onConfirmResult:()=>void;
   inputs:ReactNode;activeMicrophone?:ReactNode;test?:ReactNode;vocabulary?:ReactNode;notices:ReactNode;
 }){
@@ -30,10 +31,9 @@ export function RecordingWorkspace({preparation,title,state,owner,locked,canStar
       active instanceof HTMLElement&&active!==field&&active.closest(".recording-workspace"))return;
     field.focus();
   },[preparation?.id,preparation?.submitted,locked]);
-  const snapshot=state.kind==="ready"?state.snapshot:null;
   const owns=!!owner&&snapshot?.meetingId===owner&&!!snapshot.sessionId;
   const phase=owns?snapshot.phase:"idle";
-  const phaseText=state.kind!=="ready"?"録音状態を確認できていません":{idle:"録音準備",preparing:"録音を準備しています",recording:"録音中",stopping:"録音を停止しています",saving:"録音を保存しています",error:"録音の状態を確認してください"}[phase];
+  const phaseText=!snapshot?"録音状態を確認できていません":{idle:"録音準備",preparing:"録音を準備しています",recording:"録音中",stopping:"録音を停止しています",saving:"録音を保存しています",error:"録音の状態を確認してください"}[phase];
   const active=owns&&!["idle","error"].includes(phase);
   const telemetryOwner=owns&&["preparing","recording"].includes(phase)?snapshot.sessionId:null;
   const levels=useRecordingLevels(telemetryOwner,"main");
