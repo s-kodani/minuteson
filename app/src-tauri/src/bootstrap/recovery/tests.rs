@@ -312,6 +312,45 @@ fn pending_maintenance_is_retained_readonly_across_restarts() {
 }
 
 #[test]
+fn device_number_refresh_reconciles_an_existing_review_on_the_same_startup() {
+    let f = Fixture::new();
+    let (b, s) = f.start();
+    let database = b.root().join("meetings.sqlite3");
+    let operation = Uuid::new_v4().to_string();
+    crate::storage::with_test_database(&s, |db| {
+        db.execute("INSERT INTO maintenance_operations(id,kind,state,target_manifest_json,target_hash,progress_json,created_at,updated_at) VALUES(?1,'prune_revisions','attention','{}',?2,'{}',1,1)", rusqlite::params![operation, "a".repeat(64)]).unwrap();
+    });
+    drop(s);
+    drop(b);
+    f.change_birth();
+    let (b, s) = f.start();
+    let previous = b.read().unwrap().unwrap().record;
+    assert!(previous.recovery.as_ref().unwrap().needs_review());
+    drop(s);
+    drop(b);
+    let db = rusqlite::Connection::open(database).unwrap();
+    assert_eq!(
+        db.execute(
+            "DELETE FROM maintenance_operations WHERE id=?1",
+            [&operation]
+        )
+        .unwrap(),
+        1
+    );
+    drop(db);
+    f.change_device();
+
+    let b = Bootstrap::open(&f.config, &f.data).unwrap();
+    let current = b.read().unwrap().unwrap().record;
+    assert_eq!(current.current, Root::metadata(b.root()).unwrap());
+    assert_eq!(current.revision, previous.revision + 2);
+    let current = current.recovery.unwrap();
+    assert_eq!(current.id, previous.recovery.unwrap().id);
+    assert!(!current.needs_review());
+    assert!(!b.open_storage().unwrap().data_write_blocked());
+}
+
+#[test]
 fn pending_move_is_archived_without_activating_or_erasing_destination() {
     let f = Fixture::new();
     let (b, s) = f.start();

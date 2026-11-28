@@ -263,6 +263,7 @@ impl Bootstrap {
                 Storage::ancillary_binding_changed(&actual.path, &actual.path, &self.config)
             };
             if !changed {
+                let needs_review = next.recovery.as_ref().is_some_and(Recovery::needs_review);
                 if next.current != actual || next.recovery != previous.recovery {
                     // 履歴に残った証拠を保ち、起動設定の現在値だけを更新する。
                     next.current = actual;
@@ -275,11 +276,8 @@ impl Bootstrap {
                         recovery.verify(&self.config)?;
                     }
                     self.write(&mut state, next)?;
-                } else if previous
-                    .recovery
-                    .as_ref()
-                    .is_some_and(Recovery::needs_review)
-                {
+                }
+                if needs_review {
                     let _ = self.reconcile_recovery_review(&mut state)?;
                 }
                 return Ok(());
