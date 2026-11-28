@@ -1,6 +1,7 @@
 //! Local ASR execution through registered adapters. No shell, network, speaker inference or text
 //! substitutions are involved. The scheduler owns input/output provenance.
 pub(crate) mod asr;
+pub(crate) mod commands;
 mod guard;
 mod recovery;
 mod transducer;

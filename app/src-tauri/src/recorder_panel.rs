@@ -3,6 +3,7 @@ use crate::session::{RecordingPhase, RecordingSnapshot, SessionStore};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tauri::{AppHandle, Manager, WebviewWindow};
 
+pub(crate) mod commands;
 #[cfg(all(test, windows))]
 mod native_tests;
 #[cfg(windows)]

@@ -47,25 +47,27 @@ export function canonicalPayload(payload: DraftPayload): DraftPayload {
   if (payload.utterance_splits?.length) result.utterance_splits=payload.utterance_splits.map(s=>({...s,parts:s.parts.map(p=>({...p,speaker_ids:[...p.speaker_ids].sort(compareId)}))})).sort((a,b)=>compareId(a.source_utterance_id,b.source_utterance_id));
   return result;
 }
-export function mergedIds(payload: DraftPayload | null, ids: string[]): string[] {
-  const mapping = new Map(payload?.speaker_merges?.map(m => [m.source_id,m.target_id]) ?? []);
-  return [...new Set(ids.map(id => mapping.get(id) ?? id))].sort(compareId);
-}
 // A projection for editing/display only. Never use it as an immutable analysis
 // identity or send its changed contents with the base contentHash to a read RPC.
 export function projectTranscript(base: Analysis, payload: DraftPayload | null): Analysis {
   if (!payload) return base;
   const names = new Map(payload.speaker_names.map(e => [e.speaker_id,e.display_name]));
   const edits = new Map(payload.utterances.map(e => [e.utterance_id,e]));
+  const splits = new Map<string, UtteranceSplit>();
+  for (const split of payload.utterance_splits ?? []) {
+    if (!splits.has(split.source_utterance_id)) splits.set(split.source_utterance_id, split);
+  }
+  const merges = new Map(payload.speaker_merges?.map(merge => [merge.source_id, merge.target_id]));
+  const mergedIds = (ids: string[]) => [...new Set(ids.map(id => merges.get(id) ?? id))].sort(compareId);
   const utterances = base.utterances.flatMap(u => {
-      const split=payload.utterance_splits?.find(s=>s.source_utterance_id===u.id);
+      const split=splits.get(u.id);
       if(split) return split.parts.map(p=>{
-        const edit=edits.get(p.id),speakerIds=mergedIds(payload,edit?.speaker_ids ?? p.speaker_ids);
+        const edit=edits.get(p.id),speakerIds=mergedIds(edit?.speaker_ids ?? p.speaker_ids);
         return {...u,id:p.id,startUs:p.start_us,endUs:p.end_us,effectiveText:edit?.effective_text ?? p.effective_text,speakerIds,
           speakerIdentification:undefined,recognitionIsSource:true,sourceUtteranceId:u.id,attributionState:speakerIds.length===0?"unknown":speakerIds.length===1?"assigned":"overlap"};
       });
       const edit = edits.get(u.id);
-      const speakerIds = mergedIds(payload,edit?.speaker_ids ?? u.speakerIds);
+      const speakerIds = mergedIds(edit?.speaker_ids ?? u.speakerIds);
       const changed = speakerIds.length!==u.speakerIds.length || speakerIds.some(id=>!u.speakerIds.includes(id));
       return [{...u,effectiveText:edit?.effective_text ?? u.effectiveText,speakerIds,
         ...(changed?{speakerIdentification:undefined}:{}),

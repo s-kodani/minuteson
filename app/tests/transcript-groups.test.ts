@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { groupTranscriptRows } from "../src/transcript-groups.ts";
+import { groupTranscriptRows, hasConsolidationCandidate } from "../src/transcript-groups.ts";
 import { retainedTextRows } from "../src/transcript-edit-session.ts";
 import type { Utterance } from "../src/transcript-state.ts";
 
@@ -14,6 +14,7 @@ test("consecutive speech is grouped without changing text, identity or playback 
   const rows = [row("a", 0), row("b", 1_000_000), row("c", 4_000_000)], before = structuredClone(rows);
   const groups = groupTranscriptRows(rows, rows);
   assert.deepEqual(ids(groups), [["a", "b", "c"]]);
+  assert.equal(hasConsolidationCandidate(rows), true);
   assert.equal(groups[0][1], rows[1]);
   assert.deepEqual(rows, before);
 });
@@ -28,6 +29,7 @@ test("speaker changes, track changes, pauses and temporal overlaps keep separate
   ]) {
     const rows = [row("a", 0), row("b", 1_000_000, patch)];
     assert.deepEqual(ids(groupTranscriptRows(rows, rows)), [["a"], ["b"]], JSON.stringify(patch));
+    assert.equal(hasConsolidationCandidate(rows), false, JSON.stringify(patch));
     assert.deepEqual(ids(groupTranscriptRows(rows, [...rows].reverse())), [["b"], ["a"]]);
   }
 });
@@ -46,7 +48,15 @@ test("continuous monologues get a paragraph break after a minute", () => {
   assert.deepEqual(groups.map(group => group.length), [60, 1]);
 });
 
+test("candidate detection respects the paragraph limit and finds a later eligible pair", () => {
+  const rows = [row("a", 0, { endUs: 60_000_000 }), row("b", 60_000_000), row("c", 61_000_000)];
+  assert.equal(hasConsolidationCandidate(rows.slice(0, 2)), false);
+  assert.deepEqual(ids(groupTranscriptRows(rows, rows)), [["a"], ["b", "c"]]);
+  assert.equal(hasConsolidationCandidate(rows), true);
+});
+
 test('automatic identification scores remain on their original rows instead of being consolidated away',()=>{
   const rows=[row('a',0),row('b',1_000_000,{speakerIdentification:{similarityMilli:530,runnerUpMilli:200,needsReview:true,reason:'nearest_below_threshold'}}),row('c',2_000_000)];
   assert.deepEqual(ids(groupTranscriptRows(rows,rows)),[['a'],['b'],['c']]);
+  assert.equal(hasConsolidationCandidate(rows), false);
 });

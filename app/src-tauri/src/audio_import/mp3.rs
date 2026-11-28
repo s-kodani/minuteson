@@ -1,4 +1,4 @@
-//! Bounded MP3 decode; unused ID3 never reaches a metadata/image parser.
+//! MP3の音声範囲だけをデコードし、不要なタグはメタデータパーサーに渡さない。
 use super::{check_cancelled, AudioInfo};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -52,14 +52,136 @@ impl MediaSource for AudioRange {
     }
 }
 
-fn audio_range(file: &mut File) -> Result<(u64, u64), String> {
+const APE_BLOCK_SIZE: usize = 32;
+const APE_HAS_HEADER: u32 = 1 << 31;
+const APE_IS_HEADER: u32 = 1 << 29;
+const APE_READ_ONLY: u32 = 1;
+const APE_MAX_KEY_BYTES: u64 = 255;
+const APE_MIN_ITEM_BYTES: u64 = 11;
+
+fn read_at<const N: usize>(file: &mut File, offset: u64) -> Result<[u8; N], String> {
+    let mut bytes = [0; N];
+    file.seek(SeekFrom::Start(offset))
+        .and_then(|_| file.read_exact(&mut bytes))
+        .map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
+
+fn apev2_start(
+    file: &mut File,
+    first: u64,
+    end: u64,
+    cancelled: &impl Fn() -> bool,
+) -> Result<Option<u64>, String> {
+    let block_size = APE_BLOCK_SIZE as u64;
+    let Some(footer_at) = end.checked_sub(block_size) else {
+        return Ok(None);
+    };
+    let footer = read_at::<APE_BLOCK_SIZE>(file, footer_at)?;
+    if &footer[..8] != b"APETAGEX" {
+        return Ok(None);
+    }
+    let field = |offset| u32::from_le_bytes(footer[offset..offset + 4].try_into().unwrap());
+    let version = field(8);
+    if version != 2000 {
+        return Err(format!(
+            "MP3の末尾APEタグのバージョン {version} は未対応です"
+        ));
+    }
+    let flags = field(20);
+    if flags & !(APE_HAS_HEADER | APE_READ_ONLY) != 0 || footer[24..] != [0; 8] {
+        return Err("MP3のAPEv2フッターのフラグまたは予約領域が不正です".into());
+    }
+    // タグ長にはフッターを含み、オプションのヘッダーは含まない。
+    let length = u64::from(field(12));
+    if length < block_size {
+        return Err("MP3のAPEv2タグ長が不正です".into());
+    }
+    let has_header = flags & APE_HAS_HEADER != 0;
+    let header_size = if has_header { block_size } else { 0 };
+    let start = end
+        .checked_sub(length + header_size)
+        .filter(|&start| start >= first)
+        .ok_or("MP3のAPEv2タグ長が音声範囲の先頭を越えています")?;
+    if has_header {
+        let mut expected = footer;
+        expected[20..24].copy_from_slice(&(flags | APE_IS_HEADER).to_le_bytes());
+        if read_at::<APE_BLOCK_SIZE>(file, start)? != expected {
+            return Err("MP3のAPEv2ヘッダーとフッターが一致しません".into());
+        }
+    }
+    validate_apev2_items(
+        file,
+        start + header_size,
+        length - block_size,
+        field(16),
+        cancelled,
+    )?;
+    Ok(Some(start))
+}
+
+fn validate_apev2_items(
+    file: &mut File,
+    start: u64,
+    mut remaining: u64,
+    count: u32,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), String> {
+    let read_error = |_| "MP3のAPEv2項目を読み取れません";
+    let length_error = "MP3のAPEv2項目の長さまたは個数が不正です";
+    if u64::from(count) * APE_MIN_ITEM_BYTES > remaining {
+        return Err(length_error.into());
+    }
+    let mut reader = BufReader::new(file);
+    reader.seek(SeekFrom::Start(start)).map_err(read_error)?;
+    for _ in 0..count {
+        check_cancelled(cancelled)?;
+        if remaining < APE_MIN_ITEM_BYTES {
+            return Err(length_error.into());
+        }
+        let mut fields = [0; 8];
+        reader.read_exact(&mut fields).map_err(read_error)?;
+        let value_length = u64::from(u32::from_le_bytes(fields[..4].try_into().unwrap()));
+        let flags = u32::from_le_bytes(fields[4..].try_into().unwrap());
+        if flags & !0b111 != 0 || flags & 0b110 == 0b110 {
+            return Err("MP3のAPEv2項目のフラグが不正です".into());
+        }
+        let key_space = remaining
+            .checked_sub(8 + value_length)
+            .filter(|&space| space >= 3)
+            .ok_or(length_error)?;
+        let mut key_length = 0;
+        loop {
+            if key_length == key_space.min(APE_MAX_KEY_BYTES + 1) {
+                return Err("MP3のAPEv2項目のキーが不正です".into());
+            }
+            let mut byte = [0];
+            reader.read_exact(&mut byte).map_err(read_error)?;
+            if byte[0] == 0 && key_length >= 2 {
+                break;
+            }
+            if !(0x20..=0x7e).contains(&byte[0]) {
+                return Err("MP3のAPEv2項目のキーが不正です".into());
+            }
+            key_length += 1;
+        }
+        // 項目の値は解釈せず、検証した長さだけ進める。
+        reader
+            .seek_relative(value_length as i64)
+            .map_err(read_error)?;
+        remaining -= 8 + key_length + 1 + value_length;
+    }
+    if remaining != 0 {
+        return Err(length_error.into());
+    }
+    Ok(())
+}
+
+fn audio_range(file: &mut File, cancelled: &impl Fn() -> bool) -> Result<(u64, u64), String> {
     let size = file.metadata().map_err(|e| e.to_string())?.len();
     let mut first = 0;
     for _ in 0..16 {
-        file.seek(SeekFrom::Start(first))
-            .map_err(|e| e.to_string())?;
-        let mut h = [0; 10];
-        file.read_exact(&mut h).map_err(|e| e.to_string())?;
+        let h = read_at::<10>(file, first)?;
         if &h[..3] != b"ID3" {
             break;
         }
@@ -74,16 +196,22 @@ fn audio_range(file: &mut File) -> Result<(u64, u64), String> {
             return Err("MP3のID3長が不正または大きすぎます".into());
         }
     }
-    let mut end = size;
-    if size >= 128 {
-        file.seek(SeekFrom::Start(size - 128))
-            .map_err(|e| e.to_string())?;
-        let mut h = [0; 3];
-        file.read_exact(&mut h).map_err(|e| e.to_string())?;
-        if &h == b"TAG" {
-            end -= 128;
-        }
-    }
+    let id3_start = size.checked_sub(128);
+    let id3_start = match id3_start {
+        Some(start) if &read_at::<3>(file, start)? == b"TAG" => Some(start),
+        _ => None,
+    };
+    let ape_at_eof = apev2_start(file, first, size, cancelled);
+    let end = match id3_start {
+        None => ape_at_eof?.unwrap_or(size),
+        Some(id3) => match ape_at_eof {
+            // APEv2の値に偶然TAGがあっても、末尾全体を検証できる構成を使う。
+            Ok(Some(ape)) if ape <= id3 => ape,
+            Err(error) if super::is_cancellation_error(&error) => return Err(error),
+            // ID3v1の値の中に現れたAPETAGEXは、APEタグの開始位置にしない。
+            _ => apev2_start(file, first, id3, cancelled)?.unwrap_or(id3),
+        },
+    };
     if first >= end {
         return Err("MP3音声がありません".into());
     }
@@ -157,12 +285,26 @@ fn scan(
     let mut discard = 0;
     while offset < length {
         check_cancelled(cancelled)?;
+        let remaining = length - offset;
+        if remaining < 4 {
+            return Err("MP3がフレームの途中で終了しています".into());
+        }
         let mut h = [0; 4];
         reader
             .read_exact(&mut h)
             .map_err(|_| "MP3がフレームの途中で終了しています")?;
+        if h == *b"LYRI" && remaining >= 11 {
+            let mut suffix = [0; 7];
+            reader.read_exact(&mut suffix).map_err(|e| e.to_string())?;
+            if &suffix == b"CSBEGIN" {
+                return Err("MP3の末尾タグ Lyrics3 は未対応です".into());
+            }
+        }
+        if offset > 0 && (h[0] != 255 || h[1] & 0xe0 != 0xe0) {
+            return Err("MP3のフレーム間または末尾に未対応のデータがあります".into());
+        }
         let (rate, channels, frames, bytes, tag_offset) = frame_header(h)?;
-        if format.is_some_and(|f| f != (rate, channels)) || bytes as u64 > length - offset {
+        if format.is_some_and(|f| f != (rate, channels)) || bytes as u64 > remaining {
             return Err("MP3の形式が途中で変わるか音声が切れています".into());
         }
         format = Some((rate, channels));
@@ -196,7 +338,7 @@ pub(super) fn decode(
     cancelled: &impl Fn() -> bool,
 ) -> Result<AudioInfo, String> {
     let mut file = File::open(input).map_err(|e| e.to_string())?;
-    let (first, length) = audio_range(&mut file)?;
+    let (first, length) = audio_range(&mut file, cancelled)?;
     let (rate, channels, expected_raw) = scan(
         file.try_clone().map_err(|e| e.to_string())?,
         first,
@@ -312,6 +454,175 @@ pub(super) fn decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mp3_frames() -> Vec<u8> {
+        // MPEG-1 Layer III、44.1 kHz、128 kbps の無音フレーム。
+        let mut frame = [0; 417];
+        frame[..4].copy_from_slice(&[255, 251, 144, 0]);
+        frame.repeat(3)
+    }
+
+    fn apev2_tag(with_header: bool, value: &[u8]) -> Vec<u8> {
+        let mut item = Vec::new();
+        item.extend((value.len() as u32).to_le_bytes());
+        item.extend(0_u32.to_le_bytes());
+        item.extend_from_slice(b"Title\0");
+        item.extend_from_slice(value);
+        let block = |flags: u32| {
+            let mut block = [0; 32];
+            block[..8].copy_from_slice(b"APETAGEX");
+            block[8..12].copy_from_slice(&2000_u32.to_le_bytes());
+            block[12..16].copy_from_slice(&(32 + item.len() as u32).to_le_bytes());
+            block[16..20].copy_from_slice(&1_u32.to_le_bytes());
+            block[20..24].copy_from_slice(&flags.to_le_bytes());
+            block
+        };
+        let mut tag = Vec::new();
+        if with_header {
+            tag.extend(block(0xa000_0000));
+        }
+        tag.extend_from_slice(&item);
+        tag.extend(block(if with_header { 0x8000_0000 } else { 0 }));
+        tag
+    }
+
+    fn id3v1_tag() -> [u8; 128] {
+        let mut tag = [0; 128];
+        tag[..3].copy_from_slice(b"TAG");
+        tag
+    }
+
+    #[test]
+    fn mp3_trailing_tags_preserve_inspection_pcm_and_source() {
+        use crate::audio_import::{import, inspect};
+        use crate::local_engine::Fingerprint;
+        use crate::storage::Storage;
+
+        let root = tempfile::tempdir().unwrap();
+        let storage = Storage::open(root.path().join("meetings")).unwrap();
+        let frames = mp3_frames();
+        let plain = root.path().join("plain.mp3");
+        let cancelled = &crate::test_support::never_cancelled;
+        std::fs::write(&plain, &frames).unwrap();
+        // MP3は共通デコーダーを使うため、この検証用のファイルは起動されない。
+        let helper = Fingerprint::capture(&plain, cancelled).unwrap();
+        let inspect_and_import = |input: &Path, name| -> Result<(AudioInfo, Vec<u8>), String> {
+            let selected = inspect(input, &helper, root.path(), cancelled)?;
+            let info = selected.info.clone();
+            let imported = import(
+                &storage,
+                selected,
+                &helper,
+                name,
+                &uuid::Uuid::new_v4().to_string(),
+                cancelled,
+                &|_, _| {},
+            )?;
+            assert_eq!(imported.state, "ready");
+            let wav = storage
+                .audio_import_directory(&imported)?
+                .join("recording.wav");
+            Ok((info, std::fs::read(wav).unwrap()))
+        };
+        let (expected, expected_wav) = inspect_and_import(&plain, "plain").unwrap();
+        assert_eq!(expected.frames, 3 * 1152);
+
+        let id3v1 = id3v1_tag();
+        let mut id3_with_magic = id3v1;
+        id3_with_magic[96..104].copy_from_slice(b"APETAGEX");
+        let mut value_with_magic = [b'a'; 96];
+        value_with_magic[..3].copy_from_slice(b"TAG");
+        for (name, tags) in [
+            ("id3v1", id3v1.to_vec()),
+            ("id3v1-with-ape-magic", id3_with_magic.to_vec()),
+            ("apev2", apev2_tag(false, b"test")),
+            (
+                "apev2-id3v1",
+                [apev2_tag(false, b"test"), id3v1.to_vec()].concat(),
+            ),
+            ("apev2-header", apev2_tag(true, b"test")),
+            (
+                "apev2-header-id3v1",
+                [apev2_tag(true, b"test"), id3v1.to_vec()].concat(),
+            ),
+            ("apev2-with-id3-magic", apev2_tag(false, &value_with_magic)),
+        ] {
+            let bytes = [frames.as_slice(), &tags].concat();
+            let input = root.path().join(format!("{name}.mp3"));
+            std::fs::write(&input, &bytes).unwrap();
+            let (info, wav) =
+                inspect_and_import(&input, name).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(info, expected, "{name}");
+            assert_eq!(wav, expected_wav, "{name}");
+            assert_eq!(std::fs::read(input).unwrap(), bytes, "{name}");
+        }
+        assert_eq!(std::fs::read(plain).unwrap(), frames);
+    }
+
+    #[test]
+    fn mp3_rejects_invalid_apev2_footer_header_and_item_boundaries() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("input.mp3");
+        let id3v2 = b"ID3\x04\0\0\0\0\0\0";
+        let frames = mp3_frames();
+        let tag = apev2_tag(false, b"test");
+        let footer = tag.len() - 32;
+        for (offset, value, error) in [
+            (footer + 8, 1000, "バージョン"),
+            (footer + 12, 31, "タグ長が不正"),
+            (
+                footer + 12,
+                (frames.len() + tag.len() + 1) as u32,
+                "先頭を越え",
+            ),
+            (footer + 12, u32::MAX, "先頭を越え"),
+            (footer + 16, 0, "項目の長さまたは個数"),
+            (footer + 20, 0x4000_0000, "フッター"),
+            (footer + 20, 0x8000_0000, "ヘッダーとフッター"),
+            (footer + 24, 1, "予約領域"),
+            (0, u32::MAX, "項目の長さ"),
+        ] {
+            let mut invalid = tag.clone();
+            invalid[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            let bytes = [id3v2.as_slice(), &frames, &invalid, &id3v1_tag()].concat();
+            std::fs::write(&path, &bytes).unwrap();
+            let actual = decode(&path, None, &crate::test_support::never_cancelled).unwrap_err();
+            assert!(actual.contains(error), "{offset}: {actual}");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn mp3_rejects_truncated_audio_and_unsupported_trailers() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("input.mp3");
+        let frames = mp3_frames();
+        let ape = apev2_tag(true, b"test");
+        let id3 = id3v1_tag();
+        let lyrics = b"LYRICSBEGININD0000200000021LYRICS200";
+        for (audio, suffix, error) in [
+            (&frames[..frames.len() - 1], ape.clone(), "音声が切れ"),
+            (&frames[..420], ape.clone(), "フレームの途中"),
+            (&frames[..], b"junk".to_vec(), "未対応のデータ"),
+            (
+                &frames[..],
+                [b"junk".as_slice(), &ape].concat(),
+                "未対応のデータ",
+            ),
+            (
+                &frames[..],
+                [id3.as_slice(), &ape].concat(),
+                "未対応のデータ",
+            ),
+            (&frames[..], [lyrics.as_slice(), &id3].concat(), "Lyrics3"),
+        ] {
+            let bytes = [audio, &suffix].concat();
+            std::fs::write(&path, &bytes).unwrap();
+            let actual = decode(&path, None, &crate::test_support::never_cancelled).unwrap_err();
+            assert!(actual.contains(error), "{actual}");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+    }
 
     #[test]
     fn mp3_frame_geometry_rejects_free_bitrate_reserved_layer_and_bad_sync() {

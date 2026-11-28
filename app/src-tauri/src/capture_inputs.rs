@@ -1,4 +1,6 @@
 //! Bounded, read-only helper metadata. This never starts a capture or asks TCC.
+pub(crate) mod commands;
+
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek};
 use std::path::Path;

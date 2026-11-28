@@ -1,5 +1,6 @@
 //! Markdown-only generation dispatch and read-only saved-result validation.
 mod acceleration;
+pub(crate) mod commands;
 pub(crate) mod llama;
 mod llama_metrics;
 pub(crate) mod markdown;

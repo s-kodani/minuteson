@@ -19,6 +19,21 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+test("reverting to equivalent normalized content clears dirty without saving", async () => {
+  let normalizations = 0;
+  const queue = new DraftSaveQueue<Payload, Draft>(async () => assert.fail("clean draft was saved"), payload => {
+    normalizations++;
+    return { text: payload.text.trim() };
+  });
+  queue.load({ id: "draft", lockVersion: 0, payload: { text: "original" } });
+  queue.edit(() => ({ text: "temporary" }));
+  assert.equal(queue.snapshot().dirty, true);
+  queue.edit(() => ({ text: " original " }));
+  assert.equal(queue.snapshot().dirty, false);
+  await queue.flush();
+  assert.equal(normalizations, 3);
+});
+
 test("navigation flush waits for edits made during a save and uses the new version", async () => {
   const calls: { version: number; payload: Payload; response: ReturnType<typeof deferred<Draft>> }[] = [];
   const queue = new DraftSaveQueue<Payload, Draft>((id, version, payload) => {

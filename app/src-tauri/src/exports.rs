@@ -1,3 +1,5 @@
+pub(crate) mod commands;
+
 use crate::native_fs::Metadata;
 use sha2::{Digest, Sha256};
 use std::fs::File;

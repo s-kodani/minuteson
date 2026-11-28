@@ -1,5 +1,6 @@
 //! One native diarization call over the shared meeting audio. Meeting-local
 //! labels never identify a registered person without voice matching.
+pub(crate) mod commands;
 pub(crate) mod runtime;
 // The feature extractor has its own fixed helper identity.
 pub(crate) mod embedding;
