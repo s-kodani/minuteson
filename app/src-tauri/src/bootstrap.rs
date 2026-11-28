@@ -117,10 +117,13 @@ impl Identity {
     fn matches(&self, m: &Metadata) -> bool {
         Self::read(m).is_ok_and(|i| i == *self)
     }
+    fn tuple(&self) -> (u64, u64, u64) {
+        (self.device, self.inode, self.birth_ns)
+    }
     fn same_persistent(&self, current: &Self) -> bool {
         mon_native::identity::matches_persistent_identity(
-            (self.device, self.inode, self.birth_ns),
-            (current.device, current.inode, current.birth_ns),
+            self.tuple(),
+            current.tuple(),
             cfg!(target_os = "macos"),
         )
     }

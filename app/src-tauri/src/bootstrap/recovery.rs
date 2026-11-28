@@ -161,10 +161,9 @@ impl Admission {
         Ok(ContentGuard { files })
     }
     pub(crate) fn previous_identities(&self) -> ((u64, u64, u64), (u64, u64, u64)) {
-        let tuple = |i: &Identity| (i.device, i.inode, i.birth_ns);
         (
-            tuple(&self.previous.directory),
-            tuple(&self.previous.database),
+            self.previous.directory.tuple(),
+            self.previous.database.tuple(),
         )
     }
 }
@@ -239,14 +238,16 @@ impl Bootstrap {
         };
         let previous = &loaded.record;
         let actual = Self::inspect_startup_root(&previous.current.path, Some(loaded))?;
+        let same_object = |a: &Identity, b: &Identity| {
+            mon_native::identity::matches_persistent_identity(a.tuple(), b.tuple(), true)
+        };
         let mut workspace_copied = false;
         if previous.current.same_persistent(&actual) {
             let mut next = previous.clone();
             let changed = if let Some(recovery) = &mut next.recovery {
                 let workspace = recovery.workspace(&self.config);
                 let current = Identity::read(&directory(&workspace)?)?;
-                workspace_copied = current.inode != recovery.workspace_identity.inode
-                    || current.birth_ns != recovery.workspace_identity.birth_ns;
+                workspace_copied = !same_object(&current, &recovery.workspace_identity);
                 if !recovery.workspace_identity.same_persistent(&current) {
                     true
                 } else {
@@ -284,8 +285,6 @@ impl Bootstrap {
                 return Ok(());
             }
         }
-        let same_object =
-            |a: &Identity, b: &Identity| a.inode == b.inode && a.birth_ns == b.birth_ns;
         let kind = if !cfg!(target_os = "macos")
             && same_object(&actual.directory, &previous.current.directory)
             && same_object(&actual.database, &previous.current.database)

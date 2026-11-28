@@ -345,6 +345,35 @@ fn pending_move_is_archived_without_activating_or_erasing_destination() {
     assert_ne!(b.root(), target);
 }
 
+#[test]
+fn device_number_refresh_keeps_pending_move_intent() {
+    let f = Fixture::new();
+    let (b, s) = f.start();
+    let target = f._temp.path().canonicalize().unwrap().join("target");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&target)
+        .unwrap();
+    b.begin_move(
+        &Uuid::new_v4().to_string(),
+        &Uuid::new_v4().to_string(),
+        &target,
+        &"a".repeat(64),
+        0,
+    )
+    .unwrap();
+    drop(s);
+    drop(b);
+    f.change_device();
+    let saved: Document =
+        serde_json::from_slice(&std::fs::read(f.config.join(NAME)).unwrap()).unwrap();
+    let b = Bootstrap::open(&f.config, &f.data).unwrap();
+    let record = b.read().unwrap().unwrap().record;
+    assert!(record.recovery.is_none());
+    assert_eq!(record.pending_move, saved.record.pending_move);
+    assert_eq!(record.current, Root::metadata(b.root()).unwrap());
+}
+
 fn stale_journal(root: &Path, field: &str) {
     let db = rusqlite::Connection::open(root.join(".mon-scratch.sqlite3")).unwrap();
     let json: String = db
