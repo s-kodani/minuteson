@@ -42,23 +42,40 @@ export function playbackStartFrame(info: PlaybackInfo, absoluteUs: number): numb
   return Math.min(info.totalFrames-1,Number(BigInt(absoluteUs-info.startUs)*BigInt(info.sampleRate)/1000000n));
 }
 
+const PCM_HEADER_BYTES = 12;
+const PCM_SAMPLE_BYTES = Float32Array.BYTES_PER_ELEMENT;
+const typedArraysAreLittleEndian = new Uint8Array(Uint32Array.of(1).buffer)[0] === 1;
+
 export function decodeAudioPacket(bytes: ArrayBuffer | number[]): AudioPacket {
+  // Tauri のメッセージ IPC では、バイト列が数値配列で届く場合がある。
   const buffer = bytes instanceof ArrayBuffer ? bytes : Uint8Array.from(bytes).buffer;
-  if (buffer.byteLength < 12) throw new Error("音声パケットが短すぎます");
+  if (buffer.byteLength < PCM_HEADER_BYTES) throw new Error("音声パケットが短すぎます");
   const view = new DataView(buffer);
   const sampleRate = view.getUint32(0, true);
   const channels = view.getUint32(4, true);
   const frames = view.getUint32(8, true);
-  if (sampleRate < 8000 || sampleRate > 384000 || channels < 1 || channels > 8 || frames < 1 || frames > 65536 || buffer.byteLength !== 12 + frames * channels * 4) {
+  const channelBytes = frames * PCM_SAMPLE_BYTES;
+  if (sampleRate < 8000 || sampleRate > 384000 || channels < 1 || channels > 8 || frames < 1 || frames > 65536 || buffer.byteLength !== PCM_HEADER_BYTES + channels * channelBytes) {
     throw new Error("音声パケットの形式が不正です");
   }
-  const samples = Array.from({ length: channels }, () => new Float32Array(frames));
-  for (let frame = 0; frame < frames; frame++) {
-    for (let channel = 0; channel < channels; channel++) {
-      const sample = view.getFloat32(12 + (frame * channels + channel) * 4, true);
-      if (!Number.isFinite(sample) || Math.abs(sample) > 1) throw new Error("音声サンプルが不正です");
-      samples[channel][frame] = sample;
+  const samples: Float32Array[] = [];
+  for (let channel = 0; channel < channels; channel++) {
+    // 12 バイトのヘッダーに続く各チャネルの先頭は 4 バイト境界にある。
+    const offset = PCM_HEADER_BYTES + channel * channelBytes;
+    let plane: Float32Array;
+    if (typedArraysAreLittleEndian) {
+      plane = new Float32Array(buffer, offset, frames);
+    } else {
+      plane = new Float32Array(frames);
+      for (let frame = 0; frame < frames; frame++) {
+        plane[frame] = view.getFloat32(offset + frame * PCM_SAMPLE_BYTES, true);
+      }
     }
+    for (let frame = 0; frame < frames; frame++) {
+      const sample = plane[frame];
+      if (!(sample >= -1 && sample <= 1)) throw new Error("音声サンプルが不正です");
+    }
+    samples.push(plane);
   }
   return { sampleRate, channels: samples, frames };
 }

@@ -2339,7 +2339,8 @@ export const commandContracts = {
       "type": "Result<tauri::ipc::Response,mon_contracts::AppError>",
       "ok": "tauri::ipc::Response",
       "error": "mon_contracts::AppError"
-    }
+    },
+    "binaryResponse": "12 バイトのヘッダー（サンプルレート、チャネル数、フレーム数の順に u32 LE）に続き、チャネルごとに全フレームの f32 LE サンプルを格納する。"
   },
   "close_playback": {
     "async": false,
