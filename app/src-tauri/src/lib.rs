@@ -182,6 +182,7 @@ use recorder::commands::{
     select_recording_microphone, start_recording,
 };
 use recorder::RecorderController;
+use recorder_panel::commands::{hide_recorder_panel, open_main_window};
 use recording_confirmation::StopDecisionStore;
 use recording_confirmation_window::{
     decide_recording_confirmation, get_recording_confirmation, request_recording_confirmation,
@@ -211,28 +212,6 @@ use voice::commands::{
 
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
-
-#[tauri::command]
-fn hide_recorder_panel(window: WebviewWindow) -> Result<(), mon_contracts::AppError> {
-    let result: Result<(), String> = (|| {
-        if window.label() != "recorder" {
-            return Err("Only the recorder panel can hide itself".into());
-        }
-        recording_confirmation_window::hide_recorder(window.app_handle())
-    })();
-    result.map_err(|message| mon_contracts::AppError::from_command("hide_recorder_panel", message))
-}
-
-#[tauri::command]
-fn open_main_window(window: WebviewWindow) -> Result<(), mon_contracts::AppError> {
-    let result: Result<(), String> = (|| {
-        if window.label() != "recorder" {
-            return Err("Only the recorder panel can reopen the main window".into());
-        }
-        residency::restore(window.app_handle())
-    })();
-    result.map_err(|message| mon_contracts::AppError::from_command("open_main_window", message))
-}
 
 #[tauri::command]
 fn get_speaker_completion_preferences(
