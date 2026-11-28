@@ -331,7 +331,7 @@ fn device_number_refresh_reconciles_an_existing_review_on_the_same_startup() {
     let db = rusqlite::Connection::open(database).unwrap();
     assert_eq!(
         db.execute(
-            "DELETE FROM maintenance_operations WHERE id=?1",
+            "UPDATE maintenance_operations SET state='completed', updated_at=updated_at+1 WHERE id=?1 AND state='attention'",
             [&operation]
         )
         .unwrap(),
