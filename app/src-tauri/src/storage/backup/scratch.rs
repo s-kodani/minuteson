@@ -379,7 +379,7 @@ impl Registry {
             registry.refresh_parent_proof(&json, &sha)?;
         }
         let registry = Arc::new(registry);
-        registry.recover()?;
+        registry.recover(true)?;
         all.retain(|_, v| v.strong_count() > 0);
         all.insert(root.into(), Arc::downgrade(&registry));
         Ok(registry)
@@ -650,6 +650,7 @@ impl Registry {
         &self,
         path: &Path,
         entries: &BTreeMap<String, (Proof, bool)>,
+        reopening: bool,
     ) -> Result<(), String> {
         self.check_root()?;
         let relative = self.relative(path)?;
@@ -663,12 +664,29 @@ impl Registry {
                 .ok_or("一時領域の親の所有記録がありません")?;
             if *removed
                 || proof.kind != "directory"
-                || !proof.identity.matches(&private_directory(&parent)?)
+                || !self.matches_cleanup_identity(
+                    &proof.identity,
+                    &private_directory(&parent)?,
+                    reopening,
+                )
             {
                 return Err("一時領域の親実体が変更されています".into());
             }
         }
         Ok(())
+    }
+    fn matches_cleanup_identity(
+        &self,
+        saved: &Identity,
+        metadata: &Metadata,
+        reopening: bool,
+    ) -> bool {
+        Identity::read(metadata).is_ok_and(|current| {
+            *saved == current
+                || (reopening
+                    && current.device == self.root_identity.device
+                    && saved.same_persistent(&current))
+        })
     }
     fn record(&self, id: &str, path: &Path, m: &Metadata, kind: &str) -> Result<(), String> {
         self.check_root()?;
@@ -678,7 +696,7 @@ impl Registry {
             .lock()
             .map_err(|_| "一時領域台帳ロックを取得できません")?;
         let (entries, count) = self.lineage(&db, id, path, false)?;
-        self.parents(path, &entries)?;
+        self.parents(path, &entries, false)?;
         if count >= LIMIT {
             return Err("一時領域の実体は新規作成した場合だけ登録できます".into());
         }
@@ -715,7 +733,7 @@ impl Registry {
             .lock()
             .map_err(|_| "一時領域台帳ロックを取得できません")?;
         let (entries, _) = self.lineage(&db, id, path, true)?;
-        self.parents(path, &entries)?;
+        self.parents(path, &entries, false)?;
         let (p, removed) = entries
             .get(&self.relative(path)?)
             .ok_or("既存フォルダーは一時領域へ採用しません")?;
@@ -733,9 +751,9 @@ impl Registry {
         if count >= LIMIT {
             return Err("一時領域の登録上限に達しています".into());
         }
-        self.parents(path, &entries)
+        self.parents(path, &entries, false)
     }
-    fn cleanup(&self, id: &str, scope: &Path) -> Result<(), String> {
+    fn cleanup(&self, id: &str, scope: &Path, reopening: bool) -> Result<(), String> {
         let evidence = self.scratch_evidence(id)?;
         if self.retained("scratch", id, &evidence.intent_hash)? {
             return Err("保持して確認済みの領域は回収しません".into());
@@ -770,8 +788,8 @@ impl Registry {
                     }
                 };
                 if let Some(m) = m {
-                    if self.parents(&path, &entries).is_err()
-                        || !proof.identity.matches(&m)
+                    if self.parents(&path, &entries, reopening).is_err()
+                        || !self.matches_cleanup_identity(&proof.identity, &m, reopening)
                         || (proof.kind == "file" && !regular(&m))
                         || (proof.kind == "directory" && private_directory(&path).is_err())
                     {
@@ -816,7 +834,7 @@ impl Registry {
         }
         result
     }
-    fn recover(&self) -> Result<(), String> {
+    fn recover(&self, reopening: bool) -> Result<(), String> {
         let pending = {
             let db = self
                 .db
@@ -846,7 +864,7 @@ impl Registry {
                 if self.retained("scratch", &id, &intent.intent_hash)? {
                     return Ok(());
                 }
-                if let Err(error) = self.cleanup(&id, &self.root.join(path)) {
+                if let Err(error) = self.cleanup(&id, &self.root.join(path), reopening) {
                     // A malformed entry stays in place. Other entries still
                     // require their own durable proof before cleanup.
                     let db = self
@@ -964,7 +982,7 @@ impl Drop for Stage {
             .unwrap_or_else(|e| e.into_inner())
             .remove(&self.path);
         if let Some((registry, id)) = &self.owner {
-            let _ = registry.cleanup(id, &self.path);
+            let _ = registry.cleanup(id, &self.path, false);
         }
     }
 }

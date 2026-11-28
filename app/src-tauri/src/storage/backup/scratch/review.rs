@@ -230,6 +230,6 @@ impl Registry {
         if evidence.live || self.retained("scratch", id, &evidence.intent_hash)? {
             return Err("利用中または保持して確認済みの領域は回収しません".into());
         }
-        self.cleanup(id, &self.root.join(format!(".mon-stage-{id}")))
+        self.cleanup(id, &self.root.join(format!(".mon-stage-{id}")), false)
     }
 }
