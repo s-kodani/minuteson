@@ -11,6 +11,7 @@ export const browserSuites = [
   ["meeting-deletion-scope", null, "meeting-deletion-scope-browser-check.js"],
   ["audio-deletion-simple", null, "audio-deletion-simple-browser-check.js"],
   ["recording-recovery", null, "recording-recovery-browser-check.js"],
+  ["recording-error-analysis", "browser-fixture.js", "recording-error-analysis-browser-check.js"],
   ...["controls", "history", "pagination", "live", "recovery", "performance"].map(scenario => [`internal-logs-${scenario}`, null, "internal-logs-browser-check.js"]),
   ["speaker-count", "browser-fixture.js", "speaker-count-browser-check.js"],
   ["initial-speaker-count", null, "initial-speaker-count-browser-check.js"],

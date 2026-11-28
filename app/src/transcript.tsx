@@ -22,7 +22,7 @@ import { overlayOpen } from "./keyboard";
 import { canonicalPayload, projectTranscript, filterUtterances, activeSpeakers, addSpeaker, assignSpeakers, mergeSpeaker, splitUtterance, splitPosition, textPieces, type Analysis, type DraftPayload, type Utterance } from "./transcript-state";
 import { retainedTextRows } from "./transcript-edit-session";
 import { stopAllPlayback } from "./playback-barrier";
-import { groupTranscriptRows } from "./transcript-groups";
+import { hasConsolidationCandidate } from "./transcript-groups";
 import { readMeetingBodyForReview } from "./meeting-body-review";
 import type { MeetingBodyReview } from "./generated/contracts";
 import "./transcript-groups.css";
@@ -98,7 +98,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
   }, [view]);
   const filtered = useMemo(() => view ? filterUtterances(view, speakerFilter, query) : [], [view, speakerFilter, query]);
   const shown = useMemo(() => retainedTextRows(view?.utterances ?? [], filtered, Object.keys(texts)).rows, [view, filtered, texts]);
-  const consolidationPossible=useMemo(()=>!!view&&groupTranscriptRows(view.utterances,view.utterances).some(group=>group.length>1),[view]);
+  const consolidationCandidate=useRef<{view:Analysis;possible:boolean}|null>(null);
   const consolidationAttempt=useRef("");
   const consolidationOperation=useRef<{key:string;id:string}|null>(null);
   const [consolidationRetry,setConsolidationRetry]=useState(0),[consolidationError,setConsolidationError]=useState("");
@@ -206,10 +206,14 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
     return () => { mounted.current = false; unsubscribe(); unregister(); speakerMount.remove(); };
   }, [meetingId, queue, speakerMount]);
   useEffect(()=>{
-    if(!analysis||!view||!consolidationPossible||disabled||!visible||running.current||snapshot.error||snapshot.saving||snapshot.dirty
+    if(!analysis||!view||disabled||!visible||running.current||snapshot.error||snapshot.saving||snapshot.dirty
       ||Object.keys(texts).length||nameEditor||assignmentEditor||structureEditor||adding||overlayOpen())return;
     const key=`${analysis.id}:${snapshot.draft?.contentHash??""}:${consolidationRetry}`;
     if(consolidationAttempt.current===key)return;
+    if(consolidationCandidate.current?.view!==view){
+      consolidationCandidate.current={view,possible:hasConsolidationCandidate(view.utterances)};
+    }
+    if(!consolidationCandidate.current.possible)return;
     consolidationAttempt.current=key;
     const sourceKey=`${analysis.id}:${snapshot.draft?.contentHash??""}`;
     if(consolidationOperation.current?.key!==sourceKey)consolidationOperation.current={key:sourceKey,id:crypto.randomUUID()};
@@ -231,7 +235,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
         }
       } catch(cause) {if(mounted.current)setConsolidationError(String(cause));}
     });
-  },[analysis,view,consolidationPossible,disabled,visible,snapshot.draft,snapshot.error,snapshot.saving,snapshot.dirty,texts,nameEditor,assignmentEditor,structureEditor,adding,consolidationRetry]);
+  },[analysis,view,disabled,visible,snapshot.draft,snapshot.error,snapshot.saving,snapshot.dirty,texts,nameEditor,assignmentEditor,structureEditor,adding,consolidationRetry]);
   const copyTranscript = async () => {
     if (copying.current || viewDisabled || (!analysis && !review)) return;
     copying.current = true; setCopyBusy(true);

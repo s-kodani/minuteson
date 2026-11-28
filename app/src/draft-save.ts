@@ -12,11 +12,32 @@ export interface SaveSnapshot<P, D> {
   error: string | null;
 }
 
+// 下書きの正規化済み JSON 値を、配列とプロパティの順序を含めて比較する。
+function samePayload(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let index = 0; index < a.length; index++) {
+      if (!samePayload(a[index] ?? null, b[index] ?? null)) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+  const leftKeys = Object.keys(left).filter(key => left[key] !== undefined);
+  const rightKeys = Object.keys(right).filter(key => right[key] !== undefined);
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key, index) => key === rightKeys[index] && samePayload(left[key], right[key]));
+}
+
 // The acknowledged draft and the latest local edit are separate. In particular,
 // an older save response must never replace text typed while that save ran.
 export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
   private draft: D | null = null;
   private payload: P | null = null;
+  // イミュータブルな下書きは、内容が等しい場合に参照をリビジョンとして共有する。
+  private savedPayload: P | null = null;
   private inFlight: Promise<void> | null = null;
   private saving = false;
   private error: string | null = null;
@@ -36,7 +57,7 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
     return {
       draft: this.draft,
       payload: this.payload,
-      dirty: this.uncertain !== null || (this.draft !== null && this.payload !== null && JSON.stringify(this.payload) !== JSON.stringify(this.normalize(this.draft.payload))),
+      dirty: this.uncertain !== null || this.payload !== this.savedPayload,
       saving: this.saving,
       error: this.error,
     };
@@ -52,7 +73,7 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
   load(draft: D | null) {
     if (this.inFlight) throw new Error("保存中は下書きを再読込できません");
     this.draft = draft;
-    this.payload = draft ? this.normalize(draft.payload) : null;
+    this.savedPayload = this.payload = draft ? this.normalize(draft.payload) : null;
     this.error = null;
     this.uncertain = null;
     this.notify();
@@ -60,7 +81,8 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
 
   edit(update: (current: P) => P) {
     if (!this.payload) return;
-    this.payload = this.normalize(update(this.payload));
+    const next = this.normalize(update(this.payload));
+    this.payload = samePayload(next, this.savedPayload) ? this.savedPayload : next;
     if (!this.snapshot().dirty) this.error = null;
     this.notify();
   }
@@ -88,19 +110,27 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
     return this.flush();
   }
 
+  private acknowledge(draft: D, normalized: P) {
+    this.draft = draft;
+    this.savedPayload = samePayload(this.payload, normalized) ? this.payload : normalized;
+  }
+
   private async drain() {
     if (this.uncertain) {
       // Only an explicit retry reaches this read. A failed response is not
       // evidence that the write failed, even if local text was reverted.
       const attempt = this.uncertain;
       const current = await this.readSaved!(attempt.draft);
-      const same = (a: P, b: P) => JSON.stringify(this.normalize(a)) === JSON.stringify(this.normalize(b));
-      const unchanged = current?.lockVersion === attempt.draft.lockVersion && same(current.payload, attempt.draft.payload);
-      const committed = current?.lockVersion === attempt.draft.lockVersion + 1 && same(current.payload, attempt.payload);
-      if (!current || current.id !== attempt.draft.id || !Number.isSafeInteger(current.lockVersion) || (!unchanged && !committed)) {
-        throw new Error("保存済みの内容が別の内容に更新されています。入力を保持しています。再読込する前に内容を確認してください。");
+      const conflict = "保存済みの内容が別の内容に更新されています。入力を保持しています。再読込する前に内容を確認してください。";
+      const version = attempt.draft.lockVersion;
+      if (!current || current.id !== attempt.draft.id || !Number.isSafeInteger(current.lockVersion)
+        || (current.lockVersion !== version && current.lockVersion !== version + 1)) {
+        throw new Error(conflict);
       }
-      this.draft = current;
+      const normalized = this.normalize(current.payload);
+      const expected = current.lockVersion === version ? this.savedPayload : attempt.payload;
+      if (!samePayload(normalized, expected)) throw new Error(conflict);
+      this.acknowledge(current, normalized);
       this.uncertain = null;
       this.notify();
     }
@@ -112,7 +142,7 @@ export class DraftSaveQueue<P, D extends VersionedDraft<P>> {
         if (this.readSaved) this.uncertain = attempt;
         throw cause;
       }
-      this.draft = saved;
+      this.acknowledge(saved, this.normalize(saved.payload));
       this.notify();
     }
   }

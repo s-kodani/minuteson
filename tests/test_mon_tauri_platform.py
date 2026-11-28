@@ -83,9 +83,11 @@ class TauriPlatformTests(unittest.TestCase):
         self.assertIn(command, self.grants("main"))
         for window in ["recorder", "recording-confirmation", "startup-attention"]:
             self.assertNotIn(command, self.grants(window))
-        source = (TAURI / "src/lib.rs").read_text(encoding="utf8")
+        source = (TAURI / "src/input_status/commands.rs").read_text(encoding="utf8")
         body = source.split("async fn " + command, 1)[1].split("#[tauri::command]", 1)[0]
-        self.assertIn('window.label() != "main"', body)
+        self.assertRegex(body, r'require_main_window\(\s*&window,\s*"保存後通知はメイン画面から確認してください"')
+        guard = (TAURI / "src/window_environment.rs").read_text(encoding="utf8")
+        self.assertIn('window.label() != "main"', guard)
         self.assertIn("spawn_blocking", body)
         self.assertIn("ArchivedInputs", body)
         self.assertIn(".selected(", body)
