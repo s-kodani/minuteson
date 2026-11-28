@@ -49,6 +49,12 @@ impl Identity {
         }
     }
 
+    #[cfg(all(test, target_os = "macos"))]
+    pub(in crate::storage) fn perturb_relocation_identity(mut self, scope: &str) -> Self {
+        crate::test_support::relocation_identity::perturb(scope, &mut self.device, &mut self.inode);
+        self
+    }
+
     pub(in crate::storage) fn read(metadata: &Metadata) -> Result<Self, String> {
         let birth = metadata
             .created()
@@ -147,7 +153,7 @@ fn relocation_history_identity_preserves_inode_birth_owner_and_mode() {
             ..current.clone()
         },
     ] {
-        assert!(!saved.matches_relocation_history(&changed));
+        assert!(!current.matches_relocation_history(&changed));
     }
     let saved_root = saved.clone();
     saved.rebase_relocation_device(&saved_root, &current);
