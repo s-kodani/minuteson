@@ -97,6 +97,8 @@ pub(crate) struct AnalysisPresentation {
     #[serde(flatten)]
     pub analysis: AnalysisView,
     pub speaker_color_keys: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ignored_hotwords: Vec<mon_contracts::IgnoredHotword>,
 }
 
 pub(super) fn read_analysis_content(
@@ -293,6 +295,7 @@ impl Storage {
             let speaker_color_keys =
                 super::minutes_input::lineage_map(db, "speakers", &analysis.id)?;
             Ok(AnalysisPresentation {
+                ignored_hotwords: super::analysis_vocabulary::read(db, &analysis.id)?,
                 analysis,
                 speaker_color_keys,
             })
@@ -361,7 +364,7 @@ impl Storage {
         meeting_id: &str,
         input: AnalysisInput,
     ) -> Result<String, String> {
-        self.create_analysis_candidate_inner(meeting_id, input, None)
+        self.create_analysis_candidate_inner(meeting_id, input, None, &[])
     }
 
     pub(crate) fn finish_transcription_candidate(
@@ -370,8 +373,14 @@ impl Storage {
         job_id: &str,
         completed_units: i64,
         input: AnalysisInput,
+        ignored_hotwords: &[mon_contracts::IgnoredHotword],
     ) -> Result<String, String> {
-        self.create_analysis_candidate_inner(meeting_id, input, Some((job_id, completed_units)))
+        self.create_analysis_candidate_inner(
+            meeting_id,
+            input,
+            Some((job_id, completed_units)),
+            ignored_hotwords,
+        )
     }
 
     pub(crate) fn finish_diarization_candidate(
@@ -381,7 +390,7 @@ impl Storage {
         completed: i64,
         input: AnalysisInput,
     ) -> Result<String, String> {
-        self.create_analysis_candidate_inner(meeting, input, Some((job, completed)))
+        self.create_analysis_candidate_inner(meeting, input, Some((job, completed)), &[])
     }
 
     fn create_analysis_candidate_inner(
@@ -389,6 +398,7 @@ impl Storage {
         meeting_id: &str,
         input: AnalysisInput,
         job: Option<(&str, i64)>,
+        ignored_hotwords: &[mon_contracts::IgnoredHotword],
     ) -> Result<String, String> {
         if !valid_hash(&input.audio_manifest_hash)
             || !input.profile_snapshot.is_object()
@@ -754,6 +764,11 @@ impl Storage {
                     params![utterance_id, speaker_ids[key], id, if index == 0 { "primary" } else { "overlap" }, assignment_source],
                 ).map_err(|e| e.to_string())?;
             }
+        }
+        if let Some(source) = fixed_source {
+            super::analysis_vocabulary::copy(&transaction, &source.parent_id, &id)?;
+        } else {
+            super::analysis_vocabulary::insert(&transaction, &id, ignored_hotwords, true)?;
         }
         let content_hash = super::revisions::analysis_content_hash(&transaction, &id)?;
         transaction

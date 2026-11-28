@@ -49,6 +49,12 @@ fixture.failPromptSave = false;
 fixture.losePromptResponse = false;
 const currentAnalysis = () => fixture.currentId === null ? null : fixture.currentId === analysis.id ? analysis : fixture.candidate;
 fixture.setRecognitionReview=(ranges,empty=false)=>{const value=currentAnalysis();value.reviewRanges=structuredClone(ranges);if(empty)value.utterances=[];return fixture.emitTranscriptChange();};
+fixture.setIgnoredHotwords = terms => {
+  const value = currentAnalysis();
+  if (terms === null) delete value.ignoredHotwords;
+  else value.ignoredHotwords = structuredClone(terms);
+  return fixture.emitTranscriptChange();
+};
 const minutesSource = () => ({
   meetingLockVersion: meetings[0].lockVersion,
   currentId: fixture.currentId,

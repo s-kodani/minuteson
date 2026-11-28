@@ -312,6 +312,10 @@ pub(super) fn install(db: &Connection) -> Result<(), String> {
     }
     db.execute_batch("CREATE TEMP TABLE mon_meeting_deletion_guard(meeting_id TEXT PRIMARY KEY NOT NULL,bypass INTEGER NOT NULL CHECK(bypass IN (0,1)));").map_err(|e|e.to_string())?;
     for (table, predicate) in super::deletion::database::TARGETS.iter().copied().chain([
+        (
+            super::schema_41::TABLE,
+            "analysis_revision_id IN (SELECT id FROM analysis_revisions WHERE meeting_id=?1)",
+        ),
         ("maintenance_operations", "meeting_id=?1"),
         (
             "maintenance_paths",

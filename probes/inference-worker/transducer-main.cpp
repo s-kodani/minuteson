@@ -31,13 +31,15 @@ static mon_json transcribe(const std::map<std::string,std::string> &o) {
         if(!piece.empty()) vocabulary.insert(piece);
     }
     std::istringstream words(o.at("--hotwords")); std::string word, hotwords;
-    mon_json ignored=mon_json::array();
+    mon_json ignored=mon_json::array(), ignored_details=mon_json::array();
     while (std::getline(words,word)) {
-        if (mon_asr::hotword_error(word,vocabulary).empty()) {
+        const auto rejection=mon_asr::hotword_rejection(word,vocabulary);
+        if (rejection == mon_asr::HotwordRejection::none) {
             if (!hotwords.empty()) hotwords+='\n';
             hotwords+=word;
         } else {
             ignored.push_back(word);
+            ignored_details.push_back({{"term",word},{"reason",mon_asr::hotword_reason(rejection)}});
         }
     }
     const char *method=o.at("--hotwords").empty()?"greedy_search":"modified_beam_search";
@@ -136,7 +138,7 @@ static mon_json transcribe(const std::map<std::string,std::string> &o) {
     mon_json models={{"model",o.at("--model")}};
     for (auto slot:{"decoder","joiner","library","tokens"})models[slot]=o.at(std::string("--")+slot);
     mon_json output={{"schemaVersion",1},{"backendId","sherpa-onnx-transducer"},{"models",models},
-        {"durationUs",int64_t(pcm.size())*1000000/16000},{"segments",segments},{"tokens",result_tokens},{"ignoredHotwords",ignored}};
+        {"durationUs",int64_t(pcm.size())*1000000/16000},{"segments",segments},{"tokens",result_tokens},{"ignoredHotwords",ignored},{"ignoredHotwordDetails",ignored_details}};
     return output;
 }
 static int infer(const std::string &kind,int argc,char **argv) {

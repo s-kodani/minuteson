@@ -6,6 +6,7 @@ export function validateArchiveMember(value: unknown): value is Contract.Archive
 export function validateBackendManifest(value: unknown): value is Contract.BackendManifest;
 export function validateDownloadSource(value: unknown): value is Contract.DownloadSource;
 export function validateEngine(value: unknown): value is Contract.Engine;
+export function validateIgnoredHotword(value: unknown): value is Contract.IgnoredHotword;
 export function validateJobKind(value: unknown): value is Contract.JobKind;
 export function validateJobState(value: unknown): value is Contract.JobState;
 export function validateMeetingBodyPart(value: unknown): value is Contract.MeetingBodyPart;

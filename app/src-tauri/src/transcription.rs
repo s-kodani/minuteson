@@ -4,7 +4,7 @@ pub(crate) mod asr;
 pub(crate) mod commands;
 mod guard;
 mod recovery;
-mod transducer;
+pub(crate) mod transducer;
 pub(crate) use recovery::ReviewRange;
 pub(crate) mod input;
 pub(crate) mod vad;
@@ -362,13 +362,39 @@ struct ResultReference {
     json_hash: String,
 }
 
+type SavedRecognition = (Vec<whisper::Segment>, Vec<mon_contracts::IgnoredHotword>);
+
+fn collect_ignored_hotwords(
+    aggregate: &mut Option<
+        std::collections::BTreeMap<String, mon_contracts::HotwordRejectionReason>,
+    >,
+    exclusions: Vec<mon_contracts::IgnoredHotword>,
+) {
+    use mon_contracts::HotwordRejectionReason::Unknown;
+    let Some(terms) = aggregate else { return };
+    for exclusion in exclusions {
+        let reason = terms.entry(exclusion.term).or_insert(Unknown);
+        if *reason == Unknown {
+            *reason = exclusion.reason;
+        }
+        if terms.len() > transducer::MAX_IGNORED_HOTWORDS {
+            crate::internal_logs::report_error(
+                "transcription",
+                &format!("除外用語の記録を破棄しました（{}件以上）", terms.len()),
+            );
+            *aggregate = None;
+            break;
+        }
+    }
+}
+
 fn checked_output(
     parameters: &Parameters,
     output: &UnitOutput,
     bytes: &[u8],
     rejected: Option<&[u8]>,
     duration: i64,
-) -> Result<Vec<whisper::Segment>, String> {
+) -> Result<SavedRecognition, String> {
     if parameters.recognition_policy == Some(RecognitionPolicy::AdapterV1) {
         if rejected.is_some()
             || output
@@ -378,7 +404,11 @@ fn checked_output(
         {
             return Err("ASR採用記録が不正です".into());
         }
-        return asr::adapter(&parameters.engine)?.parse_result(bytes, &parameters.engine, duration);
+        return asr::adapter(&parameters.engine)?.parse_saved_result(
+            bytes,
+            &parameters.engine,
+            duration,
+        );
     }
     if parameters.recognition_policy == Some(RecognitionPolicy::AdaptiveRecoveryV3)
         && output
@@ -402,14 +432,14 @@ fn checked_output(
             return Err("再認識の採用記録が不正です".into());
         }
         return recovery::checked(bytes, &parameters.engine.model.path, duration, first, end)
-            .map(|v| v.0);
+            .map(|v| (v.0, Vec::new()));
     }
     let segments = whisper::parse_output(bytes, &parameters.engine.model.path, duration)?;
     if parameters.recognition_policy.is_none() {
         if output.recognition.is_some() {
             return Err("旧認識方式に新しい採用記録があります".into());
         }
-        return Ok(segments);
+        return Ok((segments, Vec::new()));
     }
     let audit = output
         .recognition
@@ -443,7 +473,7 @@ fn checked_output(
                 && rejected.is_none() => {}
         _ => return Err("認識結果の採用モードが固定条件と一致しません".into()),
     }
-    Ok(segments)
+    Ok((segments, Vec::new()))
 }
 
 fn saved_output(
@@ -452,7 +482,7 @@ fn saved_output(
     p: &Parameters,
     output: &UnitOutput,
     duration: i64,
-) -> Result<Vec<whisper::Segment>, String> {
+) -> Result<SavedRecognition, String> {
     let bytes =
         storage.read_analysis_result(&spec.meeting_id, &output.json_asset_id, &output.json_hash)?;
     let rejected = output
@@ -1009,6 +1039,7 @@ pub(crate) fn process(
         check_source(storage, &spec, &parameters)?;
         optimization.finish(&cancelled)?;
         let mut utterances = Vec::new();
+        let mut ignored = Some(std::collections::BTreeMap::new());
         let mut review_ranges = Vec::<recovery::ReviewRange>::new();
         managed::verify(
             &spec.profile_snapshot,
@@ -1058,7 +1089,10 @@ pub(crate) fn process(
                     });
                 }
             }
-            for segment in saved_output(storage, &spec, &parameters, output, duration)? {
+            let (segments, exclusions) =
+                saved_output(storage, &spec, &parameters, output, duration)?;
+            collect_ignored_hotwords(&mut ignored, exclusions);
+            for segment in segments {
                 if let Some(utterance) = unit.utterance(
                     segment,
                     u64::from(track.sample_rate),
@@ -1128,6 +1162,11 @@ pub(crate) fn process(
                 segments: vec![],
                 utterances,
             },
+            &ignored
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(term, reason)| mon_contracts::IgnoredHotword { term, reason })
+                .collect::<Vec<_>>(),
         )?;
         progress(storage.get_job(job_id)?);
         Ok(Some(candidate))

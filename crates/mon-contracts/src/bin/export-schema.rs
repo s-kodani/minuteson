@@ -9,6 +9,7 @@ fn main() {
     let mut entries = serde_json::Map::new();
     entry::<WindowEnvironment>("WindowEnvironment", &mut entries);
     entry::<AppError>("AppError", &mut entries);
+    entry::<IgnoredHotword>("IgnoredHotword", &mut entries);
     entry::<MeetingBodyPart>("MeetingBodyPart", &mut entries);
     entry::<MeetingBodyReview>("MeetingBodyReview", &mut entries);
     entry::<SalvageSourceCleanup>("SalvageSourceCleanup", &mut entries);

@@ -1,6 +1,7 @@
-//! The sole supported meeting-DB upgrade. The two schema39 origins are the
+//! The schema39 to schema40 upgrade. The two schema39 origins are the
 //! repository LF definition and the exact CRLF definition embedded in the
 //! official Windows 1.0.7 artifact. Each retains its own SQL/provenance layout.
+use super::schema_41::PREVIOUS_VERSION as SCHEMA_VERSION;
 use super::*;
 
 pub(super) const PREVIOUS_VERSION: usize = 39;
@@ -21,6 +22,12 @@ pub(super) enum Layout {
     Crlf,
 }
 impl Layout {
+    pub(super) fn with_line_endings(self, sql: &str) -> String {
+        match self {
+            Self::Lf => sql.to_owned(),
+            Self::Crlf => sql.replace('\n', "\r\n"),
+        }
+    }
     fn previous_checksum(self) -> &'static str {
         match self {
             Self::Lf => PREVIOUS_CHECKSUM,
@@ -42,14 +49,13 @@ impl Layout {
 }
 
 pub(super) fn current_sql(layout: Layout) -> Result<String, Box<dyn Error>> {
-    let canonical = canonical_schema_sql();
-    if canonical.matches(NEW_PREDICATE).count() != 1 || schema_checksum() != CURRENT_LF_CHECKSUM {
+    let canonical = schema_41::schema_40_sql();
+    if canonical.matches(NEW_PREDICATE).count() != 1
+        || mon_core::hash::sha256_hex(canonical.as_bytes()) != CURRENT_LF_CHECKSUM
+    {
         return Err("schema40専用の定義チェックサムが一致しません".into());
     }
-    let sql = match layout {
-        Layout::Lf => canonical.to_owned(),
-        Layout::Crlf => canonical.replace('\n', "\r\n"),
-    };
+    let sql = layout.with_line_endings(&canonical);
     if mon_core::hash::sha256_hex(sql.as_bytes()) != layout.current_checksum() {
         return Err("schema40専用の改行形式が一致しません".into());
     }
@@ -63,7 +69,7 @@ pub(super) fn previous_sql_for(layout: Layout) -> Result<String, Box<dyn Error>>
     Ok(previous)
 }
 #[derive(Debug)]
-pub(super) struct UnsupportedSchema(String);
+pub(super) struct UnsupportedSchema(pub(super) String);
 
 impl std::fmt::Display for UnsupportedSchema {
     fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -73,7 +79,7 @@ impl std::fmt::Display for UnsupportedSchema {
 
 impl Error for UnsupportedSchema {}
 
-fn record(db: &Connection) -> Result<(i64, String), Box<dyn Error>> {
+pub(super) fn record(db: &Connection) -> Result<(i64, String), Box<dyn Error>> {
     let unsupported = "非対応の会議DB形式です。元のデータを保持しています";
     let mut query = db
         .prepare("SELECT version,checksum FROM schema_migrations ORDER BY version DESC LIMIT 2")
@@ -107,7 +113,7 @@ fn record(db: &Connection) -> Result<(i64, String), Box<dyn Error>> {
 }
 pub(super) fn current_layout(db: &Connection) -> Result<Layout, Box<dyn Error>> {
     let (version, checksum) = record(db)?;
-    if version == SCHEMA_VERSION as i64 && schema_checksum() == CURRENT_LF_CHECKSUM {
+    if version == SCHEMA_VERSION as i64 {
         if checksum == CURRENT_LF_CHECKSUM {
             return Ok(Layout::Lf);
         }
@@ -118,8 +124,8 @@ pub(super) fn current_layout(db: &Connection) -> Result<Layout, Box<dyn Error>> 
     Err(UnsupportedSchema(format!("非対応の会議DB形式です。元のデータを保持しています（記録された形式版: {version}、対応形式版: {SCHEMA_VERSION}）")).into())
 }
 
-type Object = (String, String, String, Option<String>);
-fn objects(db: &Connection) -> Result<Vec<Object>, Box<dyn Error>> {
+pub(super) type Object = (String, String, String, Option<String>);
+pub(super) fn objects(db: &Connection) -> Result<Vec<Object>, Box<dyn Error>> {
     let mut query = db.prepare(
         "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name",
     )?;
@@ -219,7 +225,16 @@ pub(super) fn migrate(db: &mut Connection) -> Result<(), Box<dyn Error>> {
         "INSERT INTO schema_migrations(version,checksum,applied_at) VALUES(?1,?2,?3)",
         params![SCHEMA_VERSION as i64, layout.current_checksum(), now_ms()?],
     )?;
-    verify_database_schema(&tx)?;
+    current_layout(&tx)?;
+    if objects(&tx)?
+        != objects(&{
+            let expected = Connection::open_in_memory()?;
+            expected.execute_batch(&sql)?;
+            expected
+        })?
+    {
+        return Err("移行後のschema40のSQL定義が一致しません".into());
+    }
     tx.commit()?;
     Ok(())
 }
@@ -230,11 +245,10 @@ mod tests {
     use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 
     #[test]
-    fn fresh40_is_canonical_lf_and_layout_claims_do_not_admit_other_sql() {
+    fn layout_claims_do_not_admit_other_sql() {
         let mut fresh = Connection::open_in_memory().unwrap();
         initialize_database(&mut fresh).unwrap();
-        assert_eq!(current_layout(&fresh).unwrap(), Layout::Lf);
-        assert_eq!(record(&fresh).unwrap().1, CURRENT_LF_CHECKSUM);
+        assert_eq!(schema_41::current_layout(&fresh).unwrap(), Layout::Lf);
         assert!(!canonical_schema_sql().contains('\r'));
         for layout in [Layout::Lf, Layout::Crlf] {
             let mut db = previous_for(layout);
@@ -246,6 +260,7 @@ mod tests {
                 .execute_batch(&current_sql(layout).unwrap())
                 .unwrap();
             assert_eq!(objects(&db).unwrap(), objects(&expected).unwrap());
+            schema_41::migrate(&mut db).unwrap();
             deletion::database::trusted_schema(&db).unwrap();
             let other = if layout == Layout::Lf {
                 Layout::Crlf
@@ -254,7 +269,7 @@ mod tests {
             };
             db.execute(
                 "UPDATE schema_migrations SET checksum=?1",
-                [other.current_checksum()],
+                [schema_41::checksum_for(other)],
             )
             .unwrap();
             assert!(
@@ -263,7 +278,7 @@ mod tests {
             );
             db.execute(
                 "UPDATE schema_migrations SET checksum=?1",
-                [layout.current_checksum()],
+                [schema_41::checksum_for(layout)],
             )
             .unwrap();
             db.execute_batch("CREATE TABLE unknown_source(id INTEGER)")
@@ -317,7 +332,7 @@ mod tests {
             verify_startup(&db).unwrap();
             let before = objects(&db).unwrap();
             migrate(&mut db).unwrap();
-            verify_database_schema(&db).unwrap();
+            current_layout(&db).unwrap();
             let after = objects(&db).unwrap();
             let changed: Vec<_> = before
                 .iter()
@@ -435,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn deletion_v1_fingerprint_matches_real39_but_sql40_remains_exact() {
+    fn deletion_v1_fingerprint_matches_real39_but_current_sql_remains_exact() {
         for layout in [Layout::Lf, Layout::Crlf] {
             let mut db = previous_for(layout);
             let old: Vec<(String, String, String, String)> = objects(&db)
@@ -444,7 +459,7 @@ mod tests {
                 .map(|(kind, name, table, sql)| (kind, name, table, sql.unwrap()))
                 .collect();
             let fingerprint = mon_core::hash::sha256_hex(serde_json::to_vec(&old).unwrap());
-            migrate(&mut db).unwrap();
+            schema_41::migrate(&mut db).unwrap();
             db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
             assert_eq!(
                 deletion::database::trusted_schema(&db).unwrap(),
@@ -467,7 +482,7 @@ mod tests {
             let historical = deletion::database::trusted_schema(&db).unwrap();
             db.execute_batch("PRAGMA query_only=OFF").unwrap();
             assert!(deletion::database::trusted_schema(&db).is_err());
-            migrate(&mut db).unwrap();
+            schema_41::migrate(&mut db).unwrap();
             assert_eq!(deletion::database::trusted_schema(&db).unwrap(), historical);
             let old = previous_for(layout);
             old.execute_batch("DROP TRIGGER audio_import_ready_assets; PRAGMA query_only=ON;")
@@ -491,7 +506,7 @@ mod tests {
                 .unwrap());
             db.execute("UPDATE meetings SET title='復旧後も書込み可能'", [])
                 .unwrap();
-            migrate(&mut db).unwrap();
+            schema_41::migrate(&mut db).unwrap();
             verify_database_schema(&db).unwrap();
 
             let old = previous_for(layout);

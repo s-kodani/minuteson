@@ -128,7 +128,7 @@ pub(super) fn owners_sql(table: &str) -> Result<String, String> {
     let sql = match table {
         "voice_people" | "voice_samples" | "voice_sample_audio" | "voice_policies" => format!("SELECT rowid,NULL AS meeting_id FROM {table}"),
         "meetings" => "SELECT rowid,id FROM meetings".into(),
-        "speakers" | "utterance_speakers" => format!("SELECT c.rowid,a.meeting_id FROM {table} c JOIN analysis_revisions a ON a.id=c.analysis_revision_id"),
+        "speakers" | "utterance_speakers" | "analysis_vocabulary_diagnostics" => format!("SELECT c.rowid,a.meeting_id FROM {table} c JOIN analysis_revisions a ON a.id=c.analysis_revision_id"),
         "track_clock_segments" | "audio_gaps" => format!("SELECT c.rowid,t.meeting_id FROM {table} c JOIN audio_tracks t ON t.id=c.track_id"),
         "job_checkpoints" => "SELECT c.rowid,j.meeting_id FROM job_checkpoints c JOIN processing_jobs j ON j.id=c.job_id".into(),
         "diarization_manual_assignments" => "SELECT c.rowid,a.meeting_id FROM diarization_manual_assignments c JOIN analysis_revisions a ON a.id=c.analysis_id".into(),
