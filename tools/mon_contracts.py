@@ -259,7 +259,7 @@ def registry_commands(root=ROOT, synchronize=False):
         if name not in declarations:
             raise ValueError(f"registered handler lacks #[tauri::command]: {command['handler']}")
         path, signature = declarations[name]
-        # Rust verifies the imports for unqualified handlers during compilation.
+        # 修飾のないハンドラのインポートは、Rustのコンパイル時に検証する。
         if len(parts) > 1:
             module = sources.joinpath(*parts[:-1])
             registered_path = module.with_suffix(".rs")
