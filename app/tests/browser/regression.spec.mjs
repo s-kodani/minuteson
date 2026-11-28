@@ -15,7 +15,8 @@ for (const [name, fixture, source] of suites) {
   test(name, async ({ page, baseURL, request }, info) => {
     // One virtual clock covers reloads and popup pages in this isolated context.
     // Time-window assertions advance it explicitly instead of sleeping on CI.
-    await page.clock.install();
+    // 性能検査は実時間とブラウザー本来の描画フレームを使う。
+    if (name !== "transcript-tab-performance") await page.clock.install();
     page.setDefaultTimeout(name.startsWith("internal-logs-") ? 30_000 : 10_000);
     // Cold Vite module loads have a separate budget from control interactions.
     page.setDefaultNavigationTimeout(30_000);

@@ -21,10 +21,11 @@ async (page, _capturePath, {primaryModifier}) => {
     }, {count, forced});
     await page.getByRole("button", {name:"会議A",exact:true}).click({timeout:preparationTimeout});
     await page.locator('[data-utterance-id="performance-0"]').waitFor({timeout:preparationTimeout});
-    const measurement = await page.evaluate(async () => {
+    const measurement = await page.evaluate(async count => {
       const list = document.querySelector(".utterance-list");
       const rows = () => [...list.querySelectorAll(".utterance-row")];
-      const paint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
+      const paint = async () => { await frame(); await frame(); };
       const median = values => {
         const sorted = [...values].sort((a,b) => a-b);
         return (sorted[(sorted.length-1)>>1]+sorted[sorted.length>>1])/2;
@@ -47,21 +48,41 @@ async (page, _capturePath, {primaryModifier}) => {
       let maxMounted = original.length;
       const scrollSamples = [];
       for (const fraction of [0.25, 0.75, 0.5, 1, 0, 0.25, 0.75, 0.5, 1, 0]) {
+        const requestedTop = fraction * (list.scrollHeight - list.clientHeight);
         const start = performance.now();
-        list.scrollTop = fraction * (list.scrollHeight - list.clientHeight);
-        await paint();
-        const mounted = rows();
-        const box = list.getBoundingClientRect();
-        if (!mounted.some(row => {
-          const bounds = row.getBoundingClientRect();
-          return bounds.bottom > box.top && bounds.top < box.bottom;
-        })) throw Error(`スクロール後の表示範囲に発言がありません: ${fraction}`);
-        scrollSamples.push(performance.now()-start);
-        maxMounted = Math.max(maxMounted, mounted.length);
+        list.scrollTop = requestedTop;
+        // scroll イベント、描画、行高の再計測はフレームをまたぐことがある。
+        // 移動先の表示を確認し、移動前の行が見えたままでも成功させない。
+        for (;;) {
+          await frame();
+          const mounted = rows();
+          maxMounted = Math.max(maxMounted, mounted.length);
+          const {scrollTop, scrollHeight, clientHeight} = list;
+          const box = list.getBoundingClientRect();
+          const visible = mounted.filter(row => {
+            const bounds = row.getBoundingClientRect();
+            return bounds.bottom > box.top && bounds.top < box.bottom;
+          });
+          const reached = fraction === 0
+            ? scrollTop <= 1 && visible[0]?.dataset.utteranceId === "performance-0"
+            : fraction === 1
+              ? scrollHeight - clientHeight - scrollTop <= 1 && visible.at(-1)?.dataset.utteranceId === `performance-${count - 1}`
+              // 可変高の実測でスクロール座標が変わるため、途中の地点には1画面分の幅を持たせる。
+              : Math.abs(scrollTop - requestedTop) <= clientHeight && visible.length > 0;
+          const elapsed = performance.now() - start;
+          if (reached) { scrollSamples.push(elapsed); break; }
+          if (elapsed > 5000) {
+            throw Error(`スクロール先の発言を表示できません: ${JSON.stringify({
+              count, fraction, requestedTop, scrollTop, scrollHeight, clientHeight,
+              mounted: mounted.map(row => row.dataset.utteranceId),
+              visible: visible.map(row => row.dataset.utteranceId),
+            })}`);
+          }
+        }
       }
       return {mounted: original.length, maxMounted, nodesRetained, samples, scrollSamples,
         tabMedianMs:median(samples.map(sample=>sample.ms)), scrollMedianMs:median(scrollSamples)};
-    });
+    }, count);
     await cdp?.send("HeapProfiler.collectGarbage");
     const heapBytes = (await cdp?.send("Performance.getMetrics"))?.metrics.find(metric => metric.name === "JSHeapUsedSize")?.value;
     measurements.push({count, forced, ...measurement, heapBytes});
