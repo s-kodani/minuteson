@@ -41,7 +41,8 @@ test("plain minutes use direct controls without an operations dialog", () => {
 
 test("meeting management is available only in detail, never as a list footer", () => {
   const view=source("main.tsx");
-  assert.match(view,/<div className="meeting-detail-actions"><RowMenu label="会議の操作"/);
+  const editor=source("main-shells/meeting-editor-shell.tsx");
+  assert.match(editor,/<div className="meeting-detail-actions"><RowMenu label="会議の操作"/);
   const library=source("main-shells/library-shell.tsx");
   assert.doesNotMatch(view + library,/renderMeetingTools\(null, null\)|landing-tools/);
   assert.match(library,/<RowMenu label=\{`\$\{row.title\}の操作`\}/);

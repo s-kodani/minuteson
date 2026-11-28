@@ -4,13 +4,17 @@ import { readFileSync } from "node:fs";
 const source = (file: string) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
 test("meeting title precedes tabs and all fixed chrome participates in dock sizing", () => {
   const main = source("main.tsx");
-  assert.ok(main.indexOf('{detail && <div className="meeting-detail-status"') < main.indexOf('{detail && <div className="meeting-detail-navigation"'));
+  const editor = source("main-shells/meeting-editor-shell.tsx");
+  const heading = editor.indexOf('<div className="meeting-detail-status"');
+  const navigation = editor.indexOf('<div className="meeting-detail-navigation"');
+  assert.ok(heading >= 0 && heading < navigation);
+  assert.match(main, /detail && <MeetingEditorHeader/);
   assert.match(main, /heading\?\.getBoundingClientRect\(\)\.height/);
   assert.match(main, /querySelectorAll<HTMLElement>\("\.meeting-detail-status,\.meeting-detail-navigation"\)/);
 });
 test("meeting actions align with tabs in normal flow and wrapped navigation is measured", () => {
   const main=source("main.tsx"), css=source("prototype-alignment.css");
-  assert.match(main,/className="meeting-detail-actions"><RowMenu/);
+  assert.match(source("main-shells/meeting-editor-shell.tsx"),/className="meeting-detail-actions"><RowMenu/);
   assert.match(main,/navigation\?\.getBoundingClientRect\(\)\.height/);
   assert.match(css,/\.meeting-detail-navigation \{[^}]*align-items:center; flex-wrap:wrap; gap:8px 16px;/);
   assert.match(css,/\.meeting-detail-navigation>\.meeting-detail-tabs \{ flex:1 1 162px;/);

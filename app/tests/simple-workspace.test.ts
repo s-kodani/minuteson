@@ -2,10 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 const main=readFileSync(new URL("../src/main.tsx",import.meta.url),"utf8");
+const editor=readFileSync(new URL("../src/main-shells/meeting-editor-shell.tsx",import.meta.url),"utf8");
 test("meeting title editing has its own guarded modal instead of management sections",()=>{
-  assert.doesNotMatch(main,/<h2>録音セッション|<h3>会議情報|className="rename-form"/);
-  assert.match(main,/meeting-title-row.*label="会議名を変更".*icon="edit"/);
-  assert.match(main,/open=\{renameOpen && !!selectedMeeting\} blocked=\{meetingBusy\}/);
+  assert.doesNotMatch(main + editor,/<h2>録音セッション|<h3>会議情報|className="rename-form"/);
+  assert.match(editor,/meeting-title-row[\s\S]*label="会議名を変更".*icon="edit"/);
+  assert.match(main,/<MeetingRenameDialog open=\{renameOpen && !!selectedMeeting\} busy=\{meetingBusy\}/);
+  assert.match(editor,/<CommonModal open=\{open\} blocked=\{busy\}/);
   assert.match(main,/expectedLockVersion: selectedMeeting.lockVersion/);
   assert.match(main,/!renameOpen \|\| meetingBusy \|\| selectedWriteLocked \|\| !renameTitle.trim\(\)/);
 });
