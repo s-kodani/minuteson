@@ -12,7 +12,9 @@ export function JobCount() {
   return count ? <span className="job-nav-count" aria-hidden="true">{count}</span> : null;
 }
 
-export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData, onShowRestored, publicationReadStatus }: { locked: boolean; onOpenMeeting: (id: string) => Promise<void>; onOpenModels: () => void; data?: DataOperation; onOpenData?: () => void; onShowRestored?: (ids: string[]) => Promise<void>; publicationReadStatus?: string }) {
+type JobListData = Pick<DataOperation, "jobs" | "jobsError" | "refresh" | "dismissJob"> & { activeToken: string | null };
+
+export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData, onShowRestored, publicationReadStatus }: { locked: boolean; onOpenMeeting: (id: string) => Promise<void>; onOpenModels: () => void; data?: JobListData; onOpenData?: () => void; onShowRestored?: (ids: string[]) => Promise<void>; publicationReadStatus?: string }) {
   const items = orderedProgress(useProgressItems()), read = useJobReadStatus();
   const runningCount = items.filter(item => item.state === "running" || item.state === "pausing").length;
   const queuedCount = items.filter(item => item.state === "queued").length;
@@ -64,7 +66,7 @@ export function JobList({ locked, onOpenMeeting, onOpenModels, data, onOpenData,
         {receipt && <p>会議 {receipt.meetingIds.length} 件を追加しました。{receipt.registry && `人物 ${receipt.registry.people} 人・声 ${receipt.registry.samples} 件・紐付き ${receipt.registry.links} 件。`}</p>}
         <div className="analysis-actions">
           {receipt && <button type="button" className="small-secondary" data-screen-navigation disabled={locked} onClick={() => void run(() => onShowRestored?.(receipt.meetingIds) ?? Promise.resolve())}>復元した会議を開く</button>}
-          {s.phase === "attention" && data?.snapshot?.token === s.token ? <button type="button" className="small-secondary" onClick={onOpenData}>結果を確認する</button> : <button type="button" className="small-secondary" onClick={() => void run(() => data!.dismissJob(s.token!))}>結果を閉じる</button>}
+          {s.phase === "attention" && data?.activeToken === s.token ? <button type="button" className="small-secondary" onClick={onOpenData}>結果を確認する</button> : <button type="button" className="small-secondary" onClick={() => void run(() => data!.dismissJob(s.token!))}>結果を閉じる</button>}
         </div>
       </li>;
     })}</ul></>}

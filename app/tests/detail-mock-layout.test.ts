@@ -272,7 +272,7 @@ test("playback settings use one group gap instead of stacking label margins", ()
 });
 
 test("restored meeting notices separate the message and action without inline whitespace hacks", () => {
-  assert.match(source("main.tsx"),/restoredFilter && <p className="meeting-list-notice">/);
+  assert.match(source("main-shells/library-shell.tsx"),/restoredOnly && <p className="meeting-list-notice">/);
   assert.match(source("prototype-alignment.css"),/\.meeting-list-notice \{ display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px;/);
 });
 

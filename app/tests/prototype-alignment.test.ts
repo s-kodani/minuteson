@@ -5,13 +5,15 @@ const source = (path: string) => readFileSync(new URL(path, import.meta.url), "u
 
 test("prototype styling loads after the functional workspace styles", () => {
   const main = source("../src/main.tsx");
+  const library = source("../src/main-shells/library-shell.tsx");
   assert.ok(main.indexOf('import "./prototype-alignment.css"') > main.indexOf('import "./style.css"'));
   assert.ok(main.includes('("meetings")'));
-  assert.doesNotMatch(main, /DESKTOP FOUNDATION|className="next-grid"/);
-  assert.match(main, /<table className="meeting-table">/);
-  assert.match(main, /aria-label="会議名を検索"/);
-  assert.doesNotMatch(main, /<ThemeSelection|aria-label="概要"/);
-  assert.match(main, /screen === "settings" && <ThemeSettingsPanel/);
+  assert.doesNotMatch(main + library, /DESKTOP FOUNDATION|className="next-grid"/);
+  assert.match(library, /<table className="meeting-table">/);
+  assert.match(library, /aria-label="会議名を検索"/);
+  assert.doesNotMatch(main + library, /<ThemeSelection|aria-label="概要"/);
+  assert.match(main, /settingsVisible=\{screen === "settings"\}/);
+  assert.match(library, /settingsVisible && <ThemeSettingsPanel/);
 });
 test("floating surfaces round every corner and do not use a thick square toast stripe", () => {
   const css = source("../src/prototype-alignment.css");

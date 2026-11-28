@@ -1,9 +1,8 @@
 import { useCaptureActions, useCaptureActionState, type CaptureMeeting as Meeting } from "./capture-actions";
 import { useWorkspaceClose } from "./workspace-close";
-import { InfoPopover, closeInfoPopovers } from "./info-popover";
+import { closeInfoPopovers } from "./info-popover";
 import { Callout } from "./callout";
 import { ModelDeletionDialog, useModelDeletion } from "./model-deletion";
-import { SettingsFooter } from "./settings-footer";
 import { AppUpdateBanner, AppUpdateProvider } from "./app-updates";
 import appIconUrl from "../src-tauri/icons/icon.svg";
 import { usePlatform } from "./platform";
@@ -22,7 +21,7 @@ import { IssueNotice, NotificationList, ToastHost, ToastNotice } from "./toast";
 import { JobNotifications } from "./job-notifications";
 import { RecorderOperationProvider, RecorderOperationNotifications } from "./recorder-operation-notices";
 import { listen } from "@tauri-apps/api/event";
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { lazy, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { formatElapsed, useRecordingSession } from "./session";
 import { phaseLabel } from "./recording-phase";
 import { meetingStatusLabel } from "./meeting-status";
@@ -39,7 +38,7 @@ import { CommonOperationProgress, usePublishProgress } from "./operation-progres
 import { RecordingRecoveryNotifications, RecordingSaveRetry, useRecordingRecovery } from "./recording-recovery";
 import { recoveryMeetingState, recordingSaveJobs } from "./recording-recovery-state";
 import { deletionProgress, dataJobProgress, modelCleanupProgress } from "./operation-progress-state";
-import { JobCount, JobList } from "./job-list";
+import { JobCount } from "./job-list";
 import { useDataOperation } from "./data-operation";
 import { DataSavePanel } from "./data-save";
 import { MeetingDeletionPanel, useMeetingDeletion } from "./meeting-deletion";
@@ -49,7 +48,7 @@ import "./minutes-markdown-editor.css";
 import "./style.css";
 import "./prototype-alignment.css";
 import "./recorder-panel.css";
-import { ThemeSettingsPanel, ThemeNotifications } from "./theme";
+import { ThemeNotifications } from "./theme";
 import { useRecordingConfirmation } from "./recording-confirmation";
 import { confirmations, useActionConfirmation } from "./confirmation-service";
 import { appShortcut, overlayOpen } from "./keyboard";
@@ -57,6 +56,8 @@ import { MeetingPlaybackSurface } from "./playback-surface";
 import { MeetingAudioProvider } from "./meeting-audio";
 import {ActiveMicrophoneSelection,CaptureInputSelection,useCaptureInputs} from "./capture-inputs";
 import { RecordingShell } from "./main-shells/recording-shell";
+import { LibraryPanels, LibraryShell } from "./main-shells/library-shell";
+import { DeferredPanel } from "./main-shells/deferred-panel";
 import {CaptureTestPanel,useCaptureTest} from "./capture-test";
 import {RecordingInputProvider} from "./recording-input-status";
 import {validRecordingPreparation,type RecordingPreparation} from "./recording-preparation-state";
@@ -67,19 +68,9 @@ import { useAppName } from "./window-environment";
 import { useMeetingList } from "./meeting-list";
 import { StorageRecoveryNotice } from "./salvage";
 
-const VoicePeopleSettings = lazy(() => import("./voice").then(module => ({ default: module.VoicePeopleSettings })));
-const MinutesPromptSettings = lazy(() => import("./minutes-prompt-settings").then(module => ({ default: module.MinutesPromptSettings })));
-const InternalLogs = lazy(() => import("./internal-logs").then(module => ({ default: module.InternalLogs })));
 const TranscriptEditor = lazy(() => import("./transcript").then(module => ({ default: module.TranscriptEditor })));
 const AnalysisPanel = lazy(() => import("./analysis").then(module => ({ default: module.AnalysisPanel })));
 const MinutesPanel = lazy(() => import("./minutes").then(module => ({ default: module.MinutesPanel })));
-const ModelInspectionPanel = lazy(() => import("./model-inspection").then(module => ({ default: module.ModelInspectionPanel })));
-
-function DeferredPanel({ children, visible = true }: { children: ReactNode; visible?: boolean }) {
-  return <Suspense fallback={visible ? <p className="deferred-panel-loading" role="status">画面を読み込んでいます。</p> : null}>{children}</Suspense>;
-}
-
-
 function MainWindow() {
   const appName = useAppName();
   const platform = usePlatform();
@@ -126,8 +117,6 @@ function MainWindow() {
   const [screen, setScreen] = useState<"overview" | "meetings" | "settings" | "recording" | "jobs" | "logs" | "voices" | "prompts">("meetings");
   const [detailTab, setDetailTab] = useState<"transcript" | "minutes">("transcript");
   const [minutesOwner, setMinutesOwner] = useState<string | null>(null);
-  const [openedSettings, setOpenedSettings] = useState(false);
-  const [openedPrompts, setOpenedPrompts] = useState(false);
   const [history] = useState(() => new ScreenHistory<{ screen: typeof screen; meeting: Meeting | null; preparation: RecordingPreparation | null; filter: string[] | null }>());
   const [, updateHistory] = useState(0);
   const routeKey = `${screen}:${screen === "overview" || screen === "recording" ? selectedMeeting?.id ?? preparation?.id ?? "" : ""}`;
@@ -139,10 +128,6 @@ function MainWindow() {
   const [transcriptActionsHost, setTranscriptActionsHost] = useState<HTMLDivElement | null>(null);
   const [transcriptEditorActionsHost, setTranscriptEditorActionsHost] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => { setDetailTab("transcript"); setMinutesOwner(null); }, [selectedMeeting?.id]);
-  useLayoutEffect(() => {
-    if (screen === "settings") setOpenedSettings(true);
-    if (screen === "prompts") setOpenedPrompts(true);
-  }, [screen]);
   const [playbackHost,setPlaybackHost] = useState<HTMLDivElement | null>(null);
   const [audioDropHost, setAudioDropHost] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
@@ -498,27 +483,46 @@ function MainWindow() {
           </Callout> : null}
           {meetings.map(meeting => <ToastNotice key={meeting.id} scope={meeting.id} type="meeting-integrity" level="warning" historyOnly meetingId={meeting.id}
             message={meetingList.byMeeting.has(meeting.id) ? `会議「${meeting.title}」：${meetingDiagnosticSummary(meetingList.byMeeting.get(meeting.id))!.label}。` : ""} />)}
-          {!detail && (screen === "overview" || screen === "meetings") && <div className="page-heading"><h1>会議一覧</h1></div>}
-          <AudioImportPanel modelCleanupActive={modelCleanupActive} overlayHost={audioDropHost} visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={recordingBlocksPanelActions} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
-            await flushPendingEdits();
-            const [meeting]=await Promise.all([invoke<Meeting|null>("get_meeting",{id}),refreshMeetings()]);
-            if(!meeting)throw Error("保存した会議が見つかりません。");
-            setSelectedMeeting(meeting);setRenameTitle(meeting.title);setScreen("overview");
-          }}/>
-          {screen === "settings" && <div className="page-heading heading-with-info"><h1>設定</h1><InfoPopover label="設定">録音環境、ローカルAI、表示を管理します。</InfoPopover></div>}
-          {screen === "settings" && <ThemeSettingsPanel locked={writeLocked} />}
-          {(openedSettings || screen === "settings") && <DeferredPanel visible={screen === "settings"}><ModelInspectionPanel cleanup={modelCleanup.active} onProgressOwnerReady={setModelProgressOwnerReady} deletion={modelDeletion} refreshEpoch={modelRefreshEpoch} runtimeUpdateEpoch={modelRuntimeEpoch} visible={screen === "settings"} locked={writeLocked} stopRequested={modelPreparationStopRequested} recordingActive={recordingBlocksPanelActions} /></DeferredPanel>}
-          {screen === "prompts" && <div className="page-heading heading-with-info"><h1>プロンプト</h1><InfoPopover label="プロンプト">議事録の作成・統合に使うプロンプトと共通用語を管理します。</InfoPopover></div>}
-          {(openedPrompts || screen === "prompts") && <DeferredPanel visible={screen === "prompts"}>
-            <MinutesPromptSettings visible={screen === "prompts"} locked={writeLocked} />
-            {screen === "prompts" && <VocabularyEditor locked={writeLocked} />}
-          </DeferredPanel>}
-          <DataSavePanel operation={dataOperation} visible={settingsReady} locked={captureTest.blocked || navigationBusy || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || deletionBlocked} withSavedEdits={withSavedEdits} onProtectionChange={setDataProtection} onRestored={async () => { await refreshMeetings(); await loadOrigins(); }} onShowMeetings={showRestored} />
-          {settingsReady && <SettingsFooter />}
+          <LibraryPanels
+            showMeetingList={!detail && (screen === "overview" || screen === "meetings")}
+            settingsVisible={screen === "settings"} promptsVisible={screen === "prompts"} settingsReady={settingsReady} locked={writeLocked}
+            audioImport={<AudioImportPanel modelCleanupActive={modelCleanupActive} overlayHost={audioDropHost} visible={(screen === "overview" || screen === "meetings") && !detail}
+              showNewRecording={false} locked={writeLocked} recordingActive={recordingBlocksPanelActions} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async id => {
+                await flushPendingEdits();
+                const [meeting] = await Promise.all([invoke<Meeting | null>("get_meeting", { id }), refreshMeetings()]);
+                if (!meeting) throw Error("保存した会議が見つかりません。");
+                setSelectedMeeting(meeting); setRenameTitle(meeting.title); setScreen("overview");
+              }} />}
+            model={{
+              cleanup: modelCleanup.active, onProgressOwnerReady: setModelProgressOwnerReady,
+              refreshEpoch: modelRefreshEpoch, runtimeUpdateEpoch: modelRuntimeEpoch,
+              stopRequested: modelPreparationStopRequested, recordingActive: recordingBlocksPanelActions,
+              deletion: {
+                canReviewModel: modelDeletion.canReviewModel, reviewUnavailableReason: modelDeletion.reviewUnavailableReason,
+                listing: modelDeletion.listing, canReviewPending: modelDeletion.canReviewPending, reviewPending: modelDeletion.reviewPending,
+                protectedNow: modelDeletion.protectedNow, unknown: modelDeletion.unknown, rpcBusy: modelDeletion.rpcBusy,
+                retryUnknown: modelDeletion.retryUnknown, reviewModel: modelDeletion.reviewModel,
+              },
+            }}
+            dataSave={<DataSavePanel operation={dataOperation} visible={settingsReady}
+              locked={captureTest.blocked || navigationBusy || deletion.protectedNow || audioDeletion.protectedNow || modelDeletion.protectedNow || deletionBlocked}
+              withSavedEdits={withSavedEdits} onProtectionChange={setDataProtection}
+              onRestored={async () => { await refreshMeetings(); await loadOrigins(); }} onShowMeetings={showRestored} />}
+          />
           <ModelDeletionDialog operation={dataOperation} control={modelDeletion} />
           <MeetingDeletionPanel operation={dataOperation} control={deletion} />
           <AudioDeletionPanel operation={dataOperation} control={audioDeletion} meetingTitle={meetings.find(m => m.id === audioDeletion.preview?.meetingId)?.title} />
-          {screen === "settings" ? null : screen === "prompts" ? null : screen === "voices" ? <DeferredPanel><VoicePeopleSettings standalone locked={writeLocked} /></DeferredPanel> : screen === "logs" ? <DeferredPanel><InternalLogs /></DeferredPanel> : screen === "jobs" ? <JobList data={dataOperation} publicationReadStatus={publication.readStatus} onOpenData={() => setScreen("settings")} onShowRestored={showRestored} locked={navigationLocked} onOpenMeeting={openNotifiedMeeting} onOpenModels={() => { if (!navigationLocked) void navigate(() => setScreen("settings")); }} /> : screen==="recording" ? <>
+          {screen === "settings" || screen === "prompts" || screen === "logs" ? <LibraryShell screen={screen} />
+          : screen === "voices" ? <LibraryShell screen={screen} locked={writeLocked} />
+          : screen === "jobs" ? <LibraryShell screen={screen} jobs={{
+            data: {
+              jobs: dataOperation.jobs, jobsError: dataOperation.jobsError, activeToken: dataOperation.snapshot?.token ?? null,
+              refresh: dataOperation.refresh, dismissJob: dataOperation.dismissJob,
+            },
+            publicationReadStatus: publication.readStatus, onOpenData: () => setScreen("settings"),
+            onShowRestored: showRestored, locked: navigationLocked, onOpenMeeting: openNotifiedMeeting,
+            onOpenModels: () => { if (!navigationLocked) void navigate(() => setScreen("settings")); },
+          }} /> : screen === "recording" ? <>
             <RecordingShell
               preparation={preparation && { id: preparation.id, title: preparation.title, submitted: preparation.submitted, meetingVocabulary: preparation.meetingVocabulary }}
               meeting={selectedMeeting && { id: selectedMeeting.id, title: selectedMeeting.title, canEditVocabulary: selectedMeeting.lifecycle === "draft" && selectedMeeting.sourceType == null }}
@@ -548,22 +552,25 @@ function MainWindow() {
             ]);
             setSelectedMeeting(meeting);
           }} /></DeferredPanel> : null}
-          <section className="meetings-card" aria-label="保存済み会議" hidden={detail}>
-            <div className="card-head"><input type="search" className="meeting-search" aria-label="会議名を検索" placeholder="会議名を検索" value={meetingQuery} onChange={event => setMeetingQuery(event.target.value)} /><IconButton label="再読込" icon="refresh" onClick={reloadMeetings} disabled={!isTauri() || navigationLocked} /></div>
-            {!detail && <IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError} />}
-            {restoredFilter && <p className="meeting-list-notice">今回復元した会議を表示しています。<button type="button" className="small-secondary" data-screen-navigation disabled={navigationLocked} onClick={() => void navigate(() => setRestoredFilter(null))}>すべての会議を表示</button></p>}
-            {meetingList.status === "loading" && <p className="empty-meetings" role="status">保存済み会議を読み込んでいます。</p>}
-            {meetingList.status === "failed" && <p className="meeting-list-notice" role="status">会議一覧を取得できませんでした。{meetings.length > 0 && "前回取得した一覧を表示しています。"}再読込してください。</p>}
-            <IssueNotice scope="main" type="meeting-list" label="会議一覧" message={meetingList.error}/>
-            {meetingList.status === "ready" && meetingList.diagnosticError && <p className="meeting-list-notice" role="status">会議の利用状態を取得できませんでした。会議一覧の「再読込」を選んでください。</p>}
-            {meetingList.byMeeting.get(null)?.map(item => <p key={`${item.reason}:${item.message}`} className="meeting-list-notice" role="status">{item.message}</p>)}
-            {shownMeetings.length === 0 ? meetingList.status === "ready" && <p className="empty-meetings">{meetingQuery ? "条件に合う会議はありません。" : restoredFilter ? "対象の復元会議は現在の一覧にありません。" : "保存済み会議はありません。"}</p> : <div className="meeting-table-frame"><table className="meeting-table"><thead><tr><th scope="col">会議名</th><th scope="col">作成日時</th><th scope="col">状態</th><th scope="col"><span className="sr-only">操作</span></th></tr></thead><tbody>{shownMeetings.map((meeting) => <tr key={meeting.id}>
-              <td><button type="button" className="meeting-name" data-screen-navigation onClick={() => selectMeeting(meeting.id)} disabled={navigationLocked}>{meeting.title}</button>{restoredIds.includes(meeting.id) && <small className="restore-badge">バックアップから復元</small>}</td>
-              <td className="meeting-date">{new Date(meeting.createdAt).toLocaleString("ja-JP")}</td>
-              <td><span className="state-pill">{meetingStatusLabel(meeting, state, recovery.snapshot, meetingList.byMeeting.get(meeting.id))}</span>{recovery.error && recoveryMeetingState(recovery.snapshot, meeting.id) && <small role="status">保存状態を確認できません。表示は前回取得した状態です。</small>}</td>
-              <td><RowMenu label={`${meeting.title}の操作`} disabled={navigationLocked} onOpenChange={open => trackDeletionMenu(meeting.id, open)}><button type="button" role="menuitem" data-screen-navigation onClick={() => selectMeeting(meeting.id)} disabled={navigationLocked}>開く</button>{recoveryMeetingState(recovery.snapshot, meeting.id)?.error && <RecordingSaveRetry snapshot={recovery.snapshot} meetingId={meeting.id} locked={writeLocked} />}{deletionMenu(meeting)}{dataOperation.deletionListing?.deletingMeetingIds.includes(meeting.id) && <span role="status">会議の削除が完了していません。</span>}</RowMenu></td>
-            </tr>)}</tbody></table></div>}
-          </section>
+          <LibraryShell screen="meetings" hidden={detail} locked={navigationLocked} meetingError={meetingError} restoredOnly={!!restoredFilter}
+            search={{ query: meetingQuery, update: setMeetingQuery }}
+            list={{
+              hasMeetings: meetings.length > 0, status: meetingList.status, error: meetingList.error,
+              diagnosticError: meetingList.diagnosticError, diagnostics: meetingList.byMeeting.get(null) ?? [],
+              rows: shownMeetings.map(meeting => {
+                const recoveryItem = recoveryMeetingState(recovery.snapshot, meeting.id);
+                return {
+                  id: meeting.id, title: meeting.title, createdAt: meeting.createdAt, restored: restoredIds.includes(meeting.id),
+                  status: meetingStatusLabel(meeting, state, recovery.snapshot, meetingList.byMeeting.get(meeting.id)),
+                  recoveryWarning: !!recovery.error && !!recoveryItem,
+                  retry: recoveryItem?.error && <RecordingSaveRetry snapshot={recovery.snapshot} meetingId={meeting.id} locked={writeLocked} />,
+                  menu: deletionMenu(meeting),
+                  deletionPending: !!dataOperation.deletionListing?.deletingMeetingIds.includes(meeting.id),
+                };
+              }),
+            }}
+            actions={{ select: selectMeeting, reload: reloadMeetings, clearRestoredFilter: () => void navigate(() => setRestoredFilter(null)), trackMenu: trackDeletionMenu }}
+          />
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-transcript" role="tabpanel" aria-labelledby="meeting-tab-transcript" hidden={detailTab !== "transcript"}>
             <div className="card-head transcript-primary-heading">
               <h2>{transcriptMeeting === selectedMeeting.id ? "発言一覧" : "文字起こし"}</h2>
