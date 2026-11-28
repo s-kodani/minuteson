@@ -140,6 +140,7 @@ use generation::commands::{
 };
 use import_controller::ImportController;
 use model_inspection::commands::cancel_model_inspection;
+use model_placement::commands::get_model_placements;
 use playback::{PlaybackInfo, PlaybackPreparations, PlaybackStore};
 use recorder::RecorderController;
 use recording_confirmation::StopDecisionStore;
@@ -154,19 +155,6 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
-
-#[tauri::command]
-fn get_model_placements(
-    window: WebviewWindow,
-) -> Result<Vec<model_placement::CatalogEntry>, mon_contracts::AppError> {
-    let result: Result<Vec<model_placement::CatalogEntry>, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can read model placements".into());
-        }
-        window.state::<Storage>().list_model_placements()
-    })();
-    result.map_err(|message| mon_contracts::AppError::from_command("get_model_placements", message))
-}
 
 #[tauri::command]
 fn get_model_profiles(
