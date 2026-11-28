@@ -1,3 +1,5 @@
+pub(crate) mod commands;
+
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
