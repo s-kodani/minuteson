@@ -5,15 +5,22 @@ import { installPlainMinutesWindowFixture } from "./plain-minutes-window-fixture
 
 const obsoleteCommands = ["start_minutes_generation","get_minutes_exports","export_minutes_markdown","get_minutes_export_status","get_minutes_versions","get_minutes_preview","get_minutes_draft","create_minutes_draft","save_minutes_draft","undo_minutes_edit","adopt_minutes_candidate","restore_minutes_version","get_minutes_evidence_source","get_minutes_transcript_page","prepare_minutes_transcript_playback","prepare_minutes_evidence_playback"];
 test("obsolete minutes operations have no native handler, registration or client dispatch", () => {
-  const native=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
   const handler=readFileSync(new URL("../src-tauri/src/command_handler.rs",import.meta.url),"utf8");
   const player=readFileSync(new URL("../src/transcript-audio.tsx",import.meta.url),"utf8");
   for(const command of [...obsoleteCommands,"retry_minutes_generation","retry_transcription","get_capture_test_recovery","retry_capture_test_recovery"]) {
-    assert.doesNotMatch(native,new RegExp("\\b"+command+"\\b"),command);
+    assert.doesNotMatch(handler,new RegExp("\\b"+command+"\\b"),command);
     assert.ok(!player.includes('"'+command+'"'),command);
   }
-  for(const command of ["get_minutes_markdown","save_minutes_markdown","start_markdown_minutes_generation",
-    "export_plain_minutes_markdown","get_plain_minutes_export_status","prepare_markdown_interval_playback"]) {
+  const commandSources = {
+    get_minutes_markdown: "generation/commands.rs",
+    save_minutes_markdown: "generation/commands.rs",
+    start_markdown_minutes_generation: "generation/commands.rs",
+    export_plain_minutes_markdown: "lib.rs",
+    get_plain_minutes_export_status: "lib.rs",
+    prepare_markdown_interval_playback: "lib.rs",
+  };
+  for(const [command, file] of Object.entries(commandSources)) {
+    const native=readFileSync(new URL("../src-tauri/src/"+file,import.meta.url),"utf8");
     assert.match(native,new RegExp("async fn "+command+"\\("),command);
     assert.match(handler,new RegExp("^\\s+"+command+",$","m"),command);
   }
