@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 mod clock;
+pub(crate) mod commands;
 mod meeting;
 mod preparation;
 mod span;

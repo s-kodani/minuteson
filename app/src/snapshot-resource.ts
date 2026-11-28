@@ -9,6 +9,8 @@ export interface SnapshotTransport<T> {
   subscribe: (accept: (value: T) => void) => Promise<() => void>;
   accept: (current: T | null, value: T) => T;
   intervalMs: number;
+  eventIntervalMs?: number;
+  revision?: (snapshot: T) => number;
   schedule: (read: () => void, intervalMs: number) => () => void;
   focus: (read: () => void) => () => void;
 }
@@ -21,6 +23,8 @@ export class SnapshotResource<T> {
   private generation = 0;
   private evidence = 0;
   private pending: Promise<void> | null = null;
+  private verifyAgain = false;
+  private updatePoll: ((restart?: boolean) => void) | null = null;
   private cleanup: (() => void)[] = [];
 
   private transport: SnapshotTransport<T>;
@@ -43,8 +47,11 @@ export class SnapshotResource<T> {
     this.evidence++;
     this.publish({ snapshot, connected: true, error: "" });
   };
-  refresh = (): Promise<void> => {
-    if (this.pending) return this.pending;
+  refresh = (verifyAgain = false): Promise<void> => {
+    if (this.pending) {
+      this.verifyAgain ||= verifyAgain;
+      return this.pending;
+    }
     const generation = this.generation, evidence = this.evidence;
     const pending = this.transport.read().then(value => {
       if (generation === this.generation && this.listeners.size) this.accept(value);
@@ -52,34 +59,73 @@ export class SnapshotResource<T> {
       if (generation === this.generation && evidence === this.evidence && this.listeners.size) {
         this.publish({ ...this.state, connected: false, error: String(cause) });
       }
-    }).finally(() => { if (this.pending === pending) this.pending = null; });
+    }).finally(() => {
+      if (this.pending !== pending) return;
+      this.pending = null;
+      this.updatePoll?.();
+      if (this.verifyAgain) {
+        this.verifyAgain = false;
+        void this.refresh();
+      }
+    });
     this.pending = pending;
     return pending;
   };
   private start() {
     const generation = ++this.generation;
-    const poll = () => {
-      if (generation !== this.generation || !this.listeners.size) return;
-      this.cleanup.push(this.transport.schedule(() => { void this.refresh(); }, this.transport.intervalMs));
-      this.cleanup.push(this.transport.focus(() => { void this.refresh(); }));
-      void this.refresh();
+    const active = () => generation === this.generation;
+    const { intervalMs, eventIntervalMs, revision } = this.transport;
+    let subscribed = false, subscribing = false;
+    let cancelPoll: (() => void) | undefined, delay = 0;
+    const updatePoll = (restart = false) => {
+      if (!active()) return;
+      const nextDelay = subscribed && this.state.connected ? eventIntervalMs ?? intervalMs : intervalMs;
+      if (cancelPoll && delay === nextDelay && !restart) return;
+      cancelPoll?.();
+      delay = nextDelay;
+      cancelPoll = this.transport.schedule(() => { void this.refresh(); }, delay);
     };
-    void this.transport.subscribe(value => {
-      if (generation !== this.generation || !this.listeners.size) return;
-      try { this.accept(value); }
-      catch (cause) { this.publish({ ...this.state, connected: false, error: String(cause) }); }
-    }).then(stop => {
-      if (generation !== this.generation || !this.listeners.size) { stop(); return; }
-      this.cleanup.push(stop);
-      poll();
-    }).catch(() => {
-      // A lost event subscription is recovered by verified polling.
-      poll();
-    });
+    this.updatePoll = updatePoll;
+    this.cleanup.push(() => cancelPoll?.());
+    const subscribe = () => {
+      if (subscribing || subscribed) return;
+      subscribing = true;
+      void this.transport.subscribe(value => {
+        if (!active()) return;
+        const prior = this.state.snapshot;
+        try {
+          this.accept(value);
+          const next = this.state.snapshot!;
+          if (revision && prior !== null && revision(next) > revision(prior) + 1) void this.refresh(true);
+          // 遅延・重複イベントで照会の締切を延ばさない。
+          if (eventIntervalMs && (prior === null || !revision || revision(next) > revision(prior))) updatePoll(true);
+        } catch (cause) {
+          this.evidence++;
+          this.publish({ ...this.state, connected: false, error: String(cause) });
+          updatePoll();
+          void this.refresh(true);
+        }
+      }).then(stop => {
+        if (!active()) { stop(); return; }
+        this.cleanup.push(stop);
+        subscribed = true;
+        void this.refresh(true);
+      }).catch(() => {
+        if (active()) void this.refresh();
+      }).finally(() => { subscribing = false; });
+    };
+    updatePoll();
+    this.cleanup.push(this.transport.focus(() => {
+      subscribe();
+      void this.refresh(true);
+    }));
+    subscribe();
   }
   private stop() {
     this.generation++;
     this.pending = null;
+    this.verifyAgain = false;
+    this.updatePoll = null;
     this.cleanup.splice(0).forEach(stop => stop());
     // A new subscriber must verify the retained snapshot before enabling work.
     this.state = { ...this.state, connected: false, error: "" };

@@ -2,6 +2,13 @@
 use mon_contracts::{Capabilities, Platform, WindowEnvironment, WindowRole};
 use tauri::{Manager, WebviewWindow};
 
+pub(crate) fn require_main_window(window: &WebviewWindow, message: &str) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err(message.into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub(crate) fn get_window_environment(
     window: WebviewWindow,

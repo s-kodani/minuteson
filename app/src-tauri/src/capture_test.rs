@@ -1,5 +1,6 @@
 //! One explicit, meeting-free capture test. Read-only reconciliation never
 //! replays start; cancellation remains busy until the owned process exits.
+pub(crate) mod commands;
 mod files;
 #[cfg(target_os = "macos")]
 mod journal;

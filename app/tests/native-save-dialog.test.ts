@@ -36,14 +36,14 @@ test("Markdown panel returns focus only after a known native response and enable
 });
 
 test("plain Markdown native output keeps detached admission and result checks cannot reopen a save panel", () => {
-  const source=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
+  const source=readFileSync(new URL("../src-tauri/src/exports/commands.rs",import.meta.url),"utf8");
   const output=source.slice(source.indexOf("async fn export_plain_minutes_markdown("),source.indexOf("async fn get_plain_minutes_export_status("));
   assert.match(output,/minutes_app\(&window\)/);
   assert.match(output,/require_data_writable\(\)/);
   assert.match(output,/begin_export\(\)/);
   assert.match(output,/tauri::async_runtime::spawn\(async move[\s\S]*let _admission = admission;[\s\S]*let _lease = lease;/);
   assert.ok(output.indexOf("existing_markdown_export")<output.indexOf("exports::save_dialog"));
-  const status=source.slice(source.indexOf("async fn get_plain_minutes_export_status("),source.indexOf("async fn get_minutes_export_status("));
+  const status=source.split("async fn get_plain_minutes_export_status(")[1];
   assert.ok(status.indexOf("let was_active")<status.indexOf("existing_markdown_export"));
   assert.match(status,/active: was_active \|\| app\.state::<exports::ExportController>\(\)\.active\(\)/);
   assert.doesNotMatch(status,/save_dialog|write_markdown_export|prepare_markdown_export/);

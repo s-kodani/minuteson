@@ -1,13 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-const lib=readFileSync(new URL("../src-tauri/src/lib.rs",import.meta.url),"utf8");
 test("capture polling and stopping dispatch lock waits and file reads off the native UI thread",()=>{
-  for(const name of ["get_recording_levels","get_recording_writes","get_recording_input_status","get_capture_test_levels","get_capture_test_snapshot","cancel_capture_test","receive_recording_input_notice","render_recording_input_notice","close_recording_input_notice"]){
-    const body=lib.split(`async fn ${name}(`)[1]?.split("#[tauri::command]")[0];
+  const commandSources = {
+    get_recording_levels: "recorder/commands.rs",
+    get_recording_writes: "recorder/commands.rs",
+    get_recording_input_status: "recorder/commands.rs",
+    get_capture_test_levels: "capture_test/commands.rs",
+    get_capture_test_snapshot: "capture_test/commands.rs",
+    cancel_capture_test: "capture_test/commands.rs",
+    receive_recording_input_notice: "input_status/commands.rs",
+    render_recording_input_notice: "input_status/commands.rs",
+    close_recording_input_notice: "input_status/commands.rs",
+  };
+  for(const [name, file] of Object.entries(commandSources)) {
+    const source=readFileSync(new URL("../src-tauri/src/"+file,import.meta.url),"utf8");
+    const body=source.split(`async fn ${name}(`)[1]?.split("#[tauri::command]")[0];
     assert.ok(body,`${name} must be async`);
     assert.match(body,/spawn_blocking/);
-    assert.match(body,/window\.label\(\)/);
+    const guard = file === "capture_test/commands.rs" ? /require_main_window\(\s*&window,/ : /window\.label\(\)/;
+    assert.match(body, guard);
   }
   const confirmation=readFileSync(new URL("../src-tauri/src/recording_confirmation_window.rs",import.meta.url),"utf8");
   assert.match(confirmation,/pub async fn decide_recording_confirmation/);

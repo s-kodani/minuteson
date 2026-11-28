@@ -10,6 +10,7 @@ import { acceptDiarizationRuntime, diarizationRuntimeProgress, type DiarizationR
 import { jobProgress } from "./operation-progress-state";
 import { minutesAdmissions } from "./minutes-generation-admission";
 import { transcriptionAdmissions, type AnalysisPreparation } from "./transcription-admission";
+import { browserRecoveryFocus } from "./snapshot-browser";
 
 /** One main-window owner, independent of the selected meeting or workspace.
  * Events invalidate authoritative reads; no event can publish a success. */
@@ -48,7 +49,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
         setNativePreparations(accepted);
       }
     }catch{/* The authoritative job read reports connectivity errors. */}finally{reading=false;}};
-    void refresh();const timer=window.setInterval(()=>void refresh(),500);
+    void refresh();const timer=window.setInterval(()=>void refresh(),1000);
     return()=>{stopped=true;window.clearInterval(timer);};
   },[]);
   const admissions = useSyncExternalStore(minutesAdmissions.subscribe, minutesAdmissions.getSnapshot);
@@ -144,6 +145,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
     refreshRef.current = refresh;
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, 3000);
+    stops.push(browserRecoveryFocus(() => { void refresh(); }));
     for (const event of ["analysis-job-changed", "analysis-version-changed", "meetings-changed"]) {
       void listen(event, () => { void refresh(); }).then(stop => { if (disposed) stop(); else { stops.push(stop); void refresh(); } }).catch(() => { /* Periodic reads continue without event hints. */ });
     }
@@ -174,7 +176,7 @@ export function JobNotifications({ locked, onOpen }: { locked: boolean; onOpen: 
     }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(() => {});
     void listen<unknown>("analysis-worker-error", event => {
       if (!disposed) { setWorkerError(typeof event.payload === "string" && event.payload ? event.payload : "解析ワーカーから異常の通知がありました。再起動後にジョブ状態を確認してください。"); void refresh(); }
-    }).then(stop => { if (disposed) stop(); else stops.push(stop); }).catch(() => {});
+    }).then(stop => { if (disposed) stop(); else { stops.push(stop); void refresh(); } }).catch(() => {});
     return () => { disposed = true; window.clearInterval(timer); stops.forEach(stop => stop()); refreshRef.current = async () => {}; };
   }, [tracker]);
 

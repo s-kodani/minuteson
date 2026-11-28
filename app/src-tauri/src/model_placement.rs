@@ -1,6 +1,7 @@
 //! Manual placement is not runtime compatibility or AI readiness. All copying
 //! is explicit, create-new-only, bound to a reviewed byte set and durable intent.
 use crate::model_inspection::PackageManifestExt;
+pub(crate) mod commands;
 #[cfg(unix)]
 pub(crate) mod fs;
 #[cfg(target_os = "windows")]

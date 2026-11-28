@@ -61,7 +61,12 @@ const switchDraft = (nextId) => {
 };
 window.isTauri = true;
 fixture.emitNotification = (payload = {}) => emit("analysis-job-changed", payload);
+fixture.changeRecording = async patch => {
+  fixture.recording = { ...fixture.recording, ...patch, revision: (fixture.recording?.revision ?? 0) + 1 };
+  await emit("session-changed", structuredClone(fixture.recording));
+};
 fixture.emitWindowFocus = () => emit("tauri://focus", null);
+fixture.emitRecordingSnapshot = (payload = fixture.recording) => emit("session-changed", payload);
 fixture.emitTranscriptChange = (event = "analysis-version-changed", meetingId = meetings[0].id) => emit(event, meetingId);
 fixture.emitDiarizationRuntime = payload => emit("diarization-runtime-progress", payload);
 fixture.emitMinutesRuntime = payload => emit("minutes-runtime-progress", payload);
@@ -173,7 +178,9 @@ mockIPC(async (command, args) => {
     case "dismiss_model_download_guidance": return {pending:false};
     case "list_job_history": return {items:[],nextCursor:null,storageError:null};
     case "get_official_model_options": return [];
-    case "get_recording_snapshot": return structuredClone(fixture.recording ?? { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null });
+    case "get_recording_snapshot":
+      if (window.monHoldRecordingSnapshot) await new Promise(resolve => { fixture.releaseRecordingSnapshot = resolve; });
+      return structuredClone(fixture.recording ?? { revision: 0, phase: "idle", elapsedMs: 0, microphoneConnected: false, systemAudioConnected: false, meetingId: null, sessionId: null, errorMessage: null });
     case "capture_available": return false;
     case "save_ui_preferences": {
       if(fixture.uiMode === "delay") await new Promise(resolve=>{fixture.releaseUiSave=resolve;});
@@ -420,7 +427,7 @@ mockIPC(async (command, args) => {
       if (fixture.losePromptResponse) { fixture.losePromptResponse=false; throw Error("模擬プロンプト応答欠落"); }
       return structuredClone(fixture.promptPreferences);
     }
-    case "get_minutes_preferences": return { id: "llama_profiles", lockVersion: 0, payload: { standard: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 }, highAccuracy: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 } } };
+    case "get_minutes_preferences": return { id: "llama_profiles", lockVersion: 0, payload: { standard: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400, ...fixture.minutesEngine }, highAccuracy: { executablePath: "", modelPath: "", threads: 4, contextTokens: 8192, predictionTokens: 2048, gpuLayers: 0, seed: 1, promptBudget: 5400 } } };
     case "get_current_minutes": return null;
     case "get_minutes_draft": return null;
     case "get_minutes_exports": return [];
