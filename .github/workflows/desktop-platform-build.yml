@@ -101,9 +101,9 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # v1.99.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master（toolchain 入力を使用）
         with:
-          toolchain: '1.99.1'
+          toolchain: '1.100.1'
           components: rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -186,14 +186,26 @@ jobs:
               sysctl kern.memorystatus_vm_pressure_level || echo 'Memory pressure level unavailable'
               vm_stat || echo 'VM counters unavailable'
               # Report process counts and summed RSS in KiB without recording command lines.
-              ps -Aww -o rss=,comm=,args= | awk '
-                $2 ~ /(^|\/)(Playwright|com\.apple\.WebKit\.[^/]+)$/ { webkit += $1; webkit_count++ }
-                $2 ~ /(^|\/)node$/ && $0 ~ /\/(vite\.js|\.bin\/vite)([[:space:]]|$)/ { vite += $1; vite_count++ }
-                END {
-                  printf "WebKit processes=%d rss_kib=%d\n", webkit_count, webkit
-                  printf "Vite processes=%d rss_kib=%d\n", vite_count, vite
+              # macOS awk ends a /regex/ literal at a slash inside brackets, so match with
+              # string regexes. comm may contain spaces: keep everything after the RSS field.
+              ps -Aww -o rss=,comm= | awk '
+                {
+                  rss = $1
+                  name = $0
+                  sub("^[[:space:]]*[0-9]+[[:space:]]+", "", name)
                 }
-              ' || echo 'Process sample unavailable'
+                name ~ "(^|/)(Playwright|com[.]apple[.]WebKit[.][^/]+)$" { webkit += rss; webkit_count++ }
+                END { printf "WebKit processes=%d rss_kib=%d\n", webkit_count, webkit }
+              ' || echo 'WebKit process sample unavailable'
+              ps -Aww -o rss=,args= | awk '
+                {
+                  rss = $1
+                  command = $0
+                  sub("^[[:space:]]*[0-9]+[[:space:]]+", "", command)
+                }
+                command ~ "^([^[:space:]]*/)?node[[:space:]]" && command ~ "/(vite[.]js|[.]bin/vite)([[:space:]]|$)" { vite += rss; vite_count++ }
+                END { printf "Vite processes=%d rss_kib=%d\n", vite_count, vite }
+              ' || echo 'Vite process sample unavailable'
               sleep 9 &
               sleep_pid=$!
               wait "$sleep_pid"
@@ -266,9 +278,9 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # v1.99.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master（toolchain 入力を使用）
         with:
-          toolchain: '1.99.1'
+          toolchain: '1.100.1'
           components: rustfmt
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         id: rust_cache

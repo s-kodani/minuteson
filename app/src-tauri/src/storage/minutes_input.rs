@@ -738,6 +738,7 @@ pub(super) fn copy_snapshot_with_update(
     }
     let hash = super::revisions::analysis_content_hash(tx, &id)?;
     let state = if consolidation.is_some() || update.is_some() {
+        super::analysis_vocabulary::copy(tx, &source.id, &id)?;
         "committed"
     } else {
         "internal_snapshot"

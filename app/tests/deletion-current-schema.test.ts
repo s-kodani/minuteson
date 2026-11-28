@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 const source = (name: string) => readFileSync(new URL(`../src-tauri/src/storage/deletion/${name}`, import.meta.url), "utf8");
 
-test("deletion requires checksum-selected SQL objects and fences prior39 admission to read-only", () => {
+test("deletion requires checksum-selected SQL objects and fences prior admission to read-only", () => {
   const code = source("database.rs");
   assert.doesNotMatch(code, /known_schemas|historical_scope_fixture|historical_schema_hash_fixture|legacy_without_journal/);
   const adapter = readFileSync(new URL("../src-tauri/src/storage/schema_40.rs", import.meta.url), "utf8");
-  assert.match(code, /schema_40::current_layout\(db\)/);
+  assert.match(code, /schema_41::current_layout\(db\)/);
   assert.match(code, /Ok\(layout\) => current_schema_for\(layout\)\?/);
   assert.match(code, /verify_readonly_previous\(db\)/);
-  assert.match(code, /readonly_schema39\(layout\)\?/);
+  assert.match(code, /readonly_schema\(version, layout\)\?/);
   const readOnly = adapter.slice(adapter.indexOf("pub(super) fn verify_readonly_previous"), adapter.indexOf("pub(super) fn deletion_v1_schema_hash"));
   assert.match(readOnly, /PRAGMA query_only/);
   assert.match(readOnly, /return Err/);

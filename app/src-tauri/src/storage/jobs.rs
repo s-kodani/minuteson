@@ -1472,7 +1472,7 @@ mod tests {
             .save_job_checkpoint(&job.id, 0, 1, json!({"outputs":[]}))
             .unwrap();
         let id = storage
-            .finish_transcription_candidate(&meeting.id, &job.id, 1, input.clone())
+            .finish_transcription_candidate(&meeting.id, &job.id, 1, input.clone(), &[])
             .unwrap();
         for _ in 0..25 {
             storage

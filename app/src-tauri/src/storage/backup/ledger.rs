@@ -99,6 +99,7 @@ pub(super) fn valid_domain(domain: &str) -> bool {
                 | "vocabulary_scopes"
                 | "track_inputs"
                 | "analysis_input_snapshots"
+                | "analysis_vocabulary_diagnostics"
                 | "audio_import_options"
                 | "diarization_manual_assignments"
                 | "utterance_speakers"

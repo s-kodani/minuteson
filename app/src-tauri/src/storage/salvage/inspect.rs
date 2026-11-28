@@ -537,6 +537,7 @@ impl<F: Fn() -> bool> Inspection<'_, F> {
             manifest,
             audio,
             transcript,
+            ignored_hotwords: Vec::new(),
             markdown,
             vocabulary,
             track,

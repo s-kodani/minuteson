@@ -25,7 +25,7 @@ class NativeCiTests(unittest.TestCase):
         self.package.mkdir(parents=True)
         self.manifest = self.package / "Cargo.toml"
         self.manifest.write_text("[package]\nname = 'mon-desktop'\n", encoding="utf-8")
-        self.executable = self.root / "target with spaces/debug/deps/test binary.exe"
+        self.executable = self.root / "target with spaces/debug/build/mon-desktop/0123456789abcdef/out/test binary.exe"
         self.executable.parent.mkdir(parents=True)
         self.executable.write_bytes(b"synthetic executable; never launched")
         self.sysroot_lib = self.root / "toolchain/lib"

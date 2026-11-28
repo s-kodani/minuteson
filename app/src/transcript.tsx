@@ -24,6 +24,7 @@ import { retainedTextRows } from "./transcript-edit-session";
 import { stopAllPlayback } from "./playback-barrier";
 import { hasConsolidationCandidate } from "./transcript-groups";
 import { readMeetingBodyForReview } from "./meeting-body-review";
+import { VocabularyApplication } from "./vocabulary-help";
 import type { MeetingBodyReview } from "./generated/contracts";
 import "./transcript-groups.css";
 export { timeLabel } from "./transcript-rows";
@@ -230,7 +231,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
           if(speakers.some(speaker=>!result.analysis.speakers.some(next=>next.id===result.speakerIdMap?.[speaker.id])))throw Error("発言統合後の話者の対応を確認できません。再試行してください。");
           if(result.analysis.speakers.some(speaker=>!result.speakerColorKeys?.[speaker.id]))throw Error("発言統合後の話者の表示を確認できません。再試行してください。");
           setSpeakerFilter(current=>current===""||current==="unknown"?current:result.speakerIdMap[current]??current);
-          setAnalysis({...result.analysis,speakerColorKeys:result.speakerColorKeys});queue.load(result.draft);await onConsolidated?.();
+          setAnalysis({...result.analysis,speakerColorKeys:result.speakerColorKeys,ignoredHotwords:analysis?.ignoredHotwords});queue.load(result.draft);await onConsolidated?.();
         }
       } catch(cause) {if(mounted.current)setConsolidationError(String(cause));}
     });
@@ -434,6 +435,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
           await audio.start(analysis.id,`voice-preview:${window.trackId}:${window.startUs}`,{meetingId,mode,startUs:window.startUs,endUs:window.endUs,expectedDurationUs:audio.durationUs});
         }} />
       </>, speakerMount)}
+        <VocabularyApplication ignored={analysis.ignoredHotwords} />
         {!!analysis.reviewRanges?.length && <section className="recognition-review" aria-label="文字起こしの要確認区間">
           <p role="status">完了・要確認あり（{analysis.reviewRanges.length}区間）{!analysis.utterances.length && "。認識できた本文はありません。"}</p>
           <ul>{analysis.reviewRanges.map((range,index)=><li key={`${range.trackId}:${range.startUs}:${index}`}>

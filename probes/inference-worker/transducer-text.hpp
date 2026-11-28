@@ -41,18 +41,42 @@ inline std::string token_piece(const std::string &row) {
     return split==std::string::npos?std::string():row.substr(0,split);
 }
 
-inline std::string hotword_error(const std::string &word, const std::set<std::string> &vocabulary) {
-    if (word.empty()) return "empty term";
+enum class HotwordRejection { none, empty, invalid_utf8, control_character, reserved_syntax, whitespace, outside_vocabulary };
+
+inline const char *hotword_reason(HotwordRejection reason) {
+    switch (reason) {
+        case HotwordRejection::empty: return "empty";
+        case HotwordRejection::invalid_utf8: return "invalidUtf8";
+        case HotwordRejection::control_character: return "controlCharacter";
+        case HotwordRejection::reserved_syntax: return "reservedSyntax";
+        case HotwordRejection::whitespace: return "whitespace";
+        case HotwordRejection::outside_vocabulary: return "outsideVocabulary";
+        case HotwordRejection::none: return "unknown";
+    }
+    return "unknown";
+}
+
+inline HotwordRejection hotword_rejection(const std::string &word, const std::set<std::string> &vocabulary) {
+    if (word.empty()) return HotwordRejection::empty;
     std::vector<Character> characters;
-    if (utf8(word, &characters) != Utf8::complete) return "invalid UTF-8";
+    if (utf8(word, &characters) != Utf8::complete) return HotwordRejection::invalid_utf8;
     for (const auto &c : characters) {
-        if (c.value < 0x20 || (c.value >= 0x7f && c.value <= 0x9f)) return "control character";
+        if (c.value < 0x20 || (c.value >= 0x7f && c.value <= 0x9f)) return HotwordRejection::control_character;
         // '/' separates per-stream phrases. ':' and '#' are reserved by the
         // hotword grammar. A registered spelling must never become directives.
-        if (c.value == ':' || c.value == '#' || c.value == '/') return "reserved hotword syntax";
-        if (c.value == ' ' || !vocabulary.count(word.substr(c.first, c.size)))
-            return "character outside model vocabulary";
+        if (c.value == ':' || c.value == '#' || c.value == '/') return HotwordRejection::reserved_syntax;
+        if (c.value == ' ') return HotwordRejection::whitespace;
     }
-    return {};
+    for (const auto &c : characters) {
+        if (!vocabulary.count(word.substr(c.first, c.size))) {
+            // 語彙にある全角空白等は従来どおり受け付ける。
+            if (c.value == 0xa0 || c.value == 0x1680 ||
+                (c.value >= 0x2000 && c.value <= 0x200a) ||
+                c.value == 0x2028 || c.value == 0x2029 || c.value == 0x202f ||
+                c.value == 0x205f || c.value == 0x3000) return HotwordRejection::whitespace;
+            return HotwordRejection::outside_vocabulary;
+        }
+    }
+    return HotwordRejection::none;
 }
 } // namespace mon_asr

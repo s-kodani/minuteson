@@ -6,6 +6,7 @@ export type NativeContract =
   | BackendManifest
   | DownloadSource
   | Engine
+  | IgnoredHotword
   | JobKind
   | JobState
   | MeetingBodyPart
@@ -32,6 +33,8 @@ export type AppUpdateState =
   | "unavailable"
   | "unsupported";
 export type Engine = "whisper.cpp" | "asr" | "sherpa-onnx" | "llama.cpp";
+export type HotwordRejectionReason =
+  "empty" | "invalidUtf8" | "controlCharacter" | "reservedSyntax" | "whitespace" | "outsideVocabulary" | "unknown";
 export type JobKind =
   | "transcription"
   | "diarization"
@@ -98,6 +101,10 @@ export interface DownloadSource {
   archive?: ArchiveMember | null;
   relativePath: string;
   url: string;
+}
+export interface IgnoredHotword {
+  reason: HotwordRejectionReason;
+  term: string;
 }
 export interface MeetingBodyReview {
   complete: boolean;
