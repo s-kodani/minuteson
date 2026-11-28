@@ -189,6 +189,9 @@ use recording_confirmation_window::{
 };
 use session::commands::get_recording_snapshot;
 use session::SessionStore;
+use speaker_completion::commands::{
+    get_speaker_completion_preferences, save_speaker_completion_preferences,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use storage::commands::{
     dismiss_model_download_guidance, get_meeting, get_meeting_list_diagnostics,
@@ -197,7 +200,7 @@ use storage::commands::{
     save_vocabulary_book,
 };
 use storage::Storage;
-use tauri::{Emitter, Manager, RunEvent, WebviewWindow, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use transcription::commands::{
     begin_transcript_draft, consolidate_transcript, get_asr_backends, get_asr_preferences,
     get_transcript_draft, get_transcription_regeneration_target, publish_regenerated_transcription,
@@ -213,34 +216,6 @@ use voice::commands::{
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
 
-#[tauri::command]
-fn get_speaker_completion_preferences(
-    window: WebviewWindow,
-) -> Result<storage::completion_preferences::Snapshot, mon_contracts::AppError> {
-    let result: Result<storage::completion_preferences::Snapshot, String> = (|| {
-        minutes_app(&window)?;
-        window.state::<Storage>().speaker_completion_preferences()
-    })();
-    result.map_err(|message| {
-        mon_contracts::AppError::from_command("get_speaker_completion_preferences", message)
-    })
-}
-#[tauri::command]
-fn save_speaker_completion_preferences(
-    window: WebviewWindow,
-    expected_lock_version: i64,
-    payload: storage::completion_preferences::CompletionPreferences,
-) -> Result<storage::completion_preferences::Snapshot, mon_contracts::AppError> {
-    let result: Result<storage::completion_preferences::Snapshot, String> = (|| {
-        minutes_app(&window)?;
-        window
-            .state::<Storage>()
-            .save_speaker_completion_preferences(expected_lock_version, payload)
-    })();
-    result.map_err(|message| {
-        mon_contracts::AppError::from_command("save_speaker_completion_preferences", message)
-    })
-}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "macos")]
