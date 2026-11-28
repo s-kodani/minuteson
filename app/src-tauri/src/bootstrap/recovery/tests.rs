@@ -21,10 +21,18 @@ impl Fixture {
         (bootstrap, storage)
     }
     fn change_device(&self) {
+        self.change_saved_root(|root| {
+            root.directory.device += 100;
+            root.database.device += 100;
+        });
+    }
+    fn change_birth(&self) {
+        self.change_saved_root(|root| root.database.birth_ns += 1);
+    }
+    fn change_saved_root(&self, change: impl FnOnce(&mut Root)) {
         let path = self.config.join(NAME);
         let mut doc: Document = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        doc.record.current.directory.device += 100;
-        doc.record.current.database.device += 100;
+        change(&mut doc.record.current);
         if let Some(pending) = &mut doc.record.pending_move {
             pending.source = doc.record.current.clone();
         }
@@ -34,7 +42,7 @@ impl Fixture {
 }
 
 #[test]
-fn device_rebinding_reopens_same_meetings_and_is_idempotent_across_restarts() {
+fn changed_device_updates_bootstrap_without_recovery_and_is_idempotent() {
     let f = Fixture::new();
     let (b, s) = f.start();
     assert!(b.startup_recovery_view(&s).unwrap().is_none());
@@ -42,31 +50,25 @@ fn device_rebinding_reopens_same_meetings_and_is_idempotent_across_restarts() {
     drop(s);
     drop(b);
     f.change_device();
-    let old = std::fs::read(f.config.join(NAME)).unwrap();
-    for round in 0..2 {
+    let (b, s) = f.start();
+    let record = b.read().unwrap().unwrap().record;
+    assert_eq!(record.current, Root::metadata(b.root()).unwrap());
+    let saved = std::fs::read(f.config.join(NAME)).unwrap();
+    drop(s);
+    drop(b);
+    for _ in 0..2 {
         let (b, s) = f.start();
         assert_eq!(s.list_meetings().unwrap(), vec![meeting.clone()]);
         assert!(!s.data_write_blocked());
-        let recovery = b.recovery_view().unwrap().unwrap();
-        assert_eq!(recovery.kind, "device_changed");
-        assert!(!recovery.review_required);
-        assert_eq!(b.startup_recovery_view(&s).unwrap(), Some(recovery.clone()));
-        if round == 0 {
-            assert_eq!(std::fs::read(&recovery.record_path).unwrap(), old);
-        }
-        let saved = std::fs::read(f.config.join(NAME)).unwrap();
-        drop(s);
-        drop(b);
-        let (b, s) = f.start();
         assert_eq!(std::fs::read(f.config.join(NAME)).unwrap(), saved);
-        assert_eq!(s.list_meetings().unwrap(), vec![meeting.clone()]);
-        assert!(b.startup_recovery_view(&s).unwrap().is_none());
-        assert_eq!(b.recovery_view_for_storage(&s).unwrap(), Some(recovery));
-        drop(s);
-        drop(b);
-        if round == 0 {
-            f.change_device();
-        }
+        assert!(b.recovery_view().unwrap().is_none());
+        assert!(!std::fs::read_dir(&f.config).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".bootstrap-recovery-")
+        }));
     }
 }
 
@@ -178,7 +180,7 @@ fn relocation_after_rebinding_uses_current_journal_and_cache_generation() {
     let meeting = s.create_meeting("復旧後に移動").unwrap();
     drop(s);
     drop(b);
-    f.change_device();
+    f.change_birth();
     std::fs::create_dir(f.config.join(".mon-read-cache")).unwrap();
     std::fs::write(f.config.join(".mon-read-cache/unknown"), b"retained").unwrap();
     let (b, s) = f.start();
@@ -260,6 +262,12 @@ fn runtime_database_replacement_remains_rejected_after_rebinding() {
     f.change_device();
     let (b, s) = f.start();
     let db = b.root().join("meetings.sqlite3");
+    let metadata = crate::native_fs::symlink_metadata(&db).unwrap();
+    let current = Identity::read(&metadata).unwrap();
+    let mut previous = current.clone();
+    previous.device += 100;
+    assert!(previous.same_persistent(&current));
+    assert!(!previous.matches(&metadata));
     std::fs::rename(&db, db.with_extension("retained")).unwrap();
     std::fs::copy(db.with_extension("retained"), &db).unwrap();
     assert!(b.view().is_err());
@@ -276,7 +284,7 @@ fn pending_maintenance_is_retained_readonly_across_restarts() {
     });
     drop(s);
     drop(b);
-    f.change_device();
+    f.change_birth();
     for _ in 0..2 {
         let (b, s) = f.start();
         assert_eq!(s.list_meetings().unwrap(), vec![meeting.clone()]);
@@ -323,7 +331,7 @@ fn pending_move_is_archived_without_activating_or_erasing_destination() {
     std::fs::write(target.join("unknown"), b"retained destination").unwrap();
     drop(s);
     drop(b);
-    f.change_device();
+    f.change_birth();
     let saved = std::fs::read(f.config.join(NAME)).unwrap();
     let (b, s) = f.start();
     assert!(s.data_write_blocked());
@@ -337,13 +345,13 @@ fn pending_move_is_archived_without_activating_or_erasing_destination() {
     assert_ne!(b.root(), target);
 }
 
-fn stale_journal(root: &Path) {
+fn stale_journal(root: &Path, field: &str) {
     let db = rusqlite::Connection::open(root.join(".mon-scratch.sqlite3")).unwrap();
     let json: String = db
         .query_row("SELECT proof FROM metadata WHERE id=1", [], |r| r.get(0))
         .unwrap();
     let mut proof: serde_json::Value = serde_json::from_str(&json).unwrap();
-    proof["device"] = serde_json::json!(proof["device"].as_u64().unwrap() + 100);
+    proof[field] = serde_json::json!(proof[field].as_u64().unwrap() + 100);
     let json = serde_json::to_string(&proof).unwrap();
     db.execute_batch("DROP TRIGGER metadata_fixed;").unwrap();
     db.execute(
@@ -352,6 +360,19 @@ fn stale_journal(root: &Path) {
     )
     .unwrap();
     db.execute_batch("CREATE TRIGGER metadata_fixed BEFORE UPDATE ON metadata BEGIN SELECT RAISE(ABORT,'scratch root is immutable'); END;").unwrap();
+}
+
+fn journal_device(root: &Path) -> u64 {
+    let db = rusqlite::Connection::open(root.join(".mon-scratch.sqlite3")).unwrap();
+    let (json, digest): (String, String) = db
+        .query_row("SELECT proof,hash FROM metadata WHERE id=1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(digest, hash(json.as_bytes()));
+    serde_json::from_str::<serde_json::Value>(&json).unwrap()["device"]
+        .as_u64()
+        .unwrap()
 }
 
 #[test]
@@ -363,28 +384,22 @@ fn device_change_with_old_scratch_and_read_cache_devices_still_starts_normally()
     drop(s);
     drop(b);
     drop(crate::storage::read_cache::Snapshot::create(&f.config).unwrap());
-    stale_journal(&root);
-    stale_journal(&f.config.join(".mon-read-cache"));
-    let old_journal = std::fs::read(root.join(".mon-scratch.sqlite3")).unwrap();
-    let old_cache = std::fs::read(f.config.join(".mon-read-cache/.mon-scratch.sqlite3")).unwrap();
+    let cache = f.config.join(".mon-read-cache");
+    stale_journal(&root, "device");
+    stale_journal(&cache, "device");
     f.change_device();
     let (b, s) = f.start();
     assert_eq!(s.list_meetings().unwrap(), vec![meeting]);
     assert!(!s.data_write_blocked());
-    assert!(!b.recovery_view().unwrap().unwrap().review_required);
-    assert_eq!(
-        std::fs::read(root.join(".mon-scratch.sqlite3")).unwrap(),
-        old_journal
-    );
-    assert_eq!(
-        std::fs::read(f.config.join(".mon-read-cache/.mon-scratch.sqlite3")).unwrap(),
-        old_cache
-    );
+    assert!(b.recovery_view().unwrap().is_none());
+    for path in [&root, &cache] {
+        assert_eq!(journal_device(path), directory(path).unwrap().dev());
+    }
 }
 
 #[test]
-fn cache_device_change_alone_rebinds_even_when_meeting_volume_did_not_change() {
-    for cache_only in [true, false] {
+fn journal_inode_or_birth_change_selects_a_new_generation() {
+    for (cache_only, field) in [(true, "inode"), (false, "birth_nanos")] {
         let f = Fixture::new();
         let (b, s) = f.start();
         let meeting = s.create_meeting("会議の媒体は変更なし").unwrap();
@@ -399,39 +414,56 @@ fn cache_device_change_alone_rebinds_even_when_meeting_volume_did_not_change() {
                 root.clone()
             }
             .as_path(),
+            field,
         );
         let (b, s) = f.start();
         assert_eq!(s.list_meetings().unwrap(), vec![meeting]);
         assert!(!s.data_write_blocked());
-        assert_eq!(b.recovery_view().unwrap().unwrap().kind, "device_changed");
+        assert_eq!(b.recovery_view().unwrap().unwrap().kind, "copy_restored");
     }
 }
 
 #[test]
-fn recovery_workspace_device_change_alone_selects_another_generation() {
-    let f = Fixture::new();
-    let (b, s) = f.start();
-    drop(s);
-    drop(b);
-    f.change_device();
-    let (b, s) = f.start();
-    let retained = b.recovery_view().unwrap().unwrap().record_path;
-    drop(s);
-    drop(b);
-    let path = f.config.join(NAME);
-    let mut doc: Document = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    doc.record
-        .recovery
-        .as_mut()
-        .unwrap()
-        .workspace_identity
-        .device += 100;
-    doc.sha256 = hash(&serde_json::to_vec(&doc.record).unwrap());
-    std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
-    let (b, s) = f.start();
-    assert!(!s.data_write_blocked());
-    assert_ne!(b.recovery_view().unwrap().unwrap().record_path, retained);
-    assert!(retained.exists());
+fn recovery_workspace_checks_device_and_birth_separately() {
+    for field in ["device", "birth"] {
+        let f = Fixture::new();
+        let (b, s) = f.start();
+        drop(s);
+        drop(b);
+        f.change_birth();
+        let (b, s) = f.start();
+        let retained = b.recovery_view().unwrap().unwrap().record_path;
+        drop(s);
+        drop(b);
+        let path = f.config.join(NAME);
+        let mut doc: Document = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let recovery = doc.record.recovery.as_mut().unwrap();
+        recovery.kind = "device_changed".into();
+        if field == "device" {
+            recovery.workspace_identity.device += 100;
+        } else {
+            recovery.workspace_identity.birth_ns += 1;
+        }
+        doc.sha256 = hash(&serde_json::to_vec(&doc.record).unwrap());
+        std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+        let (b, s) = f.start();
+        assert!(!s.data_write_blocked());
+        let view = b.recovery_view().unwrap().unwrap();
+        if field == "device" {
+            assert_eq!(view.kind, "device_changed");
+            assert_eq!(view.record_path, retained);
+            assert!(b.startup_recovery_view(&s).unwrap().is_none());
+            let recovery = b.read().unwrap().unwrap().record.recovery.unwrap();
+            assert_eq!(
+                recovery.workspace_identity,
+                Identity::read(&directory(retained.parent().unwrap()).unwrap()).unwrap()
+            );
+        } else {
+            assert_eq!(view.kind, "copy_restored");
+            assert_ne!(view.record_path, retained);
+        }
+        assert!(retained.exists());
+    }
 }
 
 fn spawn_fixture(f: &Fixture, action: &str) -> std::process::Child {
@@ -508,7 +540,7 @@ fn rebinding_publication_survives_sigkill_before_and_after_selection() {
         let meeting = s.create_meeting("設定公開境界").unwrap();
         drop(s);
         drop(b);
-        f.change_device();
+        f.change_birth();
         let old = std::fs::read(f.config.join(NAME)).unwrap();
         let mut child = spawn_fixture(&f, point);
         wait_ready(&mut child, &format!("MON_REBINDING_READY={point}"));
@@ -534,7 +566,7 @@ fn source_modified_after_snapshot_is_rejected_before_publication() {
     let root = b.root().to_owned();
     drop(s);
     drop(b);
-    f.change_device();
+    f.change_birth();
     let saved = std::fs::read(f.config.join(NAME)).unwrap();
     let mut child = spawn_fixture(&f, "before_publication");
     wait_ready(&mut child, "MON_REBINDING_READY=before_publication");

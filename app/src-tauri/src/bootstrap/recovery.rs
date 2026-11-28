@@ -240,15 +240,17 @@ impl Bootstrap {
         let previous = &loaded.record;
         let actual = Self::inspect_startup_root(&previous.current.path, Some(loaded))?;
         let mut workspace_copied = false;
-        if actual == previous.current {
-            let changed = if let Some(recovery) = &previous.recovery {
+        if previous.current.same_persistent(&actual) {
+            let mut next = previous.clone();
+            let changed = if let Some(recovery) = &mut next.recovery {
                 let workspace = recovery.workspace(&self.config);
                 let current = Identity::read(&directory(&workspace)?)?;
                 workspace_copied = current.inode != recovery.workspace_identity.inode
                     || current.birth_ns != recovery.workspace_identity.birth_ns;
-                if current != recovery.workspace_identity {
+                if !recovery.workspace_identity.same_persistent(&current) {
                     true
                 } else {
+                    recovery.workspace_identity = current;
                     recovery.verify(&self.config)?;
                     Storage::ancillary_binding_changed(
                         &actual.path,
@@ -260,7 +262,22 @@ impl Bootstrap {
                 Storage::ancillary_binding_changed(&actual.path, &actual.path, &self.config)
             };
             if !changed {
-                if previous
+                if next.current != actual || next.recovery != previous.recovery {
+                    // 履歴に残った証拠を保ち、起動設定の現在値だけを更新する。
+                    if let Some(pending) = &mut next.pending_move {
+                        pending.source = actual.clone();
+                    }
+                    next.current = actual;
+                    next.revision = next
+                        .revision
+                        .checked_add(1)
+                        .ok_or("起動設定の版が上限です")?;
+                    next.current.verify()?;
+                    if let Some(recovery) = &next.recovery {
+                        recovery.verify(&self.config)?;
+                    }
+                    self.write(&mut state, next)?;
+                } else if previous
                     .recovery
                     .as_ref()
                     .is_some_and(Recovery::needs_review)
@@ -272,7 +289,8 @@ impl Bootstrap {
         }
         let same_object =
             |a: &Identity, b: &Identity| a.inode == b.inode && a.birth_ns == b.birth_ns;
-        let kind = if same_object(&actual.directory, &previous.current.directory)
+        let kind = if !cfg!(target_os = "macos")
+            && same_object(&actual.directory, &previous.current.directory)
             && same_object(&actual.database, &previous.current.database)
             && !workspace_copied
         {

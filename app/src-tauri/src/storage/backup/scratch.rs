@@ -34,17 +34,22 @@ fn history_schema(db: &Connection) -> Result<(), String> {
 }
 
 const LIMIT: usize = 200_000;
-const SCHEMA: &str = "
+macro_rules! metadata_fixed {
+    () => {
+        "CREATE TRIGGER metadata_fixed BEFORE UPDATE ON metadata BEGIN SELECT RAISE(ABORT,'scratch root is immutable'); END;"
+    };
+}
+const SCHEMA: &str = concat!("
 CREATE TABLE metadata(id INTEGER PRIMARY KEY CHECK(id=1),proof TEXT NOT NULL,hash TEXT NOT NULL);
 CREATE TABLE areas(id TEXT PRIMARY KEY,path TEXT UNIQUE NOT NULL,proof TEXT NOT NULL,hash TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('active','attention','recovered')),error TEXT,entry_count INTEGER NOT NULL CHECK(entry_count BETWEEN 1 AND 200000));
 CREATE TABLE entries(area TEXT NOT NULL REFERENCES areas(id),path TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('directory','file')),proof TEXT NOT NULL,hash TEXT NOT NULL,removed INTEGER NOT NULL DEFAULT 0 CHECK(removed IN (0,1)),PRIMARY KEY(area,path));
-CREATE TRIGGER metadata_fixed BEFORE UPDATE ON metadata BEGIN SELECT RAISE(ABORT,'scratch root is immutable'); END;
+", metadata_fixed!(), "
 CREATE TRIGGER metadata_retained BEFORE DELETE ON metadata BEGIN SELECT RAISE(ABORT,'scratch root is retained'); END;
 CREATE TRIGGER areas_fixed BEFORE UPDATE ON areas WHEN NEW.id!=OLD.id OR NEW.path!=OLD.path OR NEW.proof!=OLD.proof OR NEW.hash!=OLD.hash OR NEW.entry_count<OLD.entry_count BEGIN SELECT RAISE(ABORT,'scratch area is immutable'); END;
 CREATE TRIGGER areas_retained BEFORE DELETE ON areas BEGIN SELECT RAISE(ABORT,'scratch area is retained'); END;
 CREATE TRIGGER entries_fixed BEFORE UPDATE ON entries WHEN NEW.area!=OLD.area OR NEW.path!=OLD.path OR NEW.kind!=OLD.kind OR NEW.proof!=OLD.proof OR NEW.hash!=OLD.hash OR NEW.removed<OLD.removed BEGIN SELECT RAISE(ABORT,'scratch ownership is immutable'); END;
 CREATE TRIGGER entries_retained BEFORE DELETE ON entries BEGIN SELECT RAISE(ABORT,'scratch ownership is retained'); END;
-";
+");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,6 +86,21 @@ impl Identity {
     }
     fn matches(&self, m: &Metadata) -> bool {
         Self::read(m).is_ok_and(|v| v == *self)
+    }
+    fn same_persistent(&self, current: &Self) -> bool {
+        mon_native::identity::matches_persistent_identity(
+            (
+                self.device,
+                self.inode,
+                (self.birth_seconds, self.birth_nanos),
+            ),
+            (
+                current.device,
+                current.inode,
+                (current.birth_seconds, current.birth_nanos),
+            ),
+            cfg!(target_os = "macos"),
+        )
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -227,7 +247,7 @@ impl Registry {
             return Err("一時領域の親証拠が変更されています".into());
         }
         let saved: Identity = serde_json::from_str(&proof).map_err(|e| e.to_string())?;
-        Ok(saved != Identity::read(&directory(root)?)?)
+        Ok(!saved.same_persistent(&Identity::read(&directory(root)?)?))
     }
     pub(in crate::storage) fn open(root: &Path) -> Result<Arc<Self>, String> {
         Self::open_inner(root, None)
@@ -343,10 +363,10 @@ impl Registry {
             return Err("一時領域の親証拠が変更されています".into());
         }
         let saved: Identity = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-        if saved != root_identity {
+        if !saved.same_persistent(&root_identity) {
             return Err("一時領域の保存先実体が変更されています。コピーを保持します".into());
         }
-        let registry = Arc::new(Self {
+        let registry = Self {
             root: root.into(),
             root_identity,
             journal_root: journal_root.into(),
@@ -354,11 +374,44 @@ impl Registry {
             file_identity,
             expected_schema,
             db: Mutex::new(db),
-        });
+        };
+        if saved != registry.root_identity {
+            registry.refresh_parent_proof(&json, &sha)?;
+        }
+        let registry = Arc::new(registry);
         registry.recover()?;
         all.retain(|_, v| v.strong_count() > 0);
         all.insert(root.into(), Arc::downgrade(&registry));
         Ok(registry)
+    }
+    fn refresh_parent_proof(&self, saved: &str, digest: &str) -> Result<(), String> {
+        let mut db = self
+            .db
+            .lock()
+            .map_err(|_| "一時領域台帳ロックを取得できません")?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        self.check_root()?;
+        self.check_schema(&tx)?;
+        let current = serde_json::to_string(&self.root_identity).map_err(|e| e.to_string())?;
+        // 証拠とハッシュの更新、および不変トリガーの再作成を一緒に確定する。
+        tx.execute_batch("DROP TRIGGER metadata_fixed;")
+            .map_err(|e| e.to_string())?;
+        if tx
+            .execute(
+                "UPDATE metadata SET proof=?1,hash=?2 WHERE id=1 AND proof=?3 AND hash=?4",
+                params![current, hash(current.as_bytes()), saved, digest],
+            )
+            .map_err(|e| e.to_string())?
+            != 1
+        {
+            return Err("一時領域の親証拠が変更されています".into());
+        }
+        tx.execute_batch(metadata_fixed!())
+            .map_err(|e| e.to_string())?;
+        self.check_root()?;
+        tx.commit().map_err(|e| e.to_string())
     }
     fn check_root(&self) -> Result<(), String> {
         let path = self.journal_root.join(".mon-scratch.sqlite3");

@@ -2,6 +2,17 @@
 //! authority: OS adapters must compare them to still-owned native handles.
 use serde::{Deserialize, Serialize};
 
+/// 呼び出し側で検証した同じパスについて、保存済み証拠と現在の実体を照合する。
+pub fn matches_persistent_identity<T: Eq>(
+    saved: (u64, u64, T),
+    current: (u64, u64, T),
+    device_number_may_change: bool,
+) -> bool {
+    saved.1 == current.1
+        && saved.2 == current.2
+        && (device_number_may_change || saved.0 == current.0)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Identity {
@@ -31,10 +42,19 @@ impl Identity {
         Ok(())
     }
     pub fn same_persistent(&self, other: &Self) -> bool {
-        self.inode == other.inode
-            && self.birth_seconds == other.birth_seconds
-            && self.birth_nanos == other.birth_nanos
-            && self.mode == other.mode
+        matches_persistent_identity(
+            (
+                self.device,
+                self.inode,
+                (self.birth_seconds, self.birth_nanos),
+            ),
+            (
+                other.device,
+                other.inode,
+                (other.birth_seconds, other.birth_nanos),
+            ),
+            true,
+        ) && self.mode == other.mode
     }
 }
 
@@ -85,6 +105,16 @@ impl Proof {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn persistent_identity_accepts_only_device_number_changes_when_allowed() {
+        let saved = (1, 2, 3);
+        for allow in [false, true] {
+            assert!(matches_persistent_identity(saved, saved, allow));
+            assert_eq!(matches_persistent_identity(saved, (4, 2, 3), allow), allow);
+            assert!(!matches_persistent_identity(saved, (1, 4, 3), allow));
+            assert!(!matches_persistent_identity(saved, (4, 2, 5), allow));
+        }
+    }
     fn proof() -> Proof {
         Proof {
             identity: Identity {
