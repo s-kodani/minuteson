@@ -2,6 +2,7 @@ use crate::analysis_worker::AnalysisController;
 use crate::input_status;
 use crate::recorder::RecorderController;
 use crate::storage::Storage;
+use crate::window_environment::require_main_window;
 use tauri::{Manager, WebviewWindow};
 
 #[derive(serde::Serialize)]
@@ -32,9 +33,7 @@ pub(crate) async fn get_archived_recording_input_notices(
     after_session_id: Option<String>,
 ) -> Result<NoticeReply<input_status::archived::Page>, mon_contracts::AppError> {
     let result: Result<NoticeReply<input_status::archived::Page>, String> = async move {
-        if window.label() != "main" {
-            return Err("保存後通知はメイン画面から確認してください".into());
-        }
+        require_main_window(&window, "保存後通知はメイン画面から確認してください")?;
         let app = window.app_handle().clone();
         // The blocking worker owns admission until its actual I/O ends, even if the
         // WebView/awaiting caller disappears. Do not hold any recorder/child lock.
@@ -80,9 +79,7 @@ pub(crate) async fn get_archived_recording_input_notice_rows(
     targets: Vec<input_status::archived::Target>,
 ) -> Result<NoticeReply<input_status::archived::SelectedRows>, mon_contracts::AppError> {
     let result: Result<NoticeReply<input_status::archived::SelectedRows>, String> = async move {
-        if window.label() != "main" {
-            return Err("保存後通知はメイン画面から確認してください".into());
-        }
+        require_main_window(&window, "保存後通知はメイン画面から確認してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             let analysis = app.state::<AnalysisController>();
@@ -118,9 +115,10 @@ pub(crate) async fn acknowledge_archived_recording_input_notice(
     request: input_status::archived::Acknowledge,
 ) -> Result<NoticeReply<input_status::Receipt>, mon_contracts::AppError> {
     let result: Result<NoticeReply<input_status::Receipt>, String> = async move {
-        if window.label() != "main" {
-            return Err("保存後通知の受付・表示・終了はメイン画面から確認してください".into());
-        }
+        require_main_window(
+            &window,
+            "保存後通知の受付・表示・終了はメイン画面から確認してください",
+        )?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             let analysis = app.state::<AnalysisController>();

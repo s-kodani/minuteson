@@ -5,12 +5,11 @@ use crate::data_controller::{self, DataController};
 use crate::import_controller::ImportController;
 use crate::session::SessionStore;
 use crate::storage::{self, Storage};
+use crate::window_environment::require_main_window;
 use tauri::{Manager, WebviewWindow};
 
 pub(crate) fn data_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can manage stored data".into());
-    }
+    require_main_window(window, "Only the main window can manage stored data")?;
     Ok(window.app_handle().clone())
 }
 

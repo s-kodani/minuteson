@@ -4,6 +4,7 @@ use crate::model_application;
 use crate::model_inspection;
 use crate::storage::{self, Storage};
 use crate::transcription;
+use crate::window_environment::require_main_window;
 use tauri::{Manager, WebviewWindow};
 
 #[tauri::command]
@@ -11,9 +12,7 @@ pub(crate) fn get_model_profiles(
     window: WebviewWindow,
 ) -> Result<Vec<storage::model_profiles::ProfileView>, mon_contracts::AppError> {
     let result: Result<Vec<storage::model_profiles::ProfileView>, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can read model profiles".into());
-        }
+        require_main_window(&window, "Only the main window can read model profiles")?;
         window.state::<Storage>().model_profiles()
     })();
     result.map_err(|message| mon_contracts::AppError::from_command("get_model_profiles", message))
@@ -33,9 +32,7 @@ pub(crate) async fn preview_model_profile_application(
     whisper_vad_options: Option<transcription::vad::VadOptions>,
 ) -> Result<storage::model_profiles::ApplyPreview, mon_contracts::AppError> {
     let result: Result<storage::model_profiles::ApplyPreview, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can review model application".into());
-        }
+        require_main_window(&window, "Only the main window can review model application")?;
         let app = window.app_handle().clone();
         let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
         let models_root = app.state::<Storage>().native_models_root()?.to_owned();
@@ -83,9 +80,7 @@ pub(crate) async fn apply_model_profile_application(
     preview: storage::model_profiles::ApplyPreview,
 ) -> Result<storage::model_profiles::ProfileView, mon_contracts::AppError> {
     let result: Result<storage::model_profiles::ProfileView, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can apply model profiles".into());
-        }
+        require_main_window(&window, "Only the main window can apply model profiles")?;
         let app = window.app_handle().clone();
         let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
         let models_root = app.state::<Storage>().native_models_root()?.to_owned();

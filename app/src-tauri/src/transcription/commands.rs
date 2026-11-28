@@ -6,6 +6,7 @@ use crate::internal_logs;
 use crate::speaker_completion;
 use crate::storage::{self, Storage, TranscriptDraft, TranscriptDraftPayload};
 use crate::transcription;
+use crate::window_environment::require_main_window;
 use tauri::{Emitter, Manager, State, WebviewWindow};
 
 #[tauri::command]
@@ -13,9 +14,7 @@ pub(crate) fn get_asr_preferences(
     window: WebviewWindow,
 ) -> Result<storage::PreferencesSnapshot, mon_contracts::AppError> {
     let result: Result<storage::PreferencesSnapshot, String> = (|| {
-        if window.label() != "main" {
-            return Err("メイン画面で操作してください".into());
-        }
+        require_main_window(&window, "メイン画面で操作してください")?;
         window.state::<Storage>().analysis_preferences()
     })();
     result.map_err(|message| mon_contracts::AppError::from_command("get_asr_preferences", message))
@@ -26,9 +25,7 @@ pub(crate) fn get_asr_backends(
     window: WebviewWindow,
 ) -> Result<Vec<transcription::asr::Descriptor>, mon_contracts::AppError> {
     let result: Result<Vec<transcription::asr::Descriptor>, String> = (|| {
-        if window.label() != "main" {
-            return Err("メイン画面で操作してください".into());
-        }
+        require_main_window(&window, "メイン画面で操作してください")?;
         Ok(transcription::asr::registry()
             .iter()
             .map(|a| a.descriptor())
@@ -43,9 +40,10 @@ pub(crate) async fn get_transcription_regeneration_target(
     meeting_id: String,
 ) -> Result<storage::analysis_flows::regeneration::Admission, mon_contracts::AppError> {
     let result: Result<storage::analysis_flows::regeneration::Admission, String> = async move {
-        if window.label() != "main" {
-            return Err("文字起こしの再生成はメイン画面から操作してください".into());
-        }
+        require_main_window(
+            &window,
+            "文字起こしの再生成はメイン画面から操作してください",
+        )?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             app.state::<Storage>().regeneration_admission(&meeting_id)
@@ -65,9 +63,10 @@ pub(crate) async fn regenerate_transcription(
     request: storage::analysis_flows::regeneration::Request,
 ) -> Result<storage::analysis_flows::AnalysisFlow, mon_contracts::AppError> {
     let result: Result<storage::analysis_flows::AnalysisFlow, String> = async move {
-        if window.label() != "main" {
-            return Err("文字起こしの再生成はメイン画面から操作してください".into());
-        }
+        require_main_window(
+            &window,
+            "文字起こしの再生成はメイン画面から操作してください",
+        )?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             let _preparing =
@@ -102,9 +101,7 @@ pub(crate) async fn publish_regenerated_transcription(
     confirmed_target: Option<storage::analysis_flows::regeneration::Target>,
 ) -> Result<storage::analysis_flows::regeneration::Publication, mon_contracts::AppError> {
     let result: Result<storage::analysis_flows::regeneration::Publication, String> = async move {
-        if window.label() != "main" {
-            return Err("文字起こしの保存はメイン画面から操作してください".into());
-        }
+        require_main_window(&window, "文字起こしの保存はメイン画面から操作してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             let result = app.state::<Storage>().publish_regenerated_flow(
@@ -162,9 +159,7 @@ pub(crate) async fn get_transcript_draft(
     meeting_id: String,
 ) -> Result<Option<TranscriptDraft>, mon_contracts::AppError> {
     let result: Result<Option<TranscriptDraft>, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can read drafts".into());
-        }
+        require_main_window(&window, "Only the main window can read drafts")?;
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -185,9 +180,7 @@ pub(crate) fn begin_transcript_draft(
     analysis_id: String,
 ) -> Result<TranscriptDraft, mon_contracts::AppError> {
     let result: Result<TranscriptDraft, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can edit transcripts".into());
-        }
+        require_main_window(&window, "Only the main window can edit transcripts")?;
         storage.create_transcript_draft(&meeting_id, &analysis_id)
     })();
     result
@@ -203,9 +196,7 @@ pub(crate) fn save_transcript_draft(
     payload: TranscriptDraftPayload,
 ) -> Result<TranscriptDraft, mon_contracts::AppError> {
     let result: Result<TranscriptDraft, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can edit transcripts".into());
-        }
+        require_main_window(&window, "Only the main window can edit transcripts")?;
         storage.save_transcript_draft(&draft_id, expected_lock_version, payload)
     })();
     result

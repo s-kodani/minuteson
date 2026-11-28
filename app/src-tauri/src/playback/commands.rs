@@ -2,6 +2,7 @@ use super::{PlaybackInfo, PlaybackPreparations, PlaybackStore};
 use crate::capture_test;
 use crate::generation::commands::minutes_app;
 use crate::storage::{self, Storage};
+use crate::window_environment::require_main_window;
 use tauri::{Manager, State, WebviewWindow};
 
 #[tauri::command]
@@ -10,9 +11,7 @@ pub(crate) fn register_playback_preparation(
     preparation_id: String,
 ) -> Result<(), mon_contracts::AppError> {
     let result: Result<(), String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can prepare playback".into());
-        }
+        require_main_window(&window, "Only the main window can prepare playback")?;
         window
             .state::<PlaybackPreparations>()
             .reserve(&preparation_id)
@@ -28,9 +27,10 @@ pub(crate) fn cancel_playback_preparation(
     preparation_id: String,
 ) -> Result<(), mon_contracts::AppError> {
     let result: Result<(), String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can cancel playback preparation".into());
-        }
+        require_main_window(
+            &window,
+            "Only the main window can cancel playback preparation",
+        )?;
         window
             .state::<PlaybackPreparations>()
             .cancel(&preparation_id, &window.state::<PlaybackStore>())
@@ -47,9 +47,10 @@ pub(crate) fn finish_playback_preparation(
     playback_token: String,
 ) -> Result<(), mon_contracts::AppError> {
     let result: Result<(), String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can acknowledge playback preparation".into());
-        }
+        require_main_window(
+            &window,
+            "Only the main window can acknowledge playback preparation",
+        )?;
         window
             .state::<PlaybackPreparations>()
             .acknowledge(&preparation_id, &playback_token)
@@ -66,9 +67,7 @@ pub(crate) async fn prepare_meeting_playback(
     preparation_id: String,
 ) -> Result<PlaybackInfo, mon_contracts::AppError> {
     let result: Result<PlaybackInfo, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can play audio".into());
-        }
+        require_main_window(&window, "Only the main window can play audio")?;
         let app = window.app_handle().clone();
         let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
         tauri::async_runtime::spawn_blocking(move || {
@@ -179,9 +178,7 @@ pub(crate) async fn prepare_utterance_playback(
     preparation_id: String,
 ) -> Result<PlaybackInfo, mon_contracts::AppError> {
     let result: Result<PlaybackInfo, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can play audio".into());
-        }
+        require_main_window(&window, "Only the main window can play audio")?;
         let app = window.app_handle().clone();
         let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
         tauri::async_runtime::spawn_blocking(move || {
@@ -226,9 +223,7 @@ pub(crate) async fn prepare_draft_utterance_playback(
     preparation_id: String,
 ) -> Result<PlaybackInfo, mon_contracts::AppError> {
     let result: Result<PlaybackInfo, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can play audio".into());
-        }
+        require_main_window(&window, "Only the main window can play audio")?;
         let app = window.app_handle().clone();
         let guard = app.state::<PlaybackPreparations>().claim(&preparation_id)?;
         tauri::async_runtime::spawn_blocking(move || {
@@ -274,9 +269,7 @@ pub(crate) async fn read_playback_chunk(
     offset_frames: u64,
 ) -> Result<tauri::ipc::Response, mon_contracts::AppError> {
     let result: Result<tauri::ipc::Response, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can play audio".into());
-        }
+        require_main_window(&window, "Only the main window can play audio")?;
         let app = window.app_handle().clone();
         let bytes = tauri::async_runtime::spawn_blocking(move || {
             app.state::<PlaybackStore>().read(&token, offset_frames)
@@ -296,9 +289,7 @@ pub(crate) fn close_playback(
     token: String,
 ) -> Result<(), mon_contracts::AppError> {
     let result: Result<(), String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can close playback".into());
-        }
+        require_main_window(&window, "Only the main window can close playback")?;
         store.close(&token)?;
         window
             .state::<capture_test::CaptureTests>()

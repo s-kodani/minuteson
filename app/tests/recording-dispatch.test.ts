@@ -18,7 +18,8 @@ test("capture polling and stopping dispatch lock waits and file reads off the na
     const body=source.split(`async fn ${name}(`)[1]?.split("#[tauri::command]")[0];
     assert.ok(body,`${name} must be async`);
     assert.match(body,/spawn_blocking/);
-    assert.match(body,/window\.label\(\)/);
+    const guard = file === "capture_test/commands.rs" ? /require_main_window\(\s*&window,/ : /window\.label\(\)/;
+    assert.match(body, guard);
   }
   const confirmation=readFileSync(new URL("../src-tauri/src/recording_confirmation_window.rs",import.meta.url),"utf8");
   assert.match(confirmation,/pub async fn decide_recording_confirmation/);

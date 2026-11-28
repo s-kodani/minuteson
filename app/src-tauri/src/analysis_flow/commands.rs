@@ -2,6 +2,7 @@ use crate::analysis_flow;
 use crate::analysis_preparation;
 use crate::analysis_worker::AnalysisController;
 use crate::storage::{self, AnalysisPresentation, Storage};
+use crate::window_environment::require_main_window;
 use tauri::{Emitter, Manager, WebviewWindow};
 
 #[tauri::command]
@@ -10,9 +11,7 @@ pub(crate) async fn get_analysis_flow(
     meeting_id: String,
 ) -> Result<Option<storage::analysis_flows::AnalysisFlow>, mon_contracts::AppError> {
     let result: Result<Option<storage::analysis_flows::AnalysisFlow>, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can read analysis flow".into());
-        }
+        require_main_window(&window, "Only the main window can read analysis flow")?;
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -30,9 +29,7 @@ pub(crate) fn get_analysis_preparations(
     window: WebviewWindow,
 ) -> Result<Vec<analysis_preparation::Progress>, mon_contracts::AppError> {
     let result: Result<Vec<analysis_preparation::Progress>, String> = (|| {
-        if window.label() != "main" {
-            return Err("解析準備はメイン画面から確認してください".into());
-        }
+        require_main_window(&window, "解析準備はメイン画面から確認してください")?;
         let mut entries = window.state::<Storage>().preparation_progress()?;
         for current in analysis_preparation::snapshot() {
             if let Some(saved) = entries
@@ -70,9 +67,7 @@ pub(crate) async fn get_meeting_analysis_audio(
     meeting_id: String,
 ) -> Result<storage::RecordedAudioPlan, mon_contracts::AppError> {
     let result: Result<storage::RecordedAudioPlan, String> = async move {
-        if window.label() != "main" {
-            return Err("解析音声はメイン画面から確認してください".into());
-        }
+        require_main_window(&window, "解析音声はメイン画面から確認してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             app.state::<Storage>()
@@ -93,9 +88,7 @@ pub(crate) async fn get_ready_analysis_flows(
     window: WebviewWindow,
 ) -> Result<Vec<storage::analysis_flows::AnalysisFlow>, mon_contracts::AppError> {
     let result: Result<Vec<storage::analysis_flows::AnalysisFlow>, String> = async move {
-        if window.label() != "main" {
-            return Err("文字起こしの保存はメイン画面から操作してください".into());
-        }
+        require_main_window(&window, "文字起こしの保存はメイン画面から操作してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().ready_analysis_flows())
             .await
@@ -114,9 +107,7 @@ pub(crate) fn continue_analysis_flow(
     expected_lock_version: i64,
 ) -> Result<storage::analysis_flows::AnalysisFlow, mon_contracts::AppError> {
     let result: Result<storage::analysis_flows::AnalysisFlow, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can continue analysis flow".into());
-        }
+        require_main_window(&window, "Only the main window can continue analysis flow")?;
         let flow = analysis_flow::continue_flow(
             &window.state::<Storage>(),
             &meeting_id,
@@ -139,9 +130,7 @@ pub(crate) async fn get_current_analysis(
     meeting_id: String,
 ) -> Result<Option<AnalysisPresentation>, mon_contracts::AppError> {
     let result: Result<Option<AnalysisPresentation>, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can read analysis".into());
-        }
+        require_main_window(&window, "Only the main window can read analysis")?;
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {

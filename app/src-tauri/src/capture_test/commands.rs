@@ -2,6 +2,7 @@ use crate::capture_test;
 use crate::input_levels;
 use crate::playback::PlaybackInfo;
 use crate::recorder::RecorderController;
+use crate::window_environment::require_main_window;
 use tauri::{Manager, WebviewWindow};
 
 #[tauri::command]
@@ -10,9 +11,7 @@ pub(crate) async fn get_capture_test_snapshot(
     run_id: Option<String>,
 ) -> Result<Option<capture_test::Snapshot>, mon_contracts::AppError> {
     let result: Result<Option<capture_test::Snapshot>, String> = async move {
-        if window.label() != "main" {
-            return Err("録音前テストはメイン画面から確認してください".into());
-        }
+        require_main_window(&window, "録音前テストはメイン画面から確認してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             app.state::<capture_test::CaptureTests>()
@@ -33,9 +32,7 @@ pub(crate) async fn reconcile_capture_test_start(
     run_id: String,
 ) -> Result<Option<capture_test::Snapshot>, mon_contracts::AppError> {
     let result: Result<Option<capture_test::Snapshot>, String> = async move {
-        if window.label() != "main" {
-            return Err("録音前テストはメイン画面から確認してください".into());
-        }
+        require_main_window(&window, "録音前テストはメイン画面から確認してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             RecorderController::with_transition(&app, || {
@@ -58,9 +55,7 @@ pub(crate) async fn start_capture_test(
     request: capture_test::Request,
 ) -> Result<capture_test::Snapshot, mon_contracts::AppError> {
     let result: Result<capture_test::Snapshot, String> = async move {
-        if window.label() != "main" {
-            return Err("録音前テストはメイン画面から開始してください".into());
-        }
+        require_main_window(&window, "録音前テストはメイン画面から開始してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             capture_test::CaptureTests::start(&app, request)
@@ -78,9 +73,7 @@ pub(crate) async fn cancel_capture_test(
     run_id: String,
 ) -> Result<capture_test::Snapshot, mon_contracts::AppError> {
     let result: Result<capture_test::Snapshot, String> = async move {
-        if window.label() != "main" {
-            return Err("録音前テストはメイン画面から停止してください".into());
-        }
+        require_main_window(&window, "録音前テストはメイン画面から停止してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             capture_test::CaptureTests::cancel(&app, &run_id)
@@ -98,9 +91,7 @@ pub(crate) async fn discard_capture_test(
     run_id: String,
 ) -> Result<(), mon_contracts::AppError> {
     let result: Result<(), String> = async move {
-        if window.label() != "main" {
-            return Err("録音前テストはメイン画面から閉じてください".into());
-        }
+        require_main_window(&window, "録音前テストはメイン画面から閉じてください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             capture_test::CaptureTests::discard(&app, &run_id)
@@ -118,9 +109,7 @@ pub(crate) async fn get_capture_test_levels(
     run_id: String,
 ) -> Result<input_levels::InputLevels, mon_contracts::AppError> {
     let result: Result<input_levels::InputLevels, String> = async move {
-        if window.label() != "main" {
-            return Err("録音前テストはメイン画面から確認してください".into());
-        }
+        require_main_window(&window, "録音前テストはメイン画面から確認してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             capture_test::CaptureTests::levels(&app, &run_id)
@@ -142,9 +131,7 @@ pub(crate) async fn prepare_capture_test_playback(
     preparation_id: String,
 ) -> Result<PlaybackInfo, mon_contracts::AppError> {
     let result: Result<PlaybackInfo, String> = async move {
-        if window.label() != "main" {
-            return Err("録音前テストはメイン画面から再生してください".into());
-        }
+        require_main_window(&window, "録音前テストはメイン画面から再生してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             capture_test::CaptureTests::prepare_playback(

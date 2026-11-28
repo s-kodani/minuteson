@@ -1,6 +1,7 @@
 use crate::analysis_worker::AnalysisController;
 use crate::generation;
 use crate::storage::{self, Storage};
+use crate::window_environment::require_main_window;
 use tauri::{Manager, WebviewWindow};
 
 #[tauri::command]
@@ -9,9 +10,7 @@ pub(crate) async fn get_minutes_source(
     meeting_id: String,
 ) -> Result<storage::MinutesSource, mon_contracts::AppError> {
     let result: Result<storage::MinutesSource, String> = async move {
-        if window.label() != "main" {
-            return Err("メイン画面で操作してください".into());
-        }
+        require_main_window(&window, "メイン画面で操作してください")?;
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -47,9 +46,7 @@ pub(crate) async fn start_markdown_minutes_generation(
 }
 
 pub(crate) fn minutes_app(window: &WebviewWindow) -> Result<tauri::AppHandle, String> {
-    if window.label() != "main" {
-        return Err("Only the main window can read or edit minutes".into());
-    }
+    require_main_window(window, "Only the main window can read or edit minutes")?;
     Ok(window.app_handle().clone())
 }
 
@@ -144,9 +141,7 @@ pub(crate) async fn get_meeting_body_for_review(
     part: mon_contracts::MeetingBodyPart,
 ) -> Result<Option<mon_contracts::MeetingBodyReview>, mon_contracts::AppError> {
     let result: Result<Option<mon_contracts::MeetingBodyReview>, String> = async move {
-        if window.label() != "main" {
-            return Err("会議本文はメイン画面だけで確認できます".into());
-        }
+        require_main_window(&window, "会議本文はメイン画面だけで確認できます")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             app.state::<Storage>()

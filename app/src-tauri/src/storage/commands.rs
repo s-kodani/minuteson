@@ -4,6 +4,7 @@ use crate::data_controller::commands::data_app;
 use crate::generation::commands::minutes_app;
 use crate::recording_confirmation_window;
 use crate::storage::{self, Meeting, Storage};
+use crate::window_environment::require_main_window;
 use tauri::{Emitter, Manager, State, WebviewWindow};
 
 #[tauri::command]
@@ -12,9 +13,7 @@ pub(crate) fn get_vocabulary_book(
     meeting_id: Option<String>,
 ) -> Result<storage::VocabularyBook, mon_contracts::AppError> {
     let result: Result<storage::VocabularyBook, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can read vocabulary".into());
-        }
+        require_main_window(&window, "Only the main window can read vocabulary")?;
         window
             .state::<Storage>()
             .vocabulary_book(meeting_id.as_deref())
@@ -28,9 +27,7 @@ pub(crate) fn get_meeting_vocabulary(
     meeting_id: String,
 ) -> Result<storage::VocabularyView, mon_contracts::AppError> {
     let result: Result<storage::VocabularyView, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can read vocabulary".into());
-        }
+        require_main_window(&window, "Only the main window can read vocabulary")?;
         window.state::<Storage>().vocabulary_view(&meeting_id)
     })();
     result
@@ -45,9 +42,7 @@ pub(crate) fn save_vocabulary_book(
     payload: Vec<storage::VocabularyEntry>,
 ) -> Result<storage::VocabularyBook, mon_contracts::AppError> {
     let result: Result<storage::VocabularyBook, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can edit vocabulary".into());
-        }
+        require_main_window(&window, "Only the main window can edit vocabulary")?;
         window.state::<Storage>().save_vocabulary_book(
             meeting_id.as_deref(),
             expected_lock_version,
@@ -106,9 +101,10 @@ pub(crate) fn save_ui_preferences(
     payload: storage::UiPreferences,
 ) -> Result<storage::UiPreferencesSnapshot, mon_contracts::AppError> {
     let result: Result<storage::UiPreferencesSnapshot, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can edit presentation settings".into());
-        }
+        require_main_window(
+            &window,
+            "Only the main window can edit presentation settings",
+        )?;
         let saved = window
             .state::<Storage>()
             .save_ui_preferences(expected_lock_version, payload)?;
@@ -127,9 +123,7 @@ pub(crate) async fn list_meetings(
     window: WebviewWindow,
 ) -> Result<Vec<Meeting>, mon_contracts::AppError> {
     let result: Result<Vec<Meeting>, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can list meetings".into());
-        }
+        require_main_window(&window, "Only the main window can list meetings")?;
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().list_meetings())
@@ -186,9 +180,7 @@ pub(crate) async fn get_meeting(
     id: String,
 ) -> Result<Option<Meeting>, mon_contracts::AppError> {
     let result: Result<Option<Meeting>, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can read meetings".into());
-        }
+        require_main_window(&window, "Only the main window can read meetings")?;
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().get_meeting(&id))
@@ -208,9 +200,7 @@ pub(crate) fn rename_meeting(
     expected_lock_version: i64,
 ) -> Result<Meeting, mon_contracts::AppError> {
     let result: Result<Meeting, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can rename meetings".into());
-        }
+        require_main_window(&window, "Only the main window can rename meetings")?;
         storage.rename_meeting(&id, &title, expected_lock_version)
     })();
     result.map_err(|message| mon_contracts::AppError::from_command("rename_meeting", message))

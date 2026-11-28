@@ -11,6 +11,7 @@ use crate::recording_windows;
 use crate::recording_writes;
 use crate::session::{RecordingSnapshot, SessionStore};
 use crate::storage::{self, Storage};
+use crate::window_environment::require_main_window;
 use tauri::{Manager, WebviewWindow};
 
 #[tauri::command]
@@ -103,9 +104,10 @@ pub(crate) async fn get_recording_input_history_status(
 #[tauri::command]
 pub(crate) fn capture_available(window: WebviewWindow) -> Result<bool, mon_contracts::AppError> {
     let result: Result<bool, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can inspect capture availability".into());
-        }
+        require_main_window(
+            &window,
+            "Only the main window can inspect capture availability",
+        )?;
         Ok(RecorderController::available(window.app_handle()))
     })();
     result.map_err(|message| mon_contracts::AppError::from_command("capture_available", message))
@@ -122,9 +124,7 @@ pub(crate) async fn start_recording(
     meeting_vocabulary: Option<Vec<storage::VocabularyEntry>>,
 ) -> Result<RecordingSnapshot, mon_contracts::AppError> {
     async move {
-        if window.label() != "main" {
-            return Err("Only the main window can start recording".into());
-        }
+        require_main_window(&window, "Only the main window can start recording")?;
         let app = window.app_handle().clone();
         let speaker_counts = storage::recordings::SpeakerCounts { num_speakers };
         speaker_counts.validate()?;
@@ -199,9 +199,7 @@ pub(crate) async fn select_recording_microphone(
     microphone_uid: Option<String>,
 ) -> Result<u64, mon_contracts::AppError> {
     let result: Result<u64, String> = async move {
-        if window.label() != "main" {
-            return Err("マイク切替はメイン画面で行ってください".into());
-        }
+        require_main_window(&window, "マイク切替はメイン画面で行ってください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             RecorderController::with_transition(&app, || {
@@ -223,9 +221,7 @@ pub(crate) async fn get_recording_microphone_selection(
     session_id: String,
 ) -> Result<recorder::MicrophoneSelectionStatus, mon_contracts::AppError> {
     let result: Result<recorder::MicrophoneSelectionStatus, String> = async move {
-        if window.label() != "main" {
-            return Err("マイク選択状態はメイン画面で確認してください".into());
-        }
+        require_main_window(&window, "マイク選択状態はメイン画面で確認してください")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             RecorderController::selection_status(&app, &session_id)

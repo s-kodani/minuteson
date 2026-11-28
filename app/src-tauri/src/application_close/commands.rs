@@ -14,6 +14,7 @@ use crate::session::SessionStore;
 use crate::startup_instance;
 use crate::startup_salvage;
 use crate::storage::Storage;
+use crate::window_environment::require_main_window;
 use crate::ExitGuard;
 use std::sync::atomic::Ordering;
 use tauri::{Manager, WebviewWindow};
@@ -30,9 +31,7 @@ pub(crate) async fn finish_main_close(
         if cfg!(any(windows, target_os = "macos")) && !quit {
             return Err("画面の収納とアプリの終了は別の操作です".into());
         }
-        if window.label() != "main" {
-            return Err("Only the main window can finish closing".into());
-        }
+        require_main_window(&window, "Only the main window can finish closing")?;
         let updating = update.unwrap_or(false);
         let salvaging = salvage.unwrap_or(false);
         if salvaging && (!quit || updating || !cfg!(any(windows, target_os = "macos"))) {
@@ -230,9 +229,7 @@ pub(crate) fn get_application_close_activity(
     window: WebviewWindow,
 ) -> Result<ApplicationCloseActivity, mon_contracts::AppError> {
     let result: Result<ApplicationCloseActivity, String> = (|| {
-        if window.label() != "main" {
-            return Err("終了状態はメイン画面から確認してください".into());
-        }
+        require_main_window(&window, "終了状態はメイン画面から確認してください")?;
         let (analysis_busy, model_preparation_busy) =
             window.state::<AnalysisController>().close_activity()?;
         Ok(ApplicationCloseActivity {

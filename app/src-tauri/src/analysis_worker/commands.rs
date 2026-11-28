@@ -1,5 +1,6 @@
 use super::AnalysisController;
 use crate::storage::{self, Storage};
+use crate::window_environment::require_main_window;
 use tauri::{Manager, WebviewWindow};
 
 #[tauri::command]
@@ -8,9 +9,7 @@ pub(crate) async fn get_analysis_jobs(
     meeting_id: String,
 ) -> Result<Vec<storage::JobSnapshot>, mon_contracts::AppError> {
     let result: Result<Vec<storage::JobSnapshot>, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can read analysis jobs".into());
-        }
+        require_main_window(&window, "Only the main window can read analysis jobs")?;
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || app.state::<Storage>().list_jobs(&meeting_id))
@@ -27,9 +26,7 @@ pub(crate) async fn get_analysis_notification_jobs(
     watched_job_ids: Vec<String>,
 ) -> Result<Vec<storage::NotificationJob>, mon_contracts::AppError> {
     let result: Result<Vec<storage::NotificationJob>, String> = async move {
-        if window.label() != "main" {
-            return Err("解析通知の状態はメイン画面から確認してください".into());
-        }
+        require_main_window(&window, "解析通知の状態はメイン画面から確認してください")?;
 
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -50,9 +47,10 @@ pub(crate) async fn get_analysis_notification_output(
     job_id: String,
 ) -> Result<storage::NotificationOutput, mon_contracts::AppError> {
     let result: Result<storage::NotificationOutput, String> = async move {
-        if window.label() != "main" {
-            return Err("解析通知の保存結果はメイン画面から確認してください".into());
-        }
+        require_main_window(
+            &window,
+            "解析通知の保存結果はメイン画面から確認してください",
+        )?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             app.state::<Storage>().notification_output(&job_id)
@@ -72,9 +70,7 @@ pub(crate) fn pause_analysis_job(
     job_id: String,
 ) -> Result<storage::JobSnapshot, mon_contracts::AppError> {
     let result: Result<storage::JobSnapshot, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can pause analysis".into());
-        }
+        require_main_window(&window, "Only the main window can pause analysis")?;
         window.state::<Storage>().request_job_pause(&job_id, "user")
     })();
     result.map_err(|message| mon_contracts::AppError::from_command("pause_analysis_job", message))
@@ -86,9 +82,7 @@ pub(crate) fn resume_analysis_job(
     job_id: String,
 ) -> Result<storage::JobSnapshot, mon_contracts::AppError> {
     let result: Result<storage::JobSnapshot, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can resume analysis".into());
-        }
+        require_main_window(&window, "Only the main window can resume analysis")?;
         let job = window.state::<Storage>().resume_job(&job_id)?;
         AnalysisController::kick(window.app_handle())?;
         Ok(job)
@@ -102,9 +96,7 @@ pub(crate) async fn cancel_analysis_job(
     job_id: String,
 ) -> Result<storage::JobSnapshot, mon_contracts::AppError> {
     let result: Result<storage::JobSnapshot, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can cancel analysis".into());
-        }
+        require_main_window(&window, "Only the main window can cancel analysis")?;
         let app = window.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || {
             let storage = app.state::<Storage>();

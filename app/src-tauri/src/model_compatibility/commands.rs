@@ -3,6 +3,7 @@ use crate::job_history;
 use crate::model_compatibility;
 use crate::model_inspection;
 use crate::storage::Storage;
+use crate::window_environment::require_main_window;
 use tauri::{Manager, WebviewWindow};
 
 #[tauri::command]
@@ -14,9 +15,10 @@ pub(crate) async fn check_model_compatibility(
     expected_review_hash: String,
 ) -> Result<model_compatibility::CheckSummary, mon_contracts::AppError> {
     let result: Result<model_compatibility::CheckSummary, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can check model compatibility".into());
-        }
+        require_main_window(
+            &window,
+            "Only the main window can check model compatibility",
+        )?;
         let app = window.app_handle().clone();
         let guard = app.state::<model_inspection::Inspector>().begin(&token)?;
         let models_root = app.state::<Storage>().native_models_root()?.to_owned();
