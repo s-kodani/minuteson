@@ -8,8 +8,9 @@ test("scratch registry has no old version upgrade and keeps root and schema proo
   const registry = source("../src-tauri/src/storage/backup/scratch.rs");
   assert.doesNotMatch(registry, /upgrade_old|upgrade_two|upgrade_three|previous_schema|version_two_schema|version_three_schema/);
   assert.match(registry, /version != local_version\(\) \|\| schema\(&db\)\? != expected_schema/);
-  assert.match(registry, /saved != root_identity/);
-  assert.match(registry, /registry\.recover\(\)\?/);
+  // 保存済みのルート証拠は、macOSのデバイス番号の変化だけを許す永続照合で確認する（#151）。
+  assert.match(registry, /!saved\.same_persistent\(&root_identity\)/);
+  assert.match(registry, /registry\.recover\(true\)\?/);
 });
 test("theme accepts current color/brightness preferences and refuses removed reading controls", () => {
   assert.throws(() => assertUiPreferences({id:"ui_preferences",lockVersion:1,payload:{schemaVersion:2,theme:"dark",textSize:15,followPlayback:false}}));
