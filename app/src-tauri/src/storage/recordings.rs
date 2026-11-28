@@ -476,8 +476,8 @@ impl Storage {
             item.started_at_ms = Some(now_ms()?);
             progress(item.clone());
             match crate::audio_finalization::complete(&|| self.data_write_blocked(), || {
-                let (saved, verified) = self
-                    .finalize_available_recording_checked(&item.session_id, &|| {
+                let (saved, verified) =
+                    self.finalize_available_recording_checked(&item.session_id, true, &|| {
                         self.data_write_blocked()
                     })?;
                 let complete = if let Some(verified) = verified {
@@ -520,13 +520,14 @@ impl Storage {
         session_id: &str,
         cancelled: &impl Fn() -> bool,
     ) -> Result<RecordingSession, String> {
-        self.finalize_available_recording_checked(session_id, cancelled)
+        self.finalize_available_recording_checked(session_id, false, cancelled)
             .map(|(session, _)| session)
     }
 
     fn finalize_available_recording_checked(
         &self,
         session_id: &str,
+        recover_saved_owner: bool,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(RecordingSession, Option<wav::CommittedAudio>), String> {
         partial::check_cancel(cancelled)?;
@@ -557,7 +558,7 @@ impl Storage {
         }
         if self.has_single_wav(&session)? {
             return self
-                .finalize_single_wav_recording(&session, cancelled)
+                .finalize_single_wav_recording(&session, recover_saved_owner, cancelled)
                 .map(|(saved, proof)| (saved, Some(proof)));
         }
         match self.finalize_recording(session_id) {
@@ -844,7 +845,7 @@ impl Storage {
         if self.has_single_wav(&session)? {
             drop(_meeting_owner);
             return self
-                .finalize_single_wav_recording(&session, &|| false)
+                .finalize_single_wav_recording(&session, false, &|| false)
                 .map(|(session, _)| session);
         }
         if !matches!(

@@ -56,6 +56,7 @@ pub(super) fn inspect(
     storage: &Storage,
     directory: &Directory,
     owner: &str,
+    recover_saved_owner: bool,
     cancelled: &impl Fn() -> bool,
 ) -> Result<Verified, String> {
     let (tip_bytes, tip_stamp) = directory
@@ -106,7 +107,7 @@ pub(super) fn inspect(
         }
     }
     let file = directory.required(&advertised.file_name, false)?;
-    identity_matches(&file, &reservation)?;
+    identity_matches(&file, &reservation, recover_saved_owner)?;
     let stamp = Stamp::read(&file)?;
     crate::operation_observation::file_check();
     let claimed_frames = advertised
