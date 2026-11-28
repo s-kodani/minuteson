@@ -27,6 +27,28 @@ pub(in crate::storage) struct Identity {
     birth: (u64, u32),
 }
 impl Identity {
+    #[cfg(any(target_os = "macos", windows))]
+    pub(in crate::storage) fn matches_relocation_history(&self, current: &Self) -> bool {
+        mon_native::identity::matches_persistent_identity(
+            (self.device, self.inode, self.birth),
+            (current.device, current.inode, current.birth),
+            cfg!(target_os = "macos"),
+        ) && self.uid == current.uid
+            && self.mode == current.mode
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    pub(in crate::storage) fn rebase_relocation_device(
+        &mut self,
+        saved_root: &Self,
+        current_root: &Self,
+    ) {
+        // 配置台帳が証明した同一ボリュームのコピーにだけ、受付時の番号を使う。
+        if cfg!(target_os = "macos") && self.device == saved_root.device {
+            self.device = current_root.device;
+        }
+    }
+
     pub(in crate::storage) fn read(metadata: &Metadata) -> Result<Self, String> {
         let birth = metadata
             .created()
@@ -86,6 +108,58 @@ impl Identity {
         }
         Ok(())
     }
+}
+
+#[cfg(all(test, any(target_os = "macos", windows)))]
+#[test]
+fn relocation_history_identity_preserves_inode_birth_owner_and_mode() {
+    let current = Identity {
+        device: 1,
+        inode: 2,
+        uid: 3,
+        mode: 0o040700,
+        birth: (4, 5),
+    };
+    let mut saved = Identity {
+        device: 6,
+        ..current.clone()
+    };
+    assert_eq!(
+        saved.matches_relocation_history(&current),
+        cfg!(target_os = "macos")
+    );
+    assert_ne!(saved, current);
+    for changed in [
+        Identity {
+            inode: 7,
+            ..current.clone()
+        },
+        Identity {
+            birth: (4, 8),
+            ..current.clone()
+        },
+        Identity {
+            uid: 9,
+            ..current.clone()
+        },
+        Identity {
+            mode: 0o040755,
+            ..current.clone()
+        },
+    ] {
+        assert!(!saved.matches_relocation_history(&changed));
+    }
+    let saved_root = saved.clone();
+    saved.rebase_relocation_device(&saved_root, &current);
+    assert_eq!(saved == current, cfg!(target_os = "macos"));
+
+    let mut other_volume = Identity {
+        device: 10,
+        ..current.clone()
+    };
+    let unchanged = other_volume.clone();
+    other_volume.rebase_relocation_device(&saved_root, &current);
+    assert_eq!(other_volume, unchanged);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -21,4 +21,39 @@ pub(crate) fn absolute(path: &str) -> String {
     }
 }
 
-// Fixture construction only; no product retry entry point.
+#[cfg(target_os = "macos")]
+pub(crate) mod relocation_identity {
+    use std::cell::Cell;
+
+    thread_local! {
+        static CHANGE: Cell<Option<(&'static str, bool)>> = const { Cell::new(None) };
+    }
+
+    /// 起動時に読んだ履歴の証拠をテスト内だけで差し替える。保存済み記録は保持する。
+    pub(crate) fn with_change<T>(
+        scope: &'static str,
+        device_only: bool,
+        test: impl FnOnce() -> T,
+    ) -> T {
+        struct Restore(Option<(&'static str, bool)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                CHANGE.set(self.0);
+            }
+        }
+        let _restore = Restore(CHANGE.replace(Some((scope, device_only))));
+        test()
+    }
+
+    pub(crate) fn perturb(scope: &str, device: &mut u64, inode: &mut u64) {
+        if let Some((selected, device_only)) = CHANGE.get() {
+            if selected == scope {
+                if device_only {
+                    *device ^= 1;
+                } else {
+                    *inode ^= 1;
+                }
+            }
+        }
+    }
+}
