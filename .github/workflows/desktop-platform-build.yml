@@ -159,8 +159,64 @@ jobs:
           defaults write org.webkit.Playwright AppleKeyboardUIMode -int 2
           defaults read org.webkit.Playwright AppleKeyboardUIMode
       - name: Browser regression tests
+        if: runner.os == 'Windows'
         working-directory: app
         run: npm run test:browser
+      - name: Browser regression tests with resource sampling
+        if: runner.os == 'macOS'
+        working-directory: app
+        shell: bash
+        run: |
+          sample_resources() {
+            export LC_ALL=C
+            sleep_pid=
+            trap 'if [[ -n "$sleep_pid" ]]; then
+              kill "$sleep_pid" 2>/dev/null || true
+              wait "$sleep_pid" 2>/dev/null || true
+            fi
+            exit 0' TERM
+
+            while true; do
+              printf '\n[%s]\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              # Use the second CPU reading so it covers the sampling interval.
+              top -F -R -l 2 -s 1 -n 0 | awk '
+                /^CPU usage:/ { cpu = $0 }
+                END { if (cpu == "") exit 1; print cpu }
+              ' || echo 'CPU sample unavailable'
+              sysctl kern.memorystatus_vm_pressure_level || echo 'Memory pressure level unavailable'
+              vm_stat || echo 'VM counters unavailable'
+              # Report process counts and summed RSS in KiB without recording command lines.
+              ps -Aww -o rss=,comm=,args= | awk '
+                $2 ~ /(^|\/)(Playwright|com\.apple\.WebKit\.[^/]+)$/ { webkit += $1; webkit_count++ }
+                $2 ~ /(^|\/)node$/ && $0 ~ /\/(vite\.js|\.bin\/vite)([[:space:]]|$)/ { vite += $1; vite_count++ }
+                END {
+                  printf "WebKit processes=%d rss_kib=%d\n", webkit_count, webkit
+                  printf "Vite processes=%d rss_kib=%d\n", vite_count, vite
+                }
+              ' || echo 'Process sample unavailable'
+              sleep 9 &
+              sleep_pid=$!
+              wait "$sleep_pid"
+              sleep_pid=
+            done
+          }
+
+          sampler_pid=
+          stop_sampler() {
+            if [[ -n "$sampler_pid" ]]; then
+              kill "$sampler_pid" 2>/dev/null || true
+              wait "$sampler_pid" 2>/dev/null || true
+            fi
+          }
+          trap stop_sampler EXIT
+          trap 'exit 129' HUP
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          if mkdir -p ../output/playwright; then
+            sample_resources > ../output/playwright/resources.log 2>&1 &
+            sampler_pid=$!
+          fi
+          npm run test:browser
       - name: Save verified browser engine
         if: success() && env.MON_SAVE_CI_CACHE == 'true' && steps.browser_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -171,8 +227,17 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: browser-diagnostics-${{ runner.os }}
+          name: browser-diagnostics-${{ runner.os }}${{ runner.os == 'macOS' && format('-attempt-{0}', github.run_attempt) || '' }}
           path: output/playwright/
+          retention-days: 7
+      - name: Upload browser metrics
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-metrics-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: |
+            output/playwright/results.json
+            output/playwright/resources.log
           retention-days: 7
   native:
     needs: changes
