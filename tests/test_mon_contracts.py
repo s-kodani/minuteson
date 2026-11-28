@@ -91,6 +91,45 @@ class CommandContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'absent from registry'):
             contracts.products(root)
 
+    def test_unqualified_handler_can_move_to_feature_module_without_changing_products(self):
+        root, source = self.fixture()
+        before = contracts.products(root)
+        registry = root / 'app/src-tauri/command_registry.json'
+        registry_before = registry.read_bytes()
+        moved = source.parent / 'feature/commands.rs'
+        moved.parent.mkdir()
+        moved.write_text(SOURCE)
+        source.write_text('mod feature;\nuse feature::commands::inspect;\n')
+        (source.parent / 'feature.rs').write_text('pub(crate) mod commands;\n')
+        self.assertEqual(before, contracts.products(root))
+        self.assertEqual(registry_before, registry.read_bytes())
+
+        moved.write_text(SOURCE.replace('operation_id: String', 'operation_id: u64'))
+        with self.assertRaisesRegex(ValueError, 'signature differs'):
+            contracts.products(root)
+
+        moved.write_text(SOURCE + '\n#[tauri::command]\nfn ungranted() {}')
+        with self.assertRaisesRegex(ValueError, 'absent from registry'):
+            contracts.products(root)
+
+        moved.write_text(SOURCE)
+        source.write_text(SOURCE)
+        with self.assertRaisesRegex(ValueError, 'duplicate command declaration: inspect'):
+            contracts.products(root)
+
+    def test_qualified_handler_must_be_declared_in_its_registered_module(self):
+        root, source = self.fixture()
+        registry = root / 'app/src-tauri/command_registry.json'
+        data = json.loads(registry.read_text())
+        data['commands'][0]['handler'] = 'feature::inspect'
+        registry.write_text(json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'lacks.*feature::inspect'):
+            contracts.products(root)
+
+        source.rename(source.parent / 'feature.rs')
+        source.write_text('mod feature;\n')
+        contracts.products(root)
+
     def test_explicit_sync_changes_only_signature_and_retains_role_grants(self):
         root, source = self.fixture()
         path = root / 'app/src-tauri/command_registry.json'

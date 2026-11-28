@@ -7,6 +7,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+pub(crate) mod commands;
 pub(crate) mod data_maintenance;
 pub(crate) mod model_cleanup;
 mod model_preparation;

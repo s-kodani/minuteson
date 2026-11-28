@@ -31,7 +31,8 @@ test("Quit still enters the existing fail-closed save and worker shutdown barrie
   assert.match(exit, /api\.prevent_exit\(\)/u);
   assert.match(exit, /StopDecisionStore/u);
   assert.match(exit, /main\.emit\("main-close-requested", serde_json::json!\(\{"quit": true\}\)\)/u);
-  const finish = lib.slice(lib.indexOf("async fn finish_main_close"), lib.indexOf("fn get_recording_snapshot"));
+  const close = readFileSync(new URL("../src-tauri/src/application_close/commands.rs", import.meta.url), "utf8");
+  const finish = close.split("async fn finish_main_close(")[1].split("#[tauri::command]")[0];
   assert.match(finish, /AnalysisController::shutdown/u);
   assert.match(finish, /ExitGuard>\(\)\.0\.store\(true, Ordering::SeqCst\)/u);
   assert.match(finish, /else if updating\s*\{\s*window\.app_handle\(\)\.restart\(\);/u);

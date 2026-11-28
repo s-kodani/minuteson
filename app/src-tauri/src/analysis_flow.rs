@@ -1,5 +1,7 @@
 //! Durable automatic transcription and speaker processing. The shared inference
 //! worker owns this coordinator so recording priority and a single CLI remain.
+pub(crate) mod commands;
+
 use crate::diarization::sherpa::SherpaConfig;
 use crate::local_engine::Fingerprint;
 use crate::storage::model_profiles::jobs::{Execution, Snapshot};

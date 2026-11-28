@@ -1,3 +1,5 @@
+pub(crate) mod commands;
+
 use serde::Serialize;
 use std::sync::Mutex;
 

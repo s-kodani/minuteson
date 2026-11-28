@@ -1,6 +1,7 @@
 //! Binding telemetry is neither PCM arrival nor persistence. Pin its directory
 //! before spawning the helper, and age repeated publications conservatively.
 mod clock;
+pub(crate) mod commands;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Read;

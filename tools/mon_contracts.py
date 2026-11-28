@@ -240,35 +240,41 @@ def registry_commands(root=ROOT, synchronize=False):
     registry = json.loads((native / "command_registry.json").read_text(encoding="utf8"))
     roles = ("main", "recorder", "recording-confirmation")
     commands = registry["commands"]
-    names = [c["name"] for c in commands]
-    if registry["schemaVersion"] != 1 or len(names) != len(set(names)):
+    names = {c["name"] for c in commands}
+    if registry["schemaVersion"] != 1 or len(names) != len(commands):
         raise ValueError("invalid command registry")
-    cache, registered = {}, set()
+    sources = native / "src"
+    declarations = {}
+    for path in sorted(sources.rglob("*.rs")):
+        for name, signature in command_signatures(path.read_text(encoding="utf8")).items():
+            if name in declarations:
+                previous, _ = declarations[name]
+                raise ValueError(f"duplicate command declaration: {name} in {previous.relative_to(native)} and {path.relative_to(native)}")
+            declarations[name] = (path, signature)
     for command in commands:
-        if command["handler"].split("::")[-1] != command["name"] or not command["roles"] or any(r not in roles for r in command["roles"]):
-            raise ValueError("invalid handler or role")
         parts = command["handler"].split("::")
-        relative = Path(*parts[:-1]) if len(parts) > 1 else Path("lib")
-        path = native / "src" / relative.with_suffix(".rs")
-        if not path.exists():
-            path = native / "src" / relative / "mod.rs"
-        if path not in cache:
-            cache[path] = command_signatures(path.read_text(encoding="utf8"))
-        signature = cache[path].get(command["name"])
-        if signature is None:
+        name = command["name"]
+        if parts[-1] != name or not command["roles"] or any(r not in roles for r in command["roles"]):
+            raise ValueError("invalid handler or role")
+        if name not in declarations:
             raise ValueError(f"registered handler lacks #[tauri::command]: {command['handler']}")
+        path, signature = declarations[name]
+        # 修飾のないハンドラのインポートは、Rustのコンパイル時に検証する。
+        if len(parts) > 1:
+            module = sources.joinpath(*parts[:-1])
+            registered_path = module.with_suffix(".rs")
+            if not registered_path.exists():
+                registered_path = module / "mod.rs"
+            if path != registered_path:
+                raise ValueError(f"registered handler lacks #[tauri::command]: {command['handler']}")
         if synchronize:
             command["signature"] = signature
         elif command.get("signature") != signature:
             raise ValueError(f"command signature differs: {command['handler']}; review and run tools/mon_contracts.py --sync-signatures")
-        registered.add((path, command["name"]))
     # Every declared native command needs an explicit role and wire contract.
-    for path in sorted((native / "src").rglob("*.rs")):
-        if path not in cache:
-            cache[path] = command_signatures(path.read_text(encoding="utf8"))
-        for name in cache[path]:
-            if (path, name) not in registered:
-                raise ValueError(f"native command absent from registry: {path.relative_to(native)}::{name}")
+    for name, (path, _) in declarations.items():
+        if name not in names:
+            raise ValueError(f"native command absent from registry: {path.relative_to(native)}::{name}")
     if synchronize:
         (native / "command_registry.json").write_text(json.dumps(registry, ensure_ascii=False, indent=2) + "\n", encoding="utf8", newline="\n")
     return commands
