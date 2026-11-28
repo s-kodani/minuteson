@@ -743,6 +743,30 @@ fn deletion_startup_admission_models_use_only_native_root_and_never_moved_consen
 }
 
 #[test]
+fn deletion_startup_admission_models_accepts_only_a_saved_device_difference() {
+    use crate::storage::deletion::relocation::receiver::synthetic_consent_record;
+    use crate::test_support::relocation_identity::with_change;
+
+    let mut fixture = NativeFixture::new(false, false);
+    let (operation, file) = synthetic_model(&fixture, false);
+    let before = synthetic_consent_record(fixture.storage.as_ref().unwrap(), &operation);
+    fixture.select();
+    let (bootstrap, storage) = with_change("models", true, || fixture.open());
+    assert!(!storage.data_write_blocked());
+    assert_eq!(synthetic_consent_record(&storage, &operation), before);
+    assert!(file.exists());
+    drop(storage);
+    drop(bootstrap);
+
+    let bootstrap = Bootstrap::open(&fixture.config, &fixture.legacy).unwrap();
+    let error = with_change("models", false, || bootstrap.open_storage())
+        .err()
+        .expect("inode が違うモデル削除履歴を受け付けない");
+    assert!(error.contains("承認済みのモデル削除履歴"));
+    assert!(file.exists());
+}
+
+#[test]
 fn deletion_startup_admission_substituted_native_models_root_is_rejected_before_database_mutation()
 {
     let mut f = NativeFixture::new(false, false);
