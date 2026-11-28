@@ -568,11 +568,22 @@ fn flac_playback_and_both_ai_wav_paths_match_verified_caf() {
     let info = store.insert(flac).unwrap();
     assert_eq!(info.track_kind, "imported");
     assert_eq!(info.alignment, "unverified");
-    let packet = store.read(&info.token, 65530).unwrap();
-    assert_eq!(
-        &packet[12..],
-        &caf.read_pcm(65530, frames as u64 - 65530).unwrap()
-    );
+    let channels = info.channels as usize;
+    for (first, count) in [(0, 65536), (65530, frames as u64 - 65530)] {
+        let packet = store.read(&info.token, first).unwrap();
+        let expected = caf.read_pcm(first, count).unwrap();
+        let channel_bytes = count as usize * 4;
+        assert_eq!(packet.len(), 12 + channels * channel_bytes);
+        for (channel, plane) in packet[12..].chunks_exact(channel_bytes).enumerate() {
+            for (actual, frame) in plane
+                .chunks_exact(4)
+                .zip(expected.chunks_exact(channels * 4))
+            {
+                let start = channel * 4;
+                assert_eq!(actual, &frame[start..start + 4]);
+            }
+        }
+    }
     store.close(&info.token).unwrap();
     assert!(store.read(&info.token, 0).is_err());
 }
