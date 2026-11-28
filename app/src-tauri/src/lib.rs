@@ -125,6 +125,7 @@ use analysis_worker::commands::{
 };
 use analysis_worker::AnalysisController;
 use application_close::commands::{finish_main_close, get_application_close_activity};
+use capture_inputs::commands::{get_capture_applications, get_capture_inputs};
 use capture_test::commands::{
     cancel_capture_test, discard_capture_test, get_capture_test_levels, get_capture_test_snapshot,
     prepare_capture_test_playback, reconcile_capture_test_start, start_capture_test,
@@ -210,42 +211,6 @@ use voice::commands::{
 
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
-
-#[tauri::command]
-async fn get_capture_inputs(
-    window: WebviewWindow,
-) -> Result<capture_inputs::InputDevices, mon_contracts::AppError> {
-    let result: Result<capture_inputs::InputDevices, String> = async move {
-        if window.label() != "main" {
-            return Err("マイク一覧はメイン画面で確認してください".into());
-        }
-        let app = window.app_handle().clone();
-        tauri::async_runtime::spawn_blocking(move || RecorderController::inputs(&app))
-            .await
-            .map_err(|e| e.to_string())?
-    }
-    .await;
-    result.map_err(|message| mon_contracts::AppError::from_command("get_capture_inputs", message))
-}
-
-#[tauri::command]
-async fn get_capture_applications(
-    window: WebviewWindow,
-) -> Result<capture_scope::Applications, mon_contracts::AppError> {
-    let result: Result<capture_scope::Applications, String> = async move {
-        if window.label() != "main" {
-            return Err("録音対象アプリの一覧はメイン画面で確認してください".into());
-        }
-        let app = window.app_handle().clone();
-        tauri::async_runtime::spawn_blocking(move || RecorderController::applications(&app))
-            .await
-            .map_err(|e| e.to_string())?
-    }
-    .await;
-    result.map_err(|message| {
-        mon_contracts::AppError::from_command("get_capture_applications", message)
-    })
-}
 
 #[tauri::command]
 fn hide_recorder_panel(window: WebviewWindow) -> Result<(), mon_contracts::AppError> {
