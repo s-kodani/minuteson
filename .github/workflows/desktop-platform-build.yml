@@ -186,14 +186,26 @@ jobs:
               sysctl kern.memorystatus_vm_pressure_level || echo 'Memory pressure level unavailable'
               vm_stat || echo 'VM counters unavailable'
               # Report process counts and summed RSS in KiB without recording command lines.
-              ps -Aww -o rss=,comm=,args= | awk '
-                $2 ~ /(^|\/)(Playwright|com\.apple\.WebKit\.[^/]+)$/ { webkit += $1; webkit_count++ }
-                $2 ~ /(^|\/)node$/ && $0 ~ /\/(vite\.js|\.bin\/vite)([[:space:]]|$)/ { vite += $1; vite_count++ }
-                END {
-                  printf "WebKit processes=%d rss_kib=%d\n", webkit_count, webkit
-                  printf "Vite processes=%d rss_kib=%d\n", vite_count, vite
+              # macOS awk ends a /regex/ literal at a slash inside brackets, so match with
+              # string regexes. comm may contain spaces: keep everything after the RSS field.
+              ps -Aww -o rss=,comm= | awk '
+                {
+                  rss = $1
+                  name = $0
+                  sub("^[[:space:]]*[0-9]+[[:space:]]+", "", name)
                 }
-              ' || echo 'Process sample unavailable'
+                name ~ "(^|/)(Playwright|com[.]apple[.]WebKit[.][^/]+)$" { webkit += rss; webkit_count++ }
+                END { printf "WebKit processes=%d rss_kib=%d\n", webkit_count, webkit }
+              ' || echo 'WebKit process sample unavailable'
+              ps -Aww -o rss=,args= | awk '
+                {
+                  rss = $1
+                  command = $0
+                  sub("^[[:space:]]*[0-9]+[[:space:]]+", "", command)
+                }
+                command ~ "^([^[:space:]]*/)?node[[:space:]]" && command ~ "/(vite[.]js|[.]bin/vite)([[:space:]]|$)" { vite += rss; vite_count++ }
+                END { printf "Vite processes=%d rss_kib=%d\n", vite_count, vite }
+              ' || echo 'Vite process sample unavailable'
               sleep 9 &
               sleep_pid=$!
               wait "$sleep_pid"
