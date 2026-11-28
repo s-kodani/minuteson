@@ -264,9 +264,6 @@ impl Bootstrap {
             if !changed {
                 if next.current != actual || next.recovery != previous.recovery {
                     // 履歴に残った証拠を保ち、起動設定の現在値だけを更新する。
-                    if let Some(pending) = &mut next.pending_move {
-                        pending.source = actual.clone();
-                    }
                     next.current = actual;
                     next.revision = next
                         .revision

@@ -241,8 +241,10 @@ impl Placement<'_> {
             return Ok(false);
         }
         let (json,rh,intent,manifest,control,registry,registry_hash): (String,String,String,String,String,String,String) = self.db.query_row("SELECT root,root_hash,intent_hash,manifest_hash,control_hash,registry_identity,registry_hash FROM admission WHERE id=1 AND length(CAST(root AS BLOB))<=16384 AND length(registry_identity)<=512", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|e|e.to_string())?;
+        let saved_root: Root = serde_json::from_str(&json).map_err(|e| e.to_string())?;
         if count != 1
-            || json != serde_json::to_string(root).map_err(|e| e.to_string())?
+            || !saved_root.same_persistent(root)
+            || json != serde_json::to_string(&saved_root).map_err(|e| e.to_string())?
             || hash(json.as_bytes()) != rh
             || intent != hash(&serde_json::to_vec(&a.pending).map_err(|e| e.to_string())?)
             || manifest != self.pending.manifest_hash
@@ -255,8 +257,9 @@ impl Placement<'_> {
             .get("meetings.sqlite3")
             .ok_or("配置したDBの所有証拠がありません")?;
         if db_node.state != "copied"
-            || db_node.identity.as_ref() != Some(&root.database)
-            || root.directory != self.pending.target_directory
+            || db_node.identity.as_ref() != Some(&saved_root.database)
+            || saved_root.directory != self.pending.target_directory
+            || !self.matches_saved_target(&saved_root.database, &root.database)
             || root.path != self.pending.target
         {
             return Err("承認済みルートと配置したDBの所有証拠が一致しません".into());
@@ -279,10 +282,19 @@ impl Placement<'_> {
                 .nodes
                 .get("meetings.sqlite3")
                 .ok_or("配置したDBの所有証拠がありません")?;
-            if db_node.identity.as_ref() != Some(&root.database) {
+            let saved_db = db_node
+                .identity
+                .as_ref()
+                .ok_or("配置したDBの所有証拠がありません")?;
+            if !self.matches_saved_target(saved_db, &root.database) {
                 return Err("切替対象DBの所有者が一致しません".into());
             }
-            let json = serde_json::to_string(root).map_err(|e| e.to_string())?;
+            let saved_root = Root {
+                path: root.path.clone(),
+                directory: self.pending.target_directory.clone(),
+                database: saved_db.clone(),
+            };
+            let json = serde_json::to_string(&saved_root).map_err(|e| e.to_string())?;
             let registry = serde_json::to_string(&registry).map_err(|e| e.to_string())?;
             self.guard()?;
             self.db

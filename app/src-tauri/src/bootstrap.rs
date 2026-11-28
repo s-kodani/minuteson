@@ -371,7 +371,7 @@ impl Record {
             if !uuid(&p.operation_id)
                 || !uuid(&p.confirmation_id)
                 || !sha(&p.manifest_hash)
-                || p.source != self.current
+                || !p.source.same_persistent(&self.current)
                 || p.target.starts_with(&self.current.path)
                 || self.current.path.starts_with(&p.target)
             {
@@ -1157,21 +1157,19 @@ mod windows_tests {
             .unwrap();
         let preview = prepared.preview();
         let cancelled = std::cell::Cell::new(false);
-        assert!(
-            prepared
-                .publish(
-                    &bootstrap,
-                    &storage,
-                    &preview.confirmation_id,
-                    &|| cancelled.get(),
-                    &|phase| {
-                        if phase == "copying" {
-                            cancelled.set(true);
-                        }
+        assert!(prepared
+            .publish(
+                &bootstrap,
+                &storage,
+                &preview.confirmation_id,
+                &|| cancelled.get(),
+                &|phase| {
+                    if phase == "copying" {
+                        cancelled.set(true);
                     }
-                )
-                .is_err()
-        );
+                }
+            )
+            .is_err());
         assert_eq!(
             bootstrap.view().unwrap().active_meeting_root,
             storage.root()

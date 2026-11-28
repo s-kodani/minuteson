@@ -351,8 +351,9 @@ pub(in crate::storage::backup) fn verify_image(
     let (n,json,sha):(i64,String,String)=db.query_row("SELECT (SELECT count(*) FROM metadata),proof,hash FROM metadata WHERE id=1 AND length(CAST(proof AS BLOB))<=1024",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?;
     if n != 1
         || hash(json.as_bytes()) != sha
-        || serde_json::from_str::<Identity>(&json).map_err(|e| e.to_string())?
-            != Identity::read(&private_directory(root)?)?
+        || !serde_json::from_str::<Identity>(&json)
+            .map_err(|e| e.to_string())?
+            .same_persistent(&Identity::read(&private_directory(root)?)?)
     {
         return Err("移行先台帳のルート証拠が一致しません".into());
     }
