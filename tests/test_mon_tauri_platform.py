@@ -83,7 +83,7 @@ class TauriPlatformTests(unittest.TestCase):
         self.assertIn(command, self.grants("main"))
         for window in ["recorder", "recording-confirmation", "startup-attention"]:
             self.assertNotIn(command, self.grants(window))
-        source = (TAURI / "src/lib.rs").read_text(encoding="utf8")
+        source = (TAURI / "src/input_status/commands.rs").read_text(encoding="utf8")
         body = source.split("async fn " + command, 1)[1].split("#[tauri::command]", 1)[0]
         self.assertIn('window.label() != "main"', body)
         self.assertIn("spawn_blocking", body)

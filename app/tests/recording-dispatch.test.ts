@@ -9,9 +9,9 @@ test("capture polling and stopping dispatch lock waits and file reads off the na
     get_capture_test_levels: "capture_test/commands.rs",
     get_capture_test_snapshot: "capture_test/commands.rs",
     cancel_capture_test: "capture_test/commands.rs",
-    receive_recording_input_notice: "lib.rs",
-    render_recording_input_notice: "lib.rs",
-    close_recording_input_notice: "lib.rs",
+    receive_recording_input_notice: "input_status/commands.rs",
+    render_recording_input_notice: "input_status/commands.rs",
+    close_recording_input_notice: "input_status/commands.rs",
   };
   for(const [name, file] of Object.entries(commandSources)) {
     const source=readFileSync(new URL("../src-tauri/src/"+file,import.meta.url),"utf8");
