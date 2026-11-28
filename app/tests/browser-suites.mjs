@@ -77,6 +77,7 @@ export const browserSuites = [
   ["info-headings", "browser-fixture.js", "info-headings-browser-check.js"],
   ["theme", "theme-browser-fixture.js", "theme-browser-check.js"],
   ["recording", null, "recording-confirmation-browser-check.js"],
+  ["recording-snapshot-sync", "browser-fixture.js", "recording-snapshot-sync-browser-check.js"],
   ["recorder-panel", null, "recorder-panel-browser-check.js"],
   ["recorder-waveform", null, "recorder-waveform-browser-check.js"],
   ["recorder-operations", null, "recorder-operation-browser-check.js"],

@@ -13,6 +13,12 @@ const unknown=()=>({microphone:{state:"unknown"} as VisibleInput,system:{state:"
 const empty=():View=>({owner:null,...unknown()});
 const Context=createContext<View>(empty());
 
+function sameVisibleInput(a: VisibleInput, b: VisibleInput): boolean {
+  if (a.state !== b.state) return false;
+  if (!("sourceEpoch" in a) || !("sourceEpoch" in b)) return true;
+  return a.sourceEpoch === b.sourceEpoch && a.interruptions === b.interruptions && a.reason === b.reason;
+}
+
 class JournalSessionAdapter{
   private session:InputJournalSession;
   constructor(owner:string){this.session=new InputJournalSession(owner);}
@@ -28,7 +34,8 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
   const [view,setView]=useState<View>(empty());
   useEffect(()=>{
     let disposed=false;
-    setView({...empty(),owner});
+    let lastView = {...empty(),owner};
+    setView(lastView);
     if(!owner||!isTauri())return;
     const diagnosticLog=new InputDiagnosticLog();
     diagnosticLog.bindWindow(windowLabel);
@@ -76,7 +83,9 @@ export function RecordingInputProvider({children,windowLabel}:{children:ReactNod
       if(disposed)return;
       const at=clock.read(mono(),wall()),read=statusPoll.failed?unknown():statusPoll.read() as {microphone:VisibleInput;system:VisibleInput};
       logJournal(at);
-      setView({owner,microphone:read.microphone,system:read.system});
+      if (sameVisibleInput(lastView.microphone, read.microphone) && sameVisibleInput(lastView.system, read.system)) return;
+      lastView = {owner,microphone:read.microphone,system:read.system};
+      setView(lastView);
     };
     // Freshness, clock reversal and hung reads are checked every 100 ms; the
     // native status files are still read at the existing 500 ms cadence.

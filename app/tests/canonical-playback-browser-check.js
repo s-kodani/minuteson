@@ -10,6 +10,14 @@ async page => {
     const reads=await calls("read_playback_chunk");
     check(reads[before].args.offsetFrames===offset,`${label}: wrong first frame`);
     check(await slider.getAttribute("max")===String(max),`${label}: wrong playback length`);
+    if (label === "全体") {
+      // この1秒分は1パケット。バッファ投入・終了の間も表示位置が進む。
+      await page.waitForFunction(() => {
+        const input = document.querySelector(".audio-player input[type=range]");
+        return input && Number(input.value) > 0 && Number(input.value) < Number(input.max);
+      });
+      results.push("再生中は音声パケットの終了前にも表示位置が進む");
+    }
     await player.getByRole("button",{name:"再生",exact:true}).waitFor();
     check(await slider.inputValue()===String(max),`${label}: did not reach EOF`);
     check(await page.getByRole("alert").count()===0,`${label}: playback error`);
