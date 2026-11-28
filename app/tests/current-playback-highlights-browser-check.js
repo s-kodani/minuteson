@@ -35,7 +35,10 @@ async page => {
     recognizedText:`発言${i}`,effectiveText:`発言${i}`,attributionState:"assigned",speakerIds:[i%2?"speaker-b":"speaker-a"]
   }))));
   await page.getByRole("button", {name:"会議A",exact:true}).click();
-  check(await editor.locator('[data-utterance-id]').count()===103&&await editor.locator('.transcript-pages').count()===0,"utterances remain paginated");
+  const utteranceCount=async()=>await page.evaluate(()=>window.monTranscriptVirtualizeThreshold===0)
+    ? Number(await editor.getByRole("listitem").first().getAttribute("aria-setsize"))
+    : editor.locator('[data-utterance-id]').count();
+  check(await utteranceCount()===103&&await editor.locator('.transcript-pages').count()===0,"utterances remain paginated");
   const header=page.locator('.transcript-primary-heading');
   const jump=header.getByRole('button',{name:'再生位置へ移動',exact:true});
   check(await jump.isDisabled(),'jump enabled without a timeline');
@@ -47,7 +50,7 @@ async page => {
   await jump.and(header.locator('button:enabled')).waitFor();
   check(await editor.locator('[data-utterance-id="synthetic-102"]').count()===0,'timeline automatically cleared the filter');
   await jump.click();await editor.locator('[data-utterance-id="synthetic-102"]').waitFor();
-  check(await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).inputValue()===''&&await editor.locator('[data-utterance-id]').count()===103,'explicit jump did not reveal all matching rows');
+  check(await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).inputValue()===''&&await utteranceCount()===103,'explicit jump did not reveal all matching rows');
   const target=editor.locator('[data-utterance-id="synthetic-102"]');
   await target.and(editor.locator('.utterance-playing')).waitFor();
   check(await target.evaluate(el=>{const r=el.getBoundingClientRect();return !el.classList.contains('utterance-group-fragment')&&r.height>0&&r.top>=0&&r.bottom<=innerHeight;}),'jump did not scroll to the target');

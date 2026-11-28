@@ -82,7 +82,6 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
   const nameOpener = useRef<HTMLElement | null>(null), addOpener = useRef<HTMLElement | null>(null);
   const mounted = useRef(true), running = useRef(false), barrier = useRef(async () => {});
   const bodyFocus = useRef<HTMLElement | null>(null);
-  const transcriptRoot=useRef<HTMLElement|null>(null);
   const [jumpRequest,setJumpRequest]=useState<{id:string}|null>(null);
   const [speakerMount] = useState(() => { const node = document.createElement("div"); node.className = "workspace-panel-body speaker-panel-body"; return node; });
   const [speakerFilter, setSpeakerFilter] = useState(""), [query, setQuery] = useState("");
@@ -98,7 +97,13 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
     return counts;
   }, [view]);
   const filtered = useMemo(() => view ? filterUtterances(view, speakerFilter, query) : [], [view, speakerFilter, query]);
-  const shown = useMemo(() => retainedTextRows(view?.utterances ?? [], filtered, Object.keys(texts)).rows, [view, filtered, texts]);
+  // 入力のたびに全発言の絞り込みや高さの索引を作り直さない。
+  const textIdsKey = JSON.stringify(Object.keys(texts));
+  const textIds = useMemo(() => JSON.parse(textIdsKey) as string[], [textIdsKey]);
+  const shown = useMemo(() => textIds.length ? retainedTextRows(view?.utterances ?? [], filtered, textIds).rows : filtered,
+    [view, filtered, textIds]);
+  const assignmentId = assignmentEditor?.utteranceId;
+  const retainedIds = useMemo(() => assignmentId ? [...textIds, assignmentId] : textIds, [textIds, assignmentId]);
   const consolidationCandidate=useRef<{view:Analysis;possible:boolean}|null>(null);
   const consolidationAttempt=useRef("");
   const consolidationOperation=useRef<{key:string;id:string}|null>(null);
@@ -113,12 +118,6 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
     if(hidden){setQuery("");setSpeakerFilter("");}
     setJumpRequest({id:jumpRow.id});
   };
-  useLayoutEffect(()=>{
-    if(!jumpRequest||!visible)return;
-    const row=transcriptRoot.current?.querySelector<HTMLElement>(`[data-utterance-id="${CSS.escape(jumpRequest.id)}"]`);
-    row?.scrollIntoView({block:"center",behavior:"auto"});
-    setJumpRequest(null);
-  },[jumpRequest,visible]);
   const playingIds = usePlaybackHighlights({ meetingId, analysisId: analysis?.id ?? null, rows: shown,
     active: visible && !navigationLocked, trackKinds: tracks.kinds });
   const viewDisabled = navigationLocked || busy;
@@ -401,7 +400,7 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
       setAssignmentEditor({ utteranceId:utterance.id, analysisId:analysis.id, startUs:utterance.startUs, speakerIds:[...utterance.speakerIds] });
     },
   };
-  return <section ref={transcriptRoot} className="transcript-card" aria-label="文字起こし編集" onCompositionStartCapture={() => { composingInput.current = true; }} onCompositionEndCapture={() => { composingInput.current = false; }}>
+  return <section className="transcript-card" aria-label="文字起こし編集" onCompositionStartCapture={() => { composingInput.current = true; }} onCompositionEndCapture={() => { composingInput.current = false; }}>
     {actionsHost ? createPortal(editorActions, actionsHost) : <div className="transcript-actions">{editorActions}</div>}
     <ToastNotice scope={meetingId} type="transcript-copy" message={copyStatus?.message} level={copyStatus?.level} eventId={copyStatus?.eventId} />
     {loading && <p className="transcript-state" role="status">文字起こしを読み込んでいます。</p>}
@@ -445,11 +444,13 @@ export function TranscriptEditor({ meetingId, sourceEpoch = 0, writeProtected = 
         </section>}
 
         <div className="transcript-actions transcript-search"><label><span className="sr-only">発言を検索</span><input type="search" placeholder="発言を検索" disabled={viewDisabled} value={query} onChange={event => setQuery(event.target.value)} maxLength={1000} /></label><span>{filtered.length} / {view?.utterances.length ?? 0} 発言</span></div>
-        {view && filtered.length > 0 ? <TranscriptScrollRegion view={view} rows={shown} filterKey={JSON.stringify([speakerFilter, query])} disabled={viewDisabled}>
-          <TranscriptRows rows={shown} texts={texts} playingIds={playingIds} meetingId={meetingId} speakers={speakers}
+        {view && shown.length > 0 ? <TranscriptScrollRegion view={view} rows={shown} filterKey={JSON.stringify([speakerFilter, query])}
+          disabled={viewDisabled} visible={visible} retainedIds={retainedIds} jumpRequest={jumpRequest}
+          onJumpHandled={() => setJumpRequest(null)} renderRows={placements =>
+          <TranscriptRows rows={shown} placements={placements} texts={texts} playingIds={playingIds} meetingId={meetingId} speakers={speakers}
             colorKeys={view?.speakerColorKeys}
-            canPlay={!!audio?.canPlay} editable={rowsEditable} saveFailed={!!snapshot.error} dirty={snapshot.dirty} actions={rowActions} />
-        </TranscriptScrollRegion> : <p className="transcript-empty-results">条件に一致する発言はありません。</p>}
+            canPlay={!!audio?.canPlay} editable={rowsEditable} saveFailed={!!snapshot.error} dirty={snapshot.dirty} actions={rowActions} />} />
+          : <p className="transcript-empty-results">条件に一致する発言はありません。</p>}
     </TranscriptSplit>}
     <IssueNotice scope={meetingId} type="transcript-consolidation" label="発言の統合" message={consolidationError}/>
     <IssueNotice scope={meetingId} type="transcript-save" label="文字起こしの保存" message={snapshot.error || error} action={snapshot.error ? { kind: "retry", label: "文字起こし保存を再試行", disabled, run: retry } : undefined} />

@@ -60,11 +60,19 @@ const TranscriptRow = memo(function TranscriptRow({ utterance, text, playing, me
   </article>;
 });
 
-// Visibility and transient locks belong to the surrounding panel/fieldset, not
-// every row. Polling, navigation and playback clock ticks can reuse this tree.
-export const TranscriptRows = memo(function TranscriptRows({ rows, texts, playingIds, ...shared }: SharedProps & {
+export interface TranscriptRowPlacement { index: number; top: number }
+
+// 表示と一時的な操作制限は外側で管理し、各行はタブ切替や再生位置の更新時も再利用する。
+export const TranscriptRows = memo(function TranscriptRows({ rows, texts, playingIds, placements, ...shared }: SharedProps & {
   rows: readonly Utterance[]; texts: Readonly<Record<string, string>>; playingIds: ReadonlySet<string>;
+  placements?: readonly TranscriptRowPlacement[];
 }) {
-  return rows.map(utterance => <TranscriptRow key={utterance.id} {...shared} utterance={utterance}
-    text={Object.hasOwn(texts, utterance.id) ? texts[utterance.id] : undefined} playing={playingIds.has(utterance.id)} />);
+  const renderRow = (utterance: Utterance, index: number, top?: number) =>
+    <div key={utterance.id} role="listitem" aria-setsize={rows.length} aria-posinset={index + 1}
+      style={top === undefined ? undefined : { position: "absolute", insetInline: 0, top }}>
+      <TranscriptRow {...shared} utterance={utterance}
+        text={Object.hasOwn(texts, utterance.id) ? texts[utterance.id] : undefined} playing={playingIds.has(utterance.id)} />
+    </div>;
+  return placements ? placements.map(({ index, top }) => renderRow(rows[index], index, top))
+    : rows.map((utterance, index) => renderRow(utterance, index));
 });
