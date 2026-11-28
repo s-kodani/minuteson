@@ -150,39 +150,57 @@ fn current_schema_for(
     };
     cache
         .get_or_init(|| {
+            use crate::storage::{schema_40, schema_41};
             let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
             expected
-                .execute_batch(
-                    &crate::storage::schema_40::current_sql(layout).map_err(|e| e.to_string())?,
-                )
+                .execute_batch(&schema_41::current_sql(layout))
                 .map_err(|e| e.to_string())?;
             let objects = schema(&expected)?;
-            let hash = crate::storage::schema_40::deletion_v1_schema_hash(&objects)?;
+            let older_objects = objects
+                .iter()
+                .filter(|(_, _, table, _)| table != schema_41::TABLE)
+                .cloned()
+                .collect::<Vec<_>>();
+            let hash = schema_40::deletion_v1_schema_hash(&older_objects)?;
             Ok(KnownSchema { objects, hash })
         })
         .as_ref()
         .map_err(Clone::clone)
 }
-fn readonly_schema39(
+fn readonly_schema(
+    version: usize,
     layout: crate::storage::schema_40::Layout,
 ) -> Result<&'static KnownSchema, String> {
-    static LF: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
-    static CRLF: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
-    let cache = match layout {
-        crate::storage::schema_40::Layout::Lf => &LF,
-        crate::storage::schema_40::Layout::Crlf => &CRLF,
+    use crate::storage::{schema_40, schema_40::Layout, schema_41};
+    static LF39: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
+    static CRLF39: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
+    static LF40: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
+    static CRLF40: std::sync::OnceLock<Result<KnownSchema, String>> = std::sync::OnceLock::new();
+    let cache = match (version, layout) {
+        (schema_40::PREVIOUS_VERSION, Layout::Lf) => &LF39,
+        (schema_40::PREVIOUS_VERSION, Layout::Crlf) => &CRLF39,
+        (schema_41::PREVIOUS_VERSION, Layout::Lf) => &LF40,
+        (schema_41::PREVIOUS_VERSION, Layout::Crlf) => &CRLF40,
+        _ => return Err("未対応の削除履歴のDB形式です".into()),
     };
     cache
         .get_or_init(|| {
             let expected = Connection::open_in_memory().map_err(|e| e.to_string())?;
+            let old40 = version == schema_41::PREVIOUS_VERSION;
+            let sql = if old40 {
+                schema_40::current_sql(layout)
+            } else {
+                schema_40::previous_sql_for(layout)
+            };
             expected
-                .execute_batch(
-                    &crate::storage::schema_40::previous_sql_for(layout)
-                        .map_err(|e| e.to_string())?,
-                )
+                .execute_batch(&sql.map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
             let objects = schema(&expected)?;
-            let hash = digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?);
+            let hash = if old40 {
+                schema_40::deletion_v1_schema_hash(&objects)?
+            } else {
+                digest(&serde_json::to_vec(&objects).map_err(|e| e.to_string())?)
+            };
             Ok(KnownSchema { objects, hash })
         })
         .as_ref()
@@ -209,14 +227,14 @@ fn inspect_schema(db: &Connection) -> Result<&'static KnownSchema, String> {
     {
         return Err("削除対象DBに未対応の一時オブジェクトがあります".into());
     }
-    let expected = match crate::storage::schema_40::current_layout(db) {
+    let expected = match crate::storage::schema_41::current_layout(db) {
         Ok(layout) => current_schema_for(layout)?,
         Err(original) => {
             // A selected native history/rebinding image is inspected before
-            // startup migrates it. No writable schema39 capability is minted.
-            let layout = crate::storage::schema_40::verify_readonly_previous(db)
+            // 読み取り専用の旧イメージを移行前に照合する。
+            let (version, layout) = crate::storage::schema_41::verify_readonly_previous(db)
                 .map_err(|_| original.to_string())?;
-            readonly_schema39(layout)?
+            readonly_schema(version, layout)?
         }
     };
     crate::storage::salvage_schema::verify(db).map_err(|error| error.to_string())?;
@@ -470,6 +488,14 @@ fn closed_scope(db: &Connection, meeting: &str, check: &impl Fn() -> bool) -> Re
             // Derived diagnosis is bound to the exact meeting by the verified
             // extension schema. It has no native deletion authority.
             if child == "salvage_meetings" && parent == "meetings" && action == "CASCADE" {
+                continue;
+            }
+            // 解析リビジョンに従属する診断は同じ範囲の行として自動削除する。
+            // 削除v1の既存マニフェストはそのまま照合できる。
+            if child == crate::storage::schema_41::TABLE
+                && parent == "analysis_revisions"
+                && action == "CASCADE"
+            {
                 continue;
             }
             let own = TARGETS

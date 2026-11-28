@@ -131,6 +131,46 @@ fn deletion_scope_counts_current_markdown_transcript_and_vocabulary_without_copy
 fn deletion_row_phase_clears_heads_then_dependencies_and_keeps_other_meetings_models_and_external_files(
 ) {
     let f = Fixture::new();
+    let candidate = {
+        let db = f.storage.connection.lock().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        db.execute(
+            "INSERT INTO analysis_revisions(id,meeting_id,revision_no,origin,publication_state,audio_manifest_hash,profile_snapshot_json,config_json,content_hash,schema_version,created_at) VALUES(?1,?2,2,'engine','candidate',?3,'{}','{}',?3,1,0)",
+            params![id,f.meeting,"a".repeat(64)],
+        ).unwrap();
+        crate::storage::analysis_vocabulary::insert(
+            &db,
+            &id,
+            &[mon_contracts::IgnoredHotword {
+                term: "C#".into(),
+                reason: mon_contracts::HotwordRejectionReason::ReservedSyntax,
+            }],
+            false,
+        )
+        .unwrap();
+        id
+    };
+    {
+        let db = f.storage.connection.lock().unwrap();
+        crate::storage::meeting_access::install(&db).unwrap();
+        db.execute(
+            "INSERT INTO temp.mon_meeting_deletion_guard VALUES(?1,0)",
+            [&f.meeting],
+        )
+        .unwrap();
+        let error = db
+            .execute(
+                "DELETE FROM analysis_vocabulary_diagnostics WHERE analysis_revision_id=?1",
+                [&candidate],
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("meeting_deletion_reserved"));
+        db.execute(
+            "DELETE FROM temp.mon_meeting_deletion_guard WHERE meeting_id=?1",
+            [&f.meeting],
+        )
+        .unwrap();
+    }
     let scope = f.scope();
     let operation = f.consent(&scope);
     let external = f._root.path().join("external-export.md");
@@ -154,6 +194,7 @@ fn deletion_row_phase_clears_heads_then_dependencies_and_keeps_other_meetings_mo
     assert_eq!(count(&db, "meetings"), 1);
     for name in [
         "analysis_revisions",
+        "analysis_vocabulary_diagnostics",
         "minutes_markdown",
         "working_drafts",
         "processing_jobs",

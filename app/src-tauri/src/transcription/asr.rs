@@ -146,6 +146,14 @@ pub(crate) trait AsrAdapter: Sync {
         config: &AsrConfig,
         duration: i64,
     ) -> Result<Vec<Segment>, String>;
+    fn parse_saved_result(
+        &self,
+        bytes: &[u8],
+        config: &AsrConfig,
+        duration: i64,
+    ) -> Result<super::SavedRecognition, String> {
+        Ok((self.parse_result(bytes, config, duration)?, Vec::new()))
+    }
     fn guarded(
         &self,
         config: &AsrConfig,
@@ -359,6 +367,14 @@ impl AsrAdapter for TransducerAdapter {
     fn parse_result(&self, b: &[u8], c: &AsrConfig, t: i64) -> Result<Vec<Segment>, String> {
         super::transducer::parse(b, c, t)
     }
+    fn parse_saved_result(
+        &self,
+        bytes: &[u8],
+        config: &AsrConfig,
+        duration: i64,
+    ) -> Result<super::SavedRecognition, String> {
+        super::transducer::parse_with_diagnostics(bytes, config, duration)
+    }
 }
 
 /// Worker identity is declared once by an adapter, independently of model names.
@@ -407,6 +423,72 @@ mod tests {
         }
     }
     #[test]
+    fn transcription_saved_result_supports_old_and_new_hotword_diagnostics() {
+        use mon_contracts::HotwordRejectionReason::{
+            OutsideVocabulary, ReservedSyntax, Unknown, Whitespace,
+        };
+        let config = config(TRANSDUCER);
+        let adapter = adapter(&config).unwrap();
+        let mut models = config
+            .backend
+            .as_ref()
+            .unwrap()
+            .files
+            .iter()
+            .map(|(slot, proof)| (slot.clone(), proof.path.clone()))
+            .collect::<BTreeMap<_, _>>();
+        models.insert("model".into(), config.model.path.clone());
+        let mut output = json!({
+            "schemaVersion":1, "backendId":TRANSDUCER, "models":models, "durationUs":1_000_000,
+            "segments":[], "tokens":[], "ignoredHotwords":["C#","A/B","New York","𠮷","?"]
+        });
+        let parse = |value: &serde_json::Value| {
+            adapter
+                .parse_saved_result(&serde_json::to_vec(value).unwrap(), &config, 1_000_000)
+                .map(|(_, ignored)| ignored)
+        };
+        let legacy = parse(&output).unwrap();
+        assert_eq!(
+            legacy.iter().map(|word| word.reason).collect::<Vec<_>>(),
+            vec![Unknown; 5]
+        );
+        output["ignoredHotwordDetails"] = json!([
+            {"term":"C#","reason":"reservedSyntax"}, {"term":"A/B","reason":"reservedSyntax"},
+            {"term":"New York","reason":"whitespace"}, {"term":"𠮷","reason":"outsideVocabulary"},
+            {"term":"?","reason":"futureReason"}
+        ]);
+        let current = parse(&output).unwrap();
+        assert_eq!(
+            current.iter().map(|word| word.reason).collect::<Vec<_>>(),
+            [
+                ReservedSyntax,
+                ReservedSyntax,
+                Whitespace,
+                OutsideVocabulary,
+                Unknown
+            ]
+        );
+        let mut merged = Some(BTreeMap::new());
+        super::super::collect_ignored_hotwords(&mut merged, legacy);
+        super::super::collect_ignored_hotwords(&mut merged, current.clone());
+        super::super::collect_ignored_hotwords(&mut merged, current);
+        let merged = merged.unwrap();
+        assert_eq!(merged.len(), 5);
+        assert_eq!(merged["C#"], ReservedSyntax);
+
+        output["ignoredHotwordDetails"][0]["term"] = json!("different");
+        assert!(parse(&output).is_err());
+        output
+            .as_object_mut()
+            .unwrap()
+            .remove("ignoredHotwordDetails");
+        output["ignoredHotwords"] = json!(vec!["MON"; 1001]);
+        assert!(parse(&output).is_err());
+        output["ignoredHotwords"] = json!(["界".repeat(267)]);
+        assert!(parse(&output).is_err());
+    }
+
+    #[test]
     fn asr_adapters_share_a_validated_segment_contract() {
         for id in [WHISPER, TRANSDUCER] {
             let c = config(id);
@@ -437,6 +519,11 @@ mod tests {
                     text: "確認します".into()
                 }]
             );
+            assert!(a
+                .parse_saved_result(&serde_json::to_vec(&value).unwrap(), &c, 1_000_000)
+                .unwrap()
+                .1
+                .is_empty());
             if id == WHISPER {
                 value["params"]["language"] = json!("en");
             } else {

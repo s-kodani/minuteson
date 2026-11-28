@@ -5,6 +5,7 @@ use super::{
     whisper::{AsrConfig, Segment},
 };
 use crate::local_engine::{OwnedCommand, StableFile};
+use mon_contracts::{HotwordRejectionReason, IgnoredHotword};
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -16,6 +17,8 @@ use std::{
 
 const PROCESS_POLICY: mon_native::process::Policy =
     mon_native::process::Purpose::Inference.policy();
+pub(crate) const MAX_IGNORED_HOTWORDS: usize = 1000;
+pub(crate) const MAX_HOTWORD_BYTES: usize = 800;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -27,6 +30,7 @@ struct Output {
     segments: Vec<Segment>,
     tokens: Vec<Token>,
     ignored_hotwords: Vec<String>,
+    ignored_hotword_details: Option<Vec<IgnoredHotword>>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -40,6 +44,14 @@ pub(crate) fn parse(
     config: &AsrConfig,
     duration: i64,
 ) -> Result<Vec<Segment>, String> {
+    parse_with_diagnostics(bytes, config, duration).map(|(segments, _)| segments)
+}
+
+pub(super) fn parse_with_diagnostics(
+    bytes: &[u8],
+    config: &AsrConfig,
+    duration: i64,
+) -> Result<(Vec<Segment>, Vec<IgnoredHotword>), String> {
     if bytes.len() as u64 > PROCESS_POLICY.result_bytes || duration <= 0 {
         return Err("ASR出力のサイズ・時間が不正です".into());
     }
@@ -61,7 +73,7 @@ pub(crate) fn parse(
         || (output.duration_us - duration).abs() > 100
         || output.segments.len() > 100_000
         || output.tokens.len() > 500_000
-        || output.ignored_hotwords.len() > 1000
+        || output.ignored_hotwords.len() > MAX_IGNORED_HOTWORDS
     {
         return Err("ASR出力が固定したモデル・音声範囲と一致しません".into());
     }
@@ -84,10 +96,35 @@ pub(crate) fn parse(
         }
         previous = token.start_us;
     }
-    if output.ignored_hotwords.iter().any(|s| s.len() > 800) {
+    if output
+        .ignored_hotwords
+        .iter()
+        .any(|s| s.len() > MAX_HOTWORD_BYTES)
+    {
         return Err("ASR用語診断が大きすぎます".into());
     }
-    Ok(output.segments)
+    let ignored = match output.ignored_hotword_details {
+        Some(details) => {
+            if details.len() != output.ignored_hotwords.len()
+                || details
+                    .iter()
+                    .zip(&output.ignored_hotwords)
+                    .any(|(detail, term)| detail.term != *term)
+            {
+                return Err("ASR用語診断の表記が一致しません".into());
+            }
+            details
+        }
+        None => output
+            .ignored_hotwords
+            .into_iter()
+            .map(|term| IgnoredHotword {
+                term,
+                reason: HotwordRejectionReason::Unknown,
+            })
+            .collect(),
+    };
+    Ok((output.segments, ignored))
 }
 
 pub(crate) fn run(

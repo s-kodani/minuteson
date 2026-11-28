@@ -6,8 +6,7 @@ are unchanged. The cache lock covers running tests, not just Cargo compilation.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
-import fcntl
+from contextlib import closing, contextmanager
 import json
 import os
 from pathlib import Path
@@ -19,6 +18,9 @@ import sys
 import threading
 import time
 
+if os.name != "nt":
+    import fcntl
+
 try:
     from tools import mon_rust_suites as suites
 except ModuleNotFoundError:
@@ -28,6 +30,43 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKER = ".mon-rust-tests.json"
 MIB = 1024 * 1024
 PRINT_LOCK = threading.Lock()
+
+
+@contextmanager
+def open_cache_directory(name, parent_fd):
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except FileNotFoundError:
+        yield None
+        return
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def object_directories(debug_fd):
+    with open_cache_directory("deps", debug_fd) as deps_fd:
+        if deps_fd is not None:
+            yield deps_fd
+    # Cargo 1.100 はコンパイル単位ごとに成果物を配置する。
+    with open_cache_directory("build", debug_fd) as build_fd:
+        if build_fd is None:
+            return
+        for package in os.listdir(build_fd):
+            if not re.fullmatch(r"[\w-]+", package, re.ASCII):
+                continue
+            with open_cache_directory(package, build_fd) as package_fd:
+                if package_fd is None:
+                    continue
+                for unit in os.listdir(package_fd):
+                    if not re.fullmatch(r"[0-9a-f]{16}", unit):
+                        continue
+                    with open_cache_directory(unit, package_fd) as unit_fd:
+                        if unit_fd is not None:
+                            with open_cache_directory("out", unit_fd) as out_fd:
+                                if out_fd is not None:
+                                    yield out_fd
 
 
 def report(message):
@@ -198,8 +237,7 @@ class Cache:
                         if footprint(self.path) <= maximum:
                             break
                         self.remove_debug(True, crate.name, child.name)
-                # deps can retain unshared codegen objects from older completed
-                # links. Reclaim those before discarding a reusable generation.
+                # 再利用できる世代を捨てる前に、リンク済みの未共有オブジェクトを回収する。
                 self.remove_completed_objects(maximum)
                 for child in candidates:
                     if footprint(self.path) <= maximum:
@@ -219,7 +257,7 @@ class Cache:
         return after
 
     def remove_completed_objects(self, maximum):
-        """Bounded, locked cleanup of old, unshared deps codegen objects only."""
+        """旧配置と新配置から、リンク済みの未共有オブジェクトを回収する。"""
         if self.lock_fd is None:
             raise ValueError("object cleanup requires the live cache lock")
         self.verify()
@@ -232,26 +270,19 @@ class Cache:
             metadata = os.fstat(root_fd)
             if (metadata.st_dev, metadata.st_ino) != self.identity:
                 raise ValueError("cache was replaced before object cleanup")
-            try:
-                debug_fd = os.open("debug", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                   dir_fd=root_fd)
-            except FileNotFoundError:
-                return
-            try:
-                try:
-                    deps_fd = os.open("deps", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                      dir_fd=debug_fd)
-                except FileNotFoundError:
+            with (open_cache_directory("debug", root_fd) as debug_fd,
+                  closing(object_directories(debug_fd)) as directories):
+                if debug_fd is None:
                     return
-                try:
+                for artifact_fd in directories:
                     candidates = []
-                    for name in os.listdir(deps_fd):
+                    for name in os.listdir(artifact_fd):
                         match = pattern.fullmatch(name)
                         if match is None:
                             continue
-                        proof = os.stat(name, dir_fd=deps_fd, follow_symlinks=False)
+                        proof = os.stat(name, dir_fd=artifact_fd, follow_symlinks=False)
                         try:
-                            linked = os.stat(match[1], dir_fd=deps_fd, follow_symlinks=False)
+                            linked = os.stat(match[1], dir_fd=artifact_fd, follow_symlinks=False)
                         except FileNotFoundError:
                             continue
                         if (stat.S_ISREG(proof.st_mode) and proof.st_uid == os.geteuid()
@@ -261,18 +292,16 @@ class Cache:
                             candidates.append((proof.st_mtime_ns, name, proof))
                     for _, name, proof in sorted(candidates):
                         if excess <= 0:
-                            break
+                            return
                         self.verify()
-                        current = os.stat(name, dir_fd=deps_fd, follow_symlinks=False)
+                        current = os.stat(name, dir_fd=artifact_fd, follow_symlinks=False)
                         if (current != proof or current.st_mtime_ns != proof.st_mtime_ns
                                 or current.st_ctime_ns != proof.st_ctime_ns):
                             raise ValueError("codegen object changed before cleanup")
-                        os.unlink(name, dir_fd=deps_fd)
+                        os.unlink(name, dir_fd=artifact_fd)
                         excess -= proof.st_blocks * 512
-                finally:
-                    os.close(deps_fd)
-            finally:
-                os.close(debug_fd)
+                    if excess <= 0:
+                        return
         finally:
             os.close(root_fd)
 
@@ -402,6 +431,8 @@ def main(argv=None):
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--clean", action="store_true")
     options = parser.parse_args(arguments[:split])
+    if os.name == "nt":
+        parser.error("the shared cache requires POSIX file locks and descriptor-relative I/O")
     if options.filter == "":
         parser.error("focused checks require a nonempty test filter")
     if options.max_cache_mib < 1 or options.min_free_mib < 0:
@@ -422,6 +453,7 @@ def main(argv=None):
             raise ValueError("insufficient free space before build; no tests started")
         environment = os.environ.copy()
         environment["CARGO_TARGET_DIR"] = str(cache.path)
+        environment["CARGO_BUILD_BUILD_DIR"] = str(cache.path)
         if options.suite == "quick":
             environment.setdefault("TAURI_CONFIG", json.dumps({
                 "bundle": {"resources": None, "externalBin": None, "active": False},

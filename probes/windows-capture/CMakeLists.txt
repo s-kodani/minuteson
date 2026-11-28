@@ -23,7 +23,7 @@ add_library(mon-capture-core STATIC IMPORTED GLOBAL)
 set_target_properties(mon-capture-core PROPERTIES IMPORTED_LOCATION "${MON_CAPTURE_STATIC}")
 add_dependencies(mon-capture-core mon-capture-core-build)
 if(WIN32)
-  set_property(TARGET mon-capture-core PROPERTY INTERFACE_LINK_LIBRARIES bcrypt userenv ws2_32 ntdll)
+  set_property(TARGET mon-capture-core PROPERTY INTERFACE_LINK_LIBRARIES bcrypt userenv ws2_32 ntdll synchronization)
 endif()
 
 include(CTest)
