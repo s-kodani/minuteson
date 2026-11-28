@@ -4,13 +4,17 @@ import { readFileSync } from "node:fs";
 const source = (file: string) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
 test("meeting title precedes tabs and all fixed chrome participates in dock sizing", () => {
   const main = source("main.tsx");
-  assert.ok(main.indexOf('{detail && <div className="meeting-detail-status"') < main.indexOf('{detail && <div className="meeting-detail-navigation"'));
+  const editor = source("main-shells/meeting-editor-shell.tsx");
+  const heading = editor.indexOf('<div className="meeting-detail-status"');
+  const navigation = editor.indexOf('<div className="meeting-detail-navigation"');
+  assert.ok(heading >= 0 && heading < navigation);
+  assert.match(main, /detail && <MeetingEditorHeader/);
   assert.match(main, /heading\?\.getBoundingClientRect\(\)\.height/);
   assert.match(main, /querySelectorAll<HTMLElement>\("\.meeting-detail-status,\.meeting-detail-navigation"\)/);
 });
 test("meeting actions align with tabs in normal flow and wrapped navigation is measured", () => {
   const main=source("main.tsx"), css=source("prototype-alignment.css");
-  assert.match(main,/className="meeting-detail-actions"><RowMenu/);
+  assert.match(source("main-shells/meeting-editor-shell.tsx"),/className="meeting-detail-actions"><RowMenu/);
   assert.match(main,/navigation\?\.getBoundingClientRect\(\)\.height/);
   assert.match(css,/\.meeting-detail-navigation \{[^}]*align-items:center; flex-wrap:wrap; gap:8px 16px;/);
   assert.match(css,/\.meeting-detail-navigation>\.meeting-detail-tabs \{ flex:1 1 162px;/);
@@ -272,7 +276,7 @@ test("playback settings use one group gap instead of stacking label margins", ()
 });
 
 test("restored meeting notices separate the message and action without inline whitespace hacks", () => {
-  assert.match(source("main.tsx"),/restoredFilter && <p className="meeting-list-notice">/);
+  assert.match(source("main-shells/library-shell.tsx"),/restoredOnly && <p className="meeting-list-notice">/);
   assert.match(source("prototype-alignment.css"),/\.meeting-list-notice \{ display:flex; align-items:center; flex-wrap:wrap; gap:10px 12px;/);
 });
 

@@ -49,7 +49,11 @@ function modelOptionLabel(choice: ModelChoice): string {
     ? `【おすすめ】${choice.label}`
     : choice.label;
 }
-export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, runtimeUpdateEpoch = 0, visible = true, stopRequested, deletion, cleanup, onProgressOwnerReady }: { cleanup?: ModelCleanupJob | null; locked: boolean; recordingActive: boolean; refreshEpoch?: number; runtimeUpdateEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelDeletionControl; onProgressOwnerReady?: (ready: true) => void }) {
+type ModelInventoryDeletion = Pick<ModelDeletionControl,
+  "canReviewModel" | "reviewUnavailableReason" | "listing" | "canReviewPending" | "reviewPending" |
+  "protectedNow" | "unknown" | "rpcBusy" | "retryUnknown" | "reviewModel">;
+
+export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0, runtimeUpdateEpoch = 0, visible = true, stopRequested, deletion, cleanup, onProgressOwnerReady }: { cleanup?: ModelCleanupJob | null; locked: boolean; recordingActive: boolean; refreshEpoch?: number; runtimeUpdateEpoch?: number; visible?: boolean; stopRequested?: boolean; deletion?: ModelInventoryDeletion; onProgressOwnerReady?: (ready: true) => void }) {
   const [options, setOptions] = useState<OfficialModelOption[]>([]), [entries, setEntries] = useState<ModelPlacementEntry[]>([]), [profiles, setProfiles] = useState<ModelProfileView[]>([]);
   const runtimeRequestHandled = useRef(0);
   useEffect(() => {
@@ -512,7 +516,7 @@ export function ModelInspectionPanel({ locked, recordingActive, refreshEpoch = 0
 }
 
 function InstalledModel({ item, name, status, purpose, vocabularySupport, disabled, deletion }: {
-  item: ModelPlacementEntry; name: string; status: string; purpose: string; vocabularySupport: string | null; disabled: boolean; deletion?: ModelDeletionControl;
+  item: ModelPlacementEntry; name: string; status: string; purpose: string; vocabularySupport: string | null; disabled: boolean; deletion?: ModelInventoryDeletion;
 }) {
   return <div className="installed-model" data-installed-model={item.packageId}><div className="model-inventory-summary">
     <strong>{name}</strong><span>{purpose} · {bytesLabel(item.totalBytes)} · {status}</span></div>
