@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 #[cfg(any(unix, windows))]
 mod automatic;
+pub(crate) mod commands;
 mod dialog;
 mod work;
 #[cfg(any(unix, windows))]

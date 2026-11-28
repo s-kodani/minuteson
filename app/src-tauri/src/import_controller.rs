@@ -1,4 +1,6 @@
 //! One main-window file import, with revisioned state and cancellable work.
+pub(crate) mod commands;
+
 use crate::analysis_worker::AnalysisController;
 use crate::audio_import::{self, AudioInfo, ImportOptions, SelectedAudio};
 use crate::local_engine::Fingerprint;

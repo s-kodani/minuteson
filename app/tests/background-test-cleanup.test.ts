@@ -4,7 +4,7 @@ import {readFileSync,existsSync} from "node:fs";
 test("test-audio cleanup has no UI, command, navigation lock or exit confirmation",()=>{
   const root=new URL("../",import.meta.url);
   const main=readFileSync(new URL("src/main.tsx",root),"utf8");
-  const ipc=readFileSync(new URL("src-tauri/src/lib.rs",root),"utf8");
+  const ipc=readFileSync(new URL("src-tauri/src/capture_test/commands.rs",root),"utf8");
   assert.doesNotMatch(main,/CaptureTestRecovery|captureTestRecovery|未回収のテスト音声|テスト音声の回復/);
   assert.doesNotMatch(ipc,/get_capture_test_recovery|retry_capture_test_recovery/);
   for(const file of ["src/capture-test-recovery.tsx","src/capture-test-recovery-client.ts"])assert.equal(existsSync(new URL(file,root)),false);
