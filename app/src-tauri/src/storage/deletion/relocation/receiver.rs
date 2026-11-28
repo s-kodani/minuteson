@@ -53,9 +53,36 @@ pub(in crate::storage) struct Aliases {
     current: (fs::Identity, fs::Identity),
     records: BTreeMap<String, Record>,
     directories: BTreeMap<(String, Vec<u8>), BoundDirectory>,
+    #[cfg(target_os = "macos")]
+    models: Option<(PathBuf, fs::Identity)>,
     cold: bool,
 }
 impl Aliases {
+    #[cfg(target_os = "macos")]
+    pub(in crate::storage::deletion) fn verify_models_directory(
+        &self,
+        operation: &str,
+        path: &Path,
+        saved: &fs::Identity,
+        current: &fs::Identity,
+    ) -> Result<bool, String> {
+        if !self.records.get(operation).is_some_and(|record| {
+            matches!(
+                record.validation.as_str(),
+                "keptModel" | "completedModel" | "modelReconfirmation"
+            )
+        }) {
+            return Ok(false);
+        }
+        let Some((admitted_path, admitted)) = &self.models else {
+            return Ok(false);
+        };
+        if path != admitted_path || current != admitted || !saved.same_persistent(admitted) {
+            return Err("モデル削除履歴の承認済み保存先が一致しません".into());
+        }
+        Ok(true)
+    }
+
     pub(in crate::storage::deletion) fn verify_anchor(
         &self,
         path: &Path,
@@ -181,6 +208,8 @@ impl Aliases {
                 destination.directories,
                 destination.historical_directories,
             )?,
+            #[cfg(target_os = "macos")]
+            models: None,
             cold: false,
         })
     }

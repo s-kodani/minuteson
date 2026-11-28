@@ -380,7 +380,13 @@ pub(in crate::storage) fn admitted_history(
             .clone(),
     )
     .map_err(|e| e.to_string())?;
+    #[cfg(all(test, target_os = "macos"))]
+    let destination = DestinationFacts {
+        root: destination.root.perturb_relocation_identity("wav"),
+        ..destination
+    };
     let (source_path, source_root, source_db) = admission.source();
+    let database = identity(admission.root(), "meetings.sqlite3")?;
     if source.source_root != source_path
         || source.root.registered()? != source_root
         || source.database.registered()? != source_db
@@ -389,8 +395,8 @@ pub(in crate::storage) fn admitted_history(
         || destination.operation != admission.operation()
         || destination.native_hash != admission.native_hash()
         || destination.target_root != admission.root()
-        || destination.root != root.identity
-        || destination.database != identity(admission.root(), "meetings.sqlite3")?
+        || !destination.root.matches_relocation_history(&root.identity)
+        || !destination.database.matches_relocation_history(&database)
         || destination.database.registered()? != admission.owned_path("meetings.sqlite3", false)?
         || destination.claims.len() != source.claims.len()
     {
@@ -399,7 +405,7 @@ pub(in crate::storage) fn admitted_history(
     destination.root.validate(true)?;
     destination.database.validate(false)?;
     let mut claims = BTreeMap::new();
-    for (claim, bound) in source.claims.into_iter().zip(destination.claims) {
+    for (claim, mut bound) in source.claims.into_iter().zip(destination.claims) {
         bound.observed.validate(false)?;
         if bound.owner != claim.owner
             || bound.observed.registered()?
@@ -409,6 +415,9 @@ pub(in crate::storage) fn admitted_history(
         {
             return Err("WAVの所有対応は検証済みコピーの実体ではありません".into());
         }
+        bound
+            .observed
+            .rebase_relocation_device(&destination.root, &root.identity);
         claims.insert(claim.owner.clone(), (claim, bound.observed));
     }
     let after: String = registry
@@ -423,10 +432,14 @@ pub(in crate::storage) fn admitted_history(
     }
     stamp.require(&root.required(".mon-scratch.sqlite3", false)?)?;
     admission.verify()?;
+    root.verify()?;
+    if identity(admission.root(), "meetings.sqlite3")? != database {
+        return Err("WAV履歴の承認中に会議DBが変更されました".into());
+    }
     Ok(Some(Arc::new(Aliases {
         root: admission.root().into(),
-        root_identity: destination.root,
-        database: destination.database,
+        root_identity: root.identity,
+        database,
         claims,
     })))
 }
@@ -437,7 +450,10 @@ impl Aliases {
         reservation_sha256: &str,
         source: FileIdentity,
     ) -> Result<Option<FileIdentity>, String> {
-        if identity(&self.root, "")? != self.root_identity
+        let current = identity(&self.root, "")?;
+        #[cfg(all(test, target_os = "macos"))]
+        let current = current.perturb_relocation_identity("wav-live");
+        if current != self.root_identity
             || identity(&self.root, "meetings.sqlite3")? != self.database
         {
             return Err("WAVの承認済み保存先・DBが変更されています".into());
@@ -538,6 +554,46 @@ mod tests {
         assert_eq!(bootstrap.root(), target);
         bootstrap.open_storage().unwrap()
     }
+    #[test]
+    fn wav_relocation_startup_accepts_only_a_saved_device_difference() {
+        use crate::test_support::relocation_identity::with_change;
+
+        let parent = tempfile::tempdir_in("/private/tmp").unwrap();
+        let storage = Storage::open(parent.path().join("source")).unwrap();
+        let (owner, base, reservation_hash, recorded) = pending(&storage);
+        let config = parent.path().join("config");
+        let legacy = parent.path().join("legacy");
+        let target = parent.path().join("target");
+        let reservation =
+            std::fs::read(storage.root.join(&base).join("single-wav-owner.json")).unwrap();
+        let storage = with_change("wav", true, || {
+            move_storage(storage, &config, &legacy, &target)
+        });
+        assert!(!storage.data_write_blocked());
+        let aliases = storage.wav_history.as_ref().unwrap();
+        assert!(aliases
+            .effective_identity(&owner, &reservation_hash, recorded)
+            .unwrap()
+            .is_some());
+        assert!(with_change("wav-live", true, || aliases.effective_identity(
+            &owner,
+            &reservation_hash,
+            recorded
+        ))
+        .is_err());
+        assert_eq!(
+            std::fs::read(target.join(&base).join("single-wav-owner.json")).unwrap(),
+            reservation
+        );
+        drop(storage);
+
+        let bootstrap = Bootstrap::open(&config, &legacy).unwrap();
+        let error = with_change("wav", false, || bootstrap.open_storage())
+            .err()
+            .expect("inode が違う WAV 履歴を受け付けない");
+        assert!(error.contains("WAVの承認した保存元・DBと配置先が一致しません"));
+    }
+
     #[test]
     fn pending_single_wav_relocation_keeps_original_reservation_across_two_cold_moves() {
         let parent = tempfile::tempdir_in("/private/tmp").unwrap();

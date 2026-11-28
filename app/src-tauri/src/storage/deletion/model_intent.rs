@@ -114,7 +114,16 @@ impl Prepared {
         {
             return Err("保持したモデル削除履歴の保存先・DB実体が一致しません".into());
         }
-        super::Directory::root(models_root)?.verify_identity(&self.snapshot.models_root)
+        let directory = super::Directory::root(models_root)?;
+        #[cfg(target_os = "macos")]
+        if anchor.verify_relocated_models_directory(
+            &self.header.operation_id,
+            &directory,
+            &self.snapshot.models_root,
+        )? {
+            return Ok(());
+        }
+        directory.verify_identity(&self.snapshot.models_root)
     }
     pub(in crate::storage::deletion::models) fn snapshot(&self) -> &Snapshot {
         &self.snapshot

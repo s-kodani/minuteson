@@ -21,8 +21,15 @@ fn absent(
         return Err("ネイティブのモデル保存先と削除記録が一致しません".into());
     }
     let models = Directory::root(root)?;
-    anchor
-        .verify_startup_history_directory(&models, &receipt.confirmed().snapshot().models_root)?;
+    let saved = &receipt.confirmed().snapshot().models_root;
+    #[cfg(target_os = "macos")]
+    let relocated =
+        anchor.verify_relocated_models_directory(receipt.operation(), &models, saved)?;
+    #[cfg(not(target_os = "macos"))]
+    let relocated = false;
+    if !relocated {
+        anchor.verify_startup_history_directory(&models, saved)?;
+    }
     // Presence only: do not hash a large model or enumerate neighboring models.
     for name in receipt.roots()? {
         if models.optional_kind(&name)?.is_some() {

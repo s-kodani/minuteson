@@ -577,9 +577,15 @@ pub(in crate::storage) fn admitted_history(
             .clone(),
     )
     .map_err(|e| e.to_string())?;
+    #[cfg(all(test, target_os = "macos"))]
+    let destination = DestinationFacts {
+        root: destination.root.perturb_relocation_identity("flac"),
+        ..destination
+    };
     let (source_path, source_root, source_db) = admission.source();
     destination.root.validate(true)?;
     destination.database.validate(false)?;
+    let database = metadata(admission.root(), "meetings.sqlite3")?;
     if source.source_root != source_path
         || source.root.registered()? != source_root
         || source.database.registered()? != source_db
@@ -588,8 +594,8 @@ pub(in crate::storage) fn admitted_history(
         || destination.operation != admission.operation()
         || destination.native_hash != admission.native_hash()
         || destination.target_root != admission.root()
-        || destination.root != root.identity
-        || destination.database != metadata(admission.root(), "meetings.sqlite3")?
+        || !destination.root.matches_relocation_history(&root.identity)
+        || !destination.database.matches_relocation_history(&database)
         || destination.database.registered()? != admission.owned_path("meetings.sqlite3", false)?
         || destination.workspaces.len() != source.workspaces.len()
     {
@@ -602,7 +608,7 @@ pub(in crate::storage) fn admitted_history(
     )?;
     let mut plans = BTreeMap::new();
     let mut checkpoints = BTreeMap::new();
-    for (workspace, bound) in source.workspaces.into_iter().zip(destination.workspaces) {
+    for (workspace, mut bound) in source.workspaces.into_iter().zip(destination.workspaces) {
         bound.recording.validate(true)?;
         if bound.base != workspace.base
             || bound.name != workspace.name
@@ -614,7 +620,13 @@ pub(in crate::storage) fn admitted_history(
             return Err("FLAC計画の移動先は配置した所有対象ではありません".into());
         }
         recovery::admit(admission, &workspace, &bound)?;
-        for (track, bound_track) in workspace.tracks.iter().zip(&bound.tracks) {
+        bound
+            .recording
+            .rebase_relocation_device(&destination.root, &root.identity);
+        if let Some(document) = &mut bound.recovery_document {
+            document.rebase_relocation_device(&destination.root, &root.identity);
+        }
+        for (track, bound_track) in workspace.tracks.iter().zip(&mut bound.tracks) {
             bound_track.directory.validate(true)?;
             let track_path = track_base(&workspace.base, &track.id)?;
             if track.id != bound_track.id
@@ -623,21 +635,29 @@ pub(in crate::storage) fn admitted_history(
             {
                 return Err("FLAC出力先は配置した所有対象ではありません".into());
             }
+            bound_track
+                .directory
+                .rebase_relocation_device(&destination.root, &root.identity);
             for (body, copied) in track.bodies.iter().zip(&bound_track.bodies) {
                 copied.validate(false)?;
                 let path = format!("{track_path}/.{}.json", body.id);
                 if copied.registered()? != admission.owned_path(&body.path, false)?
                     || admission.copied_file_hash(&path)? != body.checkpoint_hash
-                    || checkpoints
-                        .insert(
-                            path,
-                            (
-                                body.checkpoint_hash.clone(),
-                                body.recorded.clone(),
-                                copied.clone(),
-                            ),
-                        )
-                        .is_some()
+                {
+                    return Err("FLAC音声は配置した実体・チェックポイントではありません".into());
+                }
+                let mut live_copy = copied.clone();
+                live_copy.rebase_relocation_device(&destination.root, &root.identity);
+                if checkpoints
+                    .insert(
+                        path,
+                        (
+                            body.checkpoint_hash.clone(),
+                            body.recorded.clone(),
+                            live_copy,
+                        ),
+                    )
+                    .is_some()
                 {
                     return Err("FLAC音声は配置した実体・チェックポイントではありません".into());
                 }
@@ -662,10 +682,14 @@ pub(in crate::storage) fn admitted_history(
     }
     registry_stamp.require(&root.required(".mon-scratch.sqlite3", false)?)?;
     admission.verify()?;
+    root.verify()?;
+    if metadata(admission.root(), "meetings.sqlite3")? != database {
+        return Err("FLAC履歴の承認中に会議DBが変更されました".into());
+    }
     Ok(Some(Arc::new(Aliases {
         root: admission.root().into(),
-        root_identity: destination.root,
-        database: destination.database,
+        root_identity: root.identity,
+        database,
         plans,
         checkpoints,
         audio_cleanup,
@@ -674,8 +698,11 @@ pub(in crate::storage) fn admitted_history(
 impl Aliases {
     fn verify(&self, storage: &Storage) -> Result<(), String> {
         storage.managed_anchor.verify()?;
+        let current = metadata(&self.root, "")?;
+        #[cfg(all(test, target_os = "macos"))]
+        let current = current.perturb_relocation_identity("flac-live");
         if storage.root != self.root
-            || metadata(&self.root, "")? != self.root_identity
+            || current != self.root_identity
             || metadata(&self.root, "meetings.sqlite3")? != self.database
         {
             return Err("FLAC所有対応の承認済み保存先・DBが変更されています".into());
