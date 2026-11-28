@@ -138,6 +138,9 @@ use generation::commands::{
     get_minutes_prompt_preferences, get_minutes_source, save_minutes_markdown,
     save_minutes_prompt_preferences, start_markdown_minutes_generation,
 };
+use import_controller::commands::{
+    cancel_audio_import, get_audio_import, select_audio_import, start_audio_import,
+};
 use import_controller::ImportController;
 use model_application::commands::{
     apply_model_profile_application, get_model_profiles, preview_model_profile_application,
@@ -159,65 +162,6 @@ use tauri::{Emitter, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
-
-#[tauri::command]
-fn get_audio_import(
-    window: WebviewWindow,
-) -> Result<import_controller::Snapshot, mon_contracts::AppError> {
-    let result: Result<import_controller::Snapshot, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can read imports".into());
-        }
-        window.state::<ImportController>().snapshot()
-    })();
-    result.map_err(|message| mon_contracts::AppError::from_command("get_audio_import", message))
-}
-#[tauri::command]
-async fn select_audio_import(
-    window: WebviewWindow,
-    path: Option<std::path::PathBuf>,
-) -> Result<import_controller::Snapshot, mon_contracts::AppError> {
-    let result: Result<import_controller::Snapshot, String> = async move {
-        if window.label() != "main" {
-            return Err("Only the main window can select audio".into());
-        }
-        if window.state::<AnalysisController>().model_cleanup_active() {
-            return Err("重複モデルを整理中です。完了後に音声取り込みを開始できます。".into());
-        }
-        ImportController::select(&window, path).await
-    }
-    .await;
-    result.map_err(|message| mon_contracts::AppError::from_command("select_audio_import", message))
-}
-#[tauri::command]
-fn start_audio_import(
-    window: WebviewWindow,
-    request: import_controller::StartRequest,
-) -> Result<import_controller::Snapshot, mon_contracts::AppError> {
-    let result: Result<import_controller::Snapshot, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can import audio".into());
-        }
-        if window.state::<AnalysisController>().model_cleanup_active() {
-            return Err("重複モデルを整理中です。完了後に音声取り込みを開始できます。".into());
-        }
-        ImportController::start(window.app_handle(), request)
-    })();
-    result.map_err(|message| mon_contracts::AppError::from_command("start_audio_import", message))
-}
-#[tauri::command]
-fn cancel_audio_import(
-    window: WebviewWindow,
-    token: String,
-) -> Result<import_controller::Snapshot, mon_contracts::AppError> {
-    let result: Result<import_controller::Snapshot, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can cancel imports".into());
-        }
-        ImportController::cancel_from_app(window.app_handle(), &token)
-    })();
-    result.map_err(|message| mon_contracts::AppError::from_command("cancel_audio_import", message))
-}
 
 #[tauri::command]
 fn get_vocabulary_book(
