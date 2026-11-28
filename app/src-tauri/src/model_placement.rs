@@ -15,6 +15,17 @@ use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DirectoryIdentity([u64; 3]);
+impl DirectoryIdentity {
+    pub(crate) fn same_persistent(&self, current: &Self) -> bool {
+        let [device, inode, birth] = self.0;
+        let [current_device, current_inode, current_birth] = current.0;
+        mon_native::identity::matches_persistent_identity(
+            (device, inode, birth),
+            (current_device, current_inode, current_birth),
+            cfg!(target_os = "macos"),
+        )
+    }
+}
 pub(crate) fn directory_identity(file: &std::fs::File) -> Result<DirectoryIdentity, String> {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;

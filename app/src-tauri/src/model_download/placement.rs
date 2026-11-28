@@ -215,7 +215,7 @@ fn copy_and_move(
     recipe: &Recipe,
     transfer: &Transfer,
     cancelled: &impl Fn() -> bool,
-) -> Result<(), String> {
+) -> Result<DirectoryIdentity, String> {
     if root.available()?
         < recipe
             .review()?
@@ -241,7 +241,22 @@ fn copy_and_move(
     if !root.move_child(&name, root, &transfer.package_id, &identity)? {
         return Err("モデルコピー先のドライブが変更されています".into());
     }
-    Ok(())
+    Ok(identity)
+}
+
+fn observed_child(
+    parent: &Directory,
+    name: &str,
+    saved: &DirectoryIdentity,
+    resuming: bool,
+) -> Result<DirectoryIdentity, String> {
+    parent.verify()?;
+    let current = Directory::open_existing(&parent.path().join(name))?.identity()?;
+    if saved != &current && !(resuming && saved.same_persistent(&current)) {
+        return Err("移動するモデル領域が変更されています".into());
+    }
+    parent.verify()?;
+    Ok(current)
 }
 
 pub(super) fn place(
@@ -285,9 +300,13 @@ pub(super) fn place(
     drop(intent_proof);
     drop(complete_proof);
     let root = Directory::root(models_root)?;
-    let transfer = if let Some(value) = optional::<Transfer>(&operation, TRANSFER)? {
+    let saved = optional::<Transfer>(&operation, TRANSFER)?;
+    let resuming = saved.is_some();
+    let transfer = if let Some(value) = saved {
         value.validate(operation_id, expected_recipe_hash, expected_review_hash)?;
-        if value.package_id != package_id || value.destination_root != root.identity()? {
+        if value.package_id != package_id
+            || !value.destination_root.same_persistent(&root.identity()?)
+        {
             return Err("再開するモデル配置先が元の所有記録と一致しません".into());
         }
         value
@@ -321,20 +340,42 @@ pub(super) fn place(
         }
     }
     check(cancelled)?;
-    if !existing(&root.path().join(package_id))? {
+    let moved = if !existing(&root.path().join(package_id))? {
         if let Some(copy) = &copied {
-            if !root.move_child(&copy.name, &root, package_id, &copy.identity)? {
+            let current = observed_child(&root, &copy.name, &copy.identity, resuming)?;
+            if !root.move_child(&copy.name, &root, package_id, &current)? {
                 return Err("モデルコピー先のドライブが変更されています".into());
             }
-        } else if !operation.move_child("payload", &root, package_id, &transfer.source)? {
-            // Cross-volume only. Keep original staging until final verification.
-            copy_and_move(&operation, &root, &intent.recipe, &transfer, cancelled)?;
+            Some(current)
+        } else {
+            let current = observed_child(&operation, "payload", &transfer.source, resuming)?;
+            if operation.move_child("payload", &root, package_id, &current)? {
+                Some(current)
+            } else {
+                // Cross-volume only. Keep original staging until final verification.
+                Some(copy_and_move(
+                    &operation,
+                    &root,
+                    &intent.recipe,
+                    &transfer,
+                    cancelled,
+                )?)
+            }
         }
-    }
+    } else {
+        None
+    };
     let destination = Directory::open_existing(&root.path().join(package_id))?;
     let copy = optional::<Copy>(&operation, COPY)?;
     let expected_identity = copy.as_ref().map_or(&transfer.source, |c| &c.identity);
-    if &destination.identity()? != expected_identity {
+    let current = destination.identity()?;
+    if !moved.as_ref().map_or_else(
+        || {
+            expected_identity == &current
+                || (resuming && expected_identity.same_persistent(&current))
+        },
+        |observed| observed == &current,
+    ) {
         return Err("モデル配置先の実体が移動記録と一致しません".into());
     }
     check(cancelled)?;
