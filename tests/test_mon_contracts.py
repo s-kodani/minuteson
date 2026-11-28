@@ -162,7 +162,7 @@ class CommandContractTests(unittest.TestCase):
         self.assertTrue(all('signature' in command for command in commands))
         self.assertTrue(all(command['signature']['response']['ok'] for command in commands))
         for path, generated in contracts.products(ROOT).items():
-            self.assertEqual(path.read_text(), generated, str(path.relative_to(ROOT)))
+            self.assertEqual(path.read_text(encoding='utf8'), generated, str(path.relative_to(ROOT)))
 
 
 if __name__ == '__main__':

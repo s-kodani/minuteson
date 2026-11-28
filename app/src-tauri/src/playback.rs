@@ -347,11 +347,9 @@ mod tests {
     #[test]
     fn playback_read_rejects_unknown_session() {
         let store = PlaybackStore::default();
-        assert!(
-            store
-                .read("別のセッション", 0)
-                .unwrap_err()
-                .contains("セッションがありません")
-        );
+        assert!(store
+            .read("別のセッション", 0)
+            .unwrap_err()
+            .contains("セッションがありません"));
     }
 }
