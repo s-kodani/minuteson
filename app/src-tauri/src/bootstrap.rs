@@ -117,6 +117,16 @@ impl Identity {
     fn matches(&self, m: &Metadata) -> bool {
         Self::read(m).is_ok_and(|i| i == *self)
     }
+    fn tuple(&self) -> (u64, u64, u64) {
+        (self.device, self.inode, self.birth_ns)
+    }
+    fn same_persistent(&self, current: &Self) -> bool {
+        mon_native::identity::matches_persistent_identity(
+            self.tuple(),
+            current.tuple(),
+            cfg!(target_os = "macos"),
+        )
+    }
 }
 fn absolute(path: &Path) -> Result<(), String> {
     if !path.is_absolute()
@@ -196,6 +206,12 @@ struct Root {
     database: Identity,
 }
 impl Root {
+    fn same_persistent(&self, current: &Self) -> bool {
+        self.path == current.path
+            && self.directory.same_persistent(&current.directory)
+            && self.database.same_persistent(&current.database)
+    }
+
     fn metadata(path: &Path) -> Result<Self, String> {
         Self::startup_metadata(path).map_err(Into::into)
     }
@@ -358,7 +374,7 @@ impl Record {
             if !uuid(&p.operation_id)
                 || !uuid(&p.confirmation_id)
                 || !sha(&p.manifest_hash)
-                || p.source != self.current
+                || !p.source.same_persistent(&self.current)
                 || p.target.starts_with(&self.current.path)
                 || self.current.path.starts_with(&p.target)
             {
@@ -375,7 +391,7 @@ impl Record {
                 || !sha(&p.manifest_hash)
                 || !sha(&a.control_hash)
                 || p.target != self.current.path
-                || p.target_directory != self.current.directory
+                || !p.target_directory.same_persistent(&self.current.directory)
                 || p.target.starts_with(&p.source.path)
                 || p.source.path.starts_with(&p.target)
                 || self
@@ -638,7 +654,7 @@ impl Bootstrap {
             }
             let verified = (|| -> Result<StartupStorageError, String> {
                 let (candidate, _) = Root::identity_metadata(path)?;
-                if loaded.is_some_and(|loaded| loaded.record.current != candidate) {
+                if loaded.is_some_and(|loaded| !loaded.record.current.same_persistent(&candidate)) {
                     return Err("登録したフォルダーまたは会議データのファイルが現在のものと一致しません。保存先を確認してください。".into());
                 }
                 let lease = reset::RootLease::acquire_for_salvage(path)
@@ -1098,7 +1114,7 @@ impl Bootstrap {
                 return Err(
                     "配置台帳がある移動は、途中コピーの保持・解決を確認するまで記録を消せません"
                         .into(),
-                )
+                );
             }
         }
         r.pending_move = None;

@@ -106,14 +106,12 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
     const unregister = registerPlaybackStop(stop, meetingId);
     const otherStarted = (event: Event) => { if ((event as CustomEvent<string>).detail !== owner) clear(); };
     window.addEventListener("mon-audio-start", otherStarted);
-    const timer = window.setInterval(() => { if (player.snapshot().playing) refresh((value) => value + 1); }, 100);
     return () => {
       // Keep failed/in-flight native releases in the global barrier even after
       // this view disappears. Deletion must not mistake unmount for release.
       detached = true;
       surface?.release(owner);
       playbackTimeline.release(owner);
-      window.clearInterval(timer);
       window.removeEventListener("mon-audio-start", otherStarted);
       request.current++;
       player.clear();
@@ -214,6 +212,39 @@ export function useTranscriptAudio(meetingId: string, locked: boolean, options: 
   };
 
   const snapshot = player.snapshot();
+  useEffect(() => {
+    if (!snapshot.playing) return;
+    let animation: number | null = null;
+    let lastUpdate = performance.now();
+    let lastFrame = player.snapshot().frame;
+    const update = (now: number) => {
+      lastUpdate = now;
+      const frame = player.snapshot().frame;
+      if (frame === lastFrame) return;
+      lastFrame = frame;
+      refresh(value => value + 1);
+    };
+    const tick = (now: number) => {
+      animation = null;
+      if (document.hidden) return;
+      if (now - lastUpdate >= 100) update(now);
+      animation = requestAnimationFrame(tick);
+    };
+    const onVisibility = () => {
+      if (animation !== null) cancelAnimationFrame(animation);
+      animation = null;
+      if (!document.hidden) {
+        update(performance.now());
+        animation = requestAnimationFrame(tick);
+      }
+    };
+    onVisibility();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      if (animation !== null) cancelAnimationFrame(animation);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [player, snapshot.playing]);
   const info = snapshot.info;
   useEffect(()=>{
     if(options.inline||!info||!selected||token.current!==info.token){playbackTimeline.release(owner);return;}

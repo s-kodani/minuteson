@@ -53,7 +53,11 @@ fn hash_valid(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn identity_matches(file: &File, reservation: &Reservation) -> Result<(), String> {
+fn identity_matches(
+    file: &File,
+    reservation: &Reservation,
+    recover_saved_owner: bool,
+) -> Result<(), String> {
     let meta = crate::native_fs::metadata(file).map_err(|e| e.to_string())?;
     let birth = meta
         .created()
@@ -63,9 +67,15 @@ fn identity_matches(file: &File, reservation: &Reservation) -> Result<(), String
         .as_nanos();
     if !meta.is_file()
         || meta.nlink() != 1
-        || meta.dev() != reservation.device
-        || meta.ino() != reservation.inode
-        || birth != reservation.birth_nanoseconds as u128
+        || !mon_native::identity::matches_persistent_identity(
+            (
+                reservation.device,
+                reservation.inode,
+                reservation.birth_nanoseconds as u128,
+            ),
+            (meta.dev(), meta.ino(), birth),
+            recover_saved_owner && cfg!(target_os = "macos"),
+        )
     {
         return Err("録音WAVの所有実体が変更されています".into());
     }
@@ -134,7 +144,7 @@ impl Cursor {
             return Err("録音WAVの所有予約が不正です".into());
         }
         let file = directory.required(&tip.file_name, false)?;
-        identity_matches(&file, &reservation)?;
+        identity_matches(&file, &reservation, false)?;
         let file_stamp = Stamp::read(&file)?;
         let identity = Identity::file(&file)?;
         if self.identity.as_ref().is_some_and(|old| old != &identity) {
@@ -214,7 +224,11 @@ impl Cursor {
         {
             return Err("録音WAVの確定ポインターと音声が一致しません".into());
         }
-        identity_matches(&directory.required(&tip.file_name, false)?, &reservation)?;
+        identity_matches(
+            &directory.required(&tip.file_name, false)?,
+            &reservation,
+            false,
+        )?;
         reservation_stamp.require(&directory.required("single-wav-owner.json", false)?)?;
         tip_stamp.require(&directory.required("single-wav.json", false)?)?;
         file_stamp.require(&file)?;
@@ -335,6 +349,7 @@ impl Storage {
     pub(super) fn finalize_single_wav_recording(
         &self,
         session: &RecordingSession,
+        recover_saved_owner: bool,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(RecordingSession, CommittedAudio), String> {
         self.require_data_writable()?;
@@ -346,7 +361,13 @@ impl Storage {
             .join(&session.id);
         let base = self.managed_path(&relative)?;
         let directory = Directory::open(&base)?;
-        let source = recovery::inspect(self, &directory, &session.id, cancelled)?;
+        let source = recovery::inspect(
+            self,
+            &directory,
+            &session.id,
+            recover_saved_owner,
+            cancelled,
+        )?;
         let original = recovery::document(&directory, "manifest.json")?;
         let source_document = original.as_ref().and_then(|(value, _, _)| value.as_ref());
         if let Some(document) = source_document {

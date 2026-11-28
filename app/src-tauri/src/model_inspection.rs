@@ -525,5 +525,6 @@ impl Drop for InspectionGuard {
     }
 }
 
+pub(crate) mod commands;
 #[cfg(test)]
 mod tests;

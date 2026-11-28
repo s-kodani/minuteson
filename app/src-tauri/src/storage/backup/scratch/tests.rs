@@ -47,6 +47,63 @@ fn scratch_reopen_recovers_owned_partial_files_nested_stages_and_not_the_source_
     );
     assert_eq!(std::fs::read(source).unwrap(), b"untouched source");
 }
+#[cfg(target_os = "macos")]
+#[test]
+fn scratch_reopen_distinguishes_device_change_from_replaced_entry() {
+    for field in ["device", "inode", "birth_nanos"] {
+        let (root, storage) = fixture();
+        let stage = storage.backup_stage().unwrap();
+        let path = stage.path().to_path_buf();
+        let id = stage.owner.as_ref().unwrap().1.clone();
+        let body = path.join("partial");
+        private_file(&body)
+            .unwrap()
+            .write_all("保持対象".as_bytes())
+            .unwrap();
+        stage.abandon();
+        drop(storage);
+        let mut db = Connection::open(root.path().join(".mon-scratch.sqlite3")).unwrap();
+        let tx = db.transaction().unwrap();
+        let trigger: String = tx
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name='entries_fixed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut proof: serde_json::Value = serde_json::from_str(
+            &tx.query_row::<String, _, _>(
+                "SELECT proof FROM entries WHERE area=?1 AND kind='file'",
+                [&id],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let value = &mut proof["identity"][field];
+        *value = serde_json::json!(value.as_u64().unwrap() + 1);
+        let proof = serde_json::to_string(&proof).unwrap();
+        tx.execute_batch("DROP TRIGGER entries_fixed;").unwrap();
+        tx.execute(
+            "UPDATE entries SET proof=?1,hash=?2 WHERE area=?3 AND kind='file'",
+            params![proof, hash(proof.as_bytes()), id],
+        )
+        .unwrap();
+        tx.execute_batch(&trigger).unwrap();
+        tx.commit().unwrap();
+        drop(db);
+        let reopened = Storage::open(root.path().into()).unwrap();
+        assert_eq!(body.exists(), field != "device");
+        assert_eq!(
+            state(reopened.scratch.as_ref().unwrap(), &id),
+            if field == "device" {
+                "recovered"
+            } else {
+                "attention"
+            },
+        );
+    }
+}
 #[test]
 fn scratch_normal_drop_only_removes_registered_objects_and_unrecorded_creation_gap_is_retained() {
     let (_root, storage) = fixture();
@@ -65,10 +122,10 @@ fn scratch_normal_drop_only_removes_registered_objects_and_unrecorded_creation_g
         b"keep unknown"
     );
     assert_eq!(state(storage.scratch.as_ref().unwrap(), &id), "attention");
-    storage.scratch.as_ref().unwrap().recover().unwrap();
+    storage.scratch.as_ref().unwrap().recover(false).unwrap();
     assert!(path.join("unknown").exists());
     std::fs::remove_file(path.join("unknown")).unwrap();
-    storage.scratch.as_ref().unwrap().recover().unwrap();
+    storage.scratch.as_ref().unwrap().recover(false).unwrap();
     assert!(!path.exists());
     assert_eq!(state(storage.scratch.as_ref().unwrap(), &id), "recovered");
 }
@@ -186,7 +243,7 @@ fn scratch_changed_schema_and_invalid_manifest_preserve_owned_material() {
         .unwrap()
         .execute_batch(&definition)
         .unwrap();
-    registry.recover().unwrap();
+    registry.recover(false).unwrap();
     assert!(path.join("owned").exists());
     assert_eq!(state(registry, &id), "attention");
 }
@@ -202,7 +259,7 @@ fn scratch_removed_entry_replay_never_adopts_a_same_name_foreign_file() {
     drop(stage);
     assert!(!path.join("owned").exists());
     std::fs::write(path.join("owned"), b"foreign replacement after unlink").unwrap();
-    storage.scratch.as_ref().unwrap().recover().unwrap();
+    storage.scratch.as_ref().unwrap().recover(false).unwrap();
     assert_eq!(
         std::fs::read(path.join("owned")).unwrap(),
         b"foreign replacement after unlink"

@@ -1,3 +1,5 @@
+pub(crate) mod commands;
+
 use crate::session::{RecordingPhase, RecordingSnapshot, SessionStore};
 use crate::storage::{RecordingConfig, Storage};
 use std::fs::File;

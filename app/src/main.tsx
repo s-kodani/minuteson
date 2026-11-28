@@ -85,6 +85,7 @@ function MainWindow() {
   const appName = useAppName();
   const platform = usePlatform();
   const state = useRecordingSession();
+  const recordingBlocksPanelActions = state.kind !== "ready" || recordingActive(state.snapshot);
   const recordingDecision = useRecordingConfirmation("main");
   const dataOperation = useDataOperation();
   const modelCleanup = useModelCleanup();
@@ -499,7 +500,7 @@ function MainWindow() {
           {meetings.map(meeting => <ToastNotice key={meeting.id} scope={meeting.id} type="meeting-integrity" level="warning" historyOnly meetingId={meeting.id}
             message={meetingList.byMeeting.has(meeting.id) ? `会議「${meeting.title}」：${meetingDiagnosticSummary(meetingList.byMeeting.get(meeting.id))!.label}。` : ""} />)}
           {!detail && (screen === "overview" || screen === "meetings") && <div className="page-heading"><h1>会議一覧</h1></div>}
-          <AudioImportPanel modelCleanupActive={modelCleanupActive} overlayHost={audioDropHost} visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={state.kind!=="ready"||!["idle","error"].includes(state.snapshot.phase)} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
+          <AudioImportPanel modelCleanupActive={modelCleanupActive} overlayHost={audioDropHost} visible={(screen==="overview" || screen==="meetings") && !detail} showNewRecording={false} locked={writeLocked} recordingActive={recordingBlocksPanelActions} withSavedEdits={withSavedEdits} onNewRecording={prepareNewRecording} onSaved={async(id)=>{
             await flushPendingEdits();
             const [meeting]=await Promise.all([invoke<Meeting|null>("get_meeting",{id}),refreshMeetings()]);
             if(!meeting)throw Error("保存した会議が見つかりません。");
@@ -507,7 +508,7 @@ function MainWindow() {
           }}/>
           {screen === "settings" && <div className="page-heading heading-with-info"><h1>設定</h1><InfoPopover label="設定">録音環境、ローカルAI、表示を管理します。</InfoPopover></div>}
           {screen === "settings" && <ThemeSettingsPanel locked={writeLocked} />}
-          {(openedSettings || screen === "settings") && <DeferredPanel visible={screen === "settings"}><ModelInspectionPanel cleanup={modelCleanup.active} onProgressOwnerReady={setModelProgressOwnerReady} deletion={modelDeletion} refreshEpoch={modelRefreshEpoch} runtimeUpdateEpoch={modelRuntimeEpoch} visible={screen === "settings"} locked={writeLocked} stopRequested={modelPreparationStopRequested} recordingActive={state.kind!=="ready" || !["idle","error"].includes(state.snapshot.phase)} /></DeferredPanel>}
+          {(openedSettings || screen === "settings") && <DeferredPanel visible={screen === "settings"}><ModelInspectionPanel cleanup={modelCleanup.active} onProgressOwnerReady={setModelProgressOwnerReady} deletion={modelDeletion} refreshEpoch={modelRefreshEpoch} runtimeUpdateEpoch={modelRuntimeEpoch} visible={screen === "settings"} locked={writeLocked} stopRequested={modelPreparationStopRequested} recordingActive={recordingBlocksPanelActions} /></DeferredPanel>}
           {screen === "prompts" && <div className="page-heading heading-with-info"><h1>プロンプト</h1><InfoPopover label="プロンプト">議事録の作成・統合に使うプロンプトと共通用語を管理します。</InfoPopover></div>}
           {(openedPrompts || screen === "prompts") && <DeferredPanel visible={screen === "prompts"}>
             <MinutesPromptSettings visible={screen === "prompts"} locked={writeLocked} />
@@ -533,7 +534,7 @@ function MainWindow() {
                 locked={operationWriteLocked||captureBusy||closingBusy||startConfirm.pending} onStart={startCaptureTest} onCancel={()=>void cancelCaptureTest()} onFinish={finishCaptureTest}/>:null}
               notices={<><IssueNotice scope="main" type="recording-command" label="録音の操作" message={captureError}/><IssueNotice scope="main" type="recording-confirmation" label="録音終了の確認" message={recordingDecision.error}/><IssueNotice scope="main" type="meeting-operation" label="会議の操作" message={meetingError}/></>}/>
           </> : <>
-          {selectedMeeting ? <DeferredPanel visible={detail && detailTab === "transcript"}><AnalysisPanel actionsHost={transcriptActionsHost} key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} visible={detail && detailTab === "transcript"} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} audioDeleted={deletion.audioAvailability.rows.get(selectedMeeting.id)?.audioDeleted ?? null} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={selectedWriteLocked || selectedAudioUnavailable || verifiedTranscript !== selectedMeeting.id} withSavedEdits={action => withSavedEdits(action, "transcription")} onReplaceGenerated={publication.replace} publicationReadStatus={publication.readStatus} onHeadChanged={async read => {
+          {selectedMeeting ? <DeferredPanel visible={detail && detailTab === "transcript"}><AnalysisPanel actionsHost={transcriptActionsHost} key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} visible={detail && detailTab === "transcript"} hasTranscript={transcriptMeeting === selectedMeeting.id} recorded={["recorded","imported"].includes(selectedMeeting.lifecycle)} audioDeleted={deletion.audioAvailability.rows.get(selectedMeeting.id)?.audioDeleted ?? null} recordingActive={recordingBlocksPanelActions} locked={selectedWriteLocked || selectedAudioUnavailable || verifiedTranscript !== selectedMeeting.id} withSavedEdits={action => withSavedEdits(action, "transcription")} onReplaceGenerated={publication.replace} publicationReadStatus={publication.readStatus} onHeadChanged={async read => {
             setAnalysisEpoch((value) => value + 1);
             const [meeting] = await Promise.all([
               read("get_meeting", () => invoke<Meeting | null>("get_meeting", { id: selectedMeeting.id })),
@@ -572,7 +573,7 @@ function MainWindow() {
             }} /></DeferredPanel>
           </div>}
           {selectedMeeting && <div className="workspace-tab-panel" id="meeting-panel-minutes" role="tabpanel" aria-labelledby="meeting-tab-minutes" hidden={detailTab !== "minutes"}>
-            {minutesOwner === selectedMeeting.id && <DeferredPanel><MinutesPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} sourceEpoch={analysisEpoch} recordingActive={state.kind !== "ready" || state.snapshot.phase !== "idle"} locked={selectedWriteLocked} navigationLocked={navigationLocked} withSavedEdits={withSavedEdits} visible={detailTab === "minutes"} /></DeferredPanel>}
+            {minutesOwner === selectedMeeting.id && <DeferredPanel><MinutesPanel key={selectedMeeting.id} meetingId={selectedMeeting.id} meetingTitle={selectedMeeting.title} sourceEpoch={analysisEpoch} recordingActive={recordingBlocksPanelActions} locked={selectedWriteLocked} navigationLocked={navigationLocked} withSavedEdits={withSavedEdits} visible={detailTab === "minutes"} /></DeferredPanel>}
           </div>}
           </>}
         </main>

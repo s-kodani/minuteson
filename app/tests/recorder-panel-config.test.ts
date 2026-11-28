@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 const source=(path:string)=>readFileSync(new URL(path,import.meta.url),"utf8");
 test("mini hide is authorized only for recorder and independent of recording locks or stopping",()=>{
-  const lib=source("../src-tauri/src/lib.rs"), window=source("../src-tauri/src/recording_confirmation_window.rs");
-  const command=lib.split("fn hide_recorder_panel(")[1].split("#[tauri::command]")[0];
+  const commands=source("../src-tauri/src/recorder_panel/commands.rs"), window=source("../src-tauri/src/recording_confirmation_window.rs");
+  const command=commands.split("fn hide_recorder_panel(")[1].split("#[tauri::command]")[0];
   assert.match(command,/window.label\(\) != "recorder"/);
   assert.match(command,/hide_recorder\(window.app_handle\(\)\)/);
   const hide=window.split("pub fn hide_recorder(")[1];
@@ -12,7 +12,7 @@ test("mini hide is authorized only for recorder and independent of recording loc
   assert.match(hide,/else if app.state::<SessionStore>\(\).snapshot\(\).is_active\(\)/);
   assert.match(hide,/recorder_panel::hide\(&panel\)/);
   assert.match(hide,/main\.show\(\)/);
-  assert.doesNotMatch(lib,/recorder_close_requested|hide_recorder_preview/);
+  assert.doesNotMatch(commands,/recorder_close_requested|hide_recorder_preview/);
 });
 test("mini always has an independent close action without disabling on active or unreadable session",()=>{
   const panel=source("../src/recorder-panel.tsx").split("function RecorderPanel()")[1];

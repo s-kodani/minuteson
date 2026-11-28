@@ -1,5 +1,7 @@
 //! No engine execution. Both preview and apply re-read the latest successful
 //! trial, current model files, and trial artifacts before touching preferences.
+pub(crate) mod commands;
+
 use crate::storage::{
     model_profiles::{ApplyPreview, ProfileName, ProfileView},
     Storage,

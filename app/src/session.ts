@@ -2,7 +2,7 @@ import { invoke, isTauri } from "./ipc.ts";
 import { listen } from "@tauri-apps/api/event";
 import { useSyncExternalStore } from "react";
 import { SnapshotResource } from "./snapshot-resource";
-import { browserFocus, browserSchedule } from "./snapshot-browser";
+import { browserRecoveryFocus, browserSchedule } from "./snapshot-browser";
 import type { StageProgress } from "./stage-progress";
 
 export type RecordingPhase = "idle" | "preparing" | "recording" | "stopping" | "saving" | "error";
@@ -38,7 +38,8 @@ const recordingResource = new SnapshotResource<RecordingSnapshot>({
     }
     return current && current.revision > value.revision ? current : value;
   },
-  intervalMs: 1000, schedule: browserSchedule, focus: browserFocus,
+  intervalMs: 1000, eventIntervalMs: 5000, revision: snapshot => snapshot.revision,
+  schedule: browserSchedule, focus: browserRecoveryFocus,
 });
 const unavailableSubscription = () => () => {};
 export function useRecordingSession(): BridgeState {

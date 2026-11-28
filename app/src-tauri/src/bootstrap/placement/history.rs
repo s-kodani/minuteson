@@ -89,7 +89,7 @@ impl Local {
             if count != 1
                 || saved != intent
                 || hash(saved.as_bytes()) != sha
-                || read_identity(&j, &h)? != initial.identity
+                || !p.matches_saved_target(&read_identity(&j, &h)?, &initial.identity)
                 || db
                     .query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0))
                     .map_err(|e| e.to_string())?
@@ -226,7 +226,12 @@ impl Local {
         let fd = crate::native_fs::metadata(&file).map_err(|e| e.to_string())?;
         let path = crate::native_fs::symlink_metadata(p.pending.target.join(REGISTRY))
             .map_err(|e| e.to_string())?;
-        if !regular(&fd, true) || !regular(&path, true) || !id.matches(&fd) || !id.matches(&path) {
+        let current = Identity::read(&fd)?;
+        if !regular(&fd, true)
+            || !regular(&path, true)
+            || !p.matches_saved_target(id, &current)
+            || !current.matches(&path)
+        {
             return Err("移行先台帳の本文が差し替え・リンク化されています".into());
         }
         Ok(file)
