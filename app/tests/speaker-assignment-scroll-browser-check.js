@@ -1,6 +1,7 @@
 // Real transcript/modal components with synthetic saved data; no user data.
 async page => {
   const results=[], check=(ok,message)=>{if(!ok)throw Error(message);};
+  const paint=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   for(const scenario of ["ordinary","filtered","filtered-top","filtered-bottom","consolidated","filtered-consolidated","filtered-uncheck-consolidated","filtered-uncheck-consolidated-lost","filtered-uncheck-unknown","filtered-retry"]){
     if(results.length)await page.reload();
     await page.waitForFunction(()=>!!window.monBrowserFixture);
@@ -19,16 +20,25 @@ async page => {
     await list.waitFor();
     if(scenario.startsWith("filtered"))await page.getByRole("button",{name:"田中の発言で絞り込み",exact:true}).click();
     if(scenario.includes("uncheck-consolidated"))await page.getByRole("searchbox",{name:"発言を検索",exact:true}).fill("閲覧位置");
-    const row=page.locator(`[data-utterance-id="scroll-${scenario==="filtered-bottom"?158:100}"]`);
+    const targetIndex=scenario==="filtered-bottom"?158:100;
+    const row=page.locator(`[data-utterance-id="scroll-${targetIndex}"]`);
+    const virtual=await list.evaluate((list,index)=>{
+      if(window.monTranscriptVirtualizeThreshold!==0)return false;
+      list.scrollTop=index/160*list.scrollHeight;
+      return true;
+    },targetIndex);
+    if(virtual)await paint();
     await row.evaluate((e,scenario)=>e.scrollIntoView({block:scenario==="filtered-top"?"start":"center"}),scenario);
     if(scenario==="filtered-top")await row.evaluate(e=>{
       const list=e.closest(".utterance-list");
       list.scrollTop+=e.getBoundingClientRect().top-list.getBoundingClientRect().top+1;
     });
+    if(virtual)await paint();
     const anchor=await list.evaluate((list,scenario)=>{
       const top=list.getBoundingClientRect().top;
-      let row=[...list.children].find(row=>row.getBoundingClientRect().bottom>top);
-      if(scenario==="filtered-top")row=row.nextElementSibling;
+      const rows=[...list.querySelectorAll(".utterance-row")];
+      const index=rows.findIndex(row=>row.getBoundingClientRect().bottom>top);
+      const row=rows[index+(scenario==="filtered-top"?1:0)];
       return {label:row.getAttribute("aria-label"),offset:row.getBoundingClientRect().top-top,scroll:list.scrollTop};
     },scenario);
     check(anchor.scroll>1000,"fixture did not scroll into the meeting");
@@ -51,7 +61,7 @@ async page => {
     await page.waitForFunction(()=>!document.querySelector(".utterance-list")?.closest("[inert]"));
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     const position=await list.evaluate((list,anchor)=>{
-      const row=[...list.children].find(row=>row.getAttribute("aria-label")===anchor.label);
+      const row=[...list.querySelectorAll(".utterance-row")].find(row=>row.getAttribute("aria-label")===anchor.label);
       return {scroll:list.scrollTop,maxScroll:list.scrollHeight-list.clientHeight,offset:row?row.getBoundingClientRect().top-list.getBoundingClientRect().top:null};
     },anchor);
     check(position.scroll>1000 && position.offset!==null && (Math.abs(position.offset-anchor.offset)<2
@@ -63,7 +73,8 @@ async page => {
         `${scenario} reset the selected speaker filter`);
       check(await page.getByRole("button",{name:/すべての発言/}).getAttribute("aria-pressed")==="false",
         `${scenario} switched to all utterances`);
-      check(await list.locator("article").count()===79,`${scenario} showed utterances from other speakers`);
+      const count=virtual ? Number(await list.getByRole("listitem").first().getAttribute("aria-setsize")) : await list.locator("article").count();
+      check(count===79,`${scenario} showed utterances from other speakers`);
       if(scenario.includes("uncheck-consolidated"))check(await page.getByRole("searchbox",{name:"発言を検索",exact:true}).inputValue()==="閲覧位置","consolidation cleared the text query");
       // MainWindow refreshes after publication; a later version notification
       // must not undo the filter that survived the consolidation reply.

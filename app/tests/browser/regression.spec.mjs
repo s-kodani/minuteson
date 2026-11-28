@@ -19,6 +19,9 @@ for (const [name, fixture, source] of suites) {
     page.setDefaultTimeout(name.startsWith("internal-logs-") ? 30_000 : 10_000);
     // Cold Vite module loads have a separate budget from control interactions.
     page.setDefaultNavigationTimeout(30_000);
+    if (fixture === "browser-fixture.js" && process.env.MON_TRANSCRIPT_FORCE_VIRTUAL === "1") {
+      await page.addInitScript(() => { window.monTranscriptVirtualizeThreshold = 0; });
+    }
     const port = new URL(baseURL).port;
     const localPort = value => value.replaceAll("1420", port);
     if (fixture) {

@@ -6,14 +6,21 @@ async(page,capturePath)=>{
   const editor=page.getByRole('region',{name:'文字起こし編集',exact:true});
   const body=editor.getByRole('region',{name:'発言本文',exact:true});
   await body.waitFor();
-  check(await body.getByRole('article').count()===70,'utterance list still truncates matching rows');
+  const virtual=await page.evaluate(()=>window.monTranscriptVirtualizeThreshold===0);
+  const utteranceCount=async()=>virtual ? Number(await body.getByRole('listitem').first().getAttribute('aria-setsize')) : body.getByRole('article').count();
+  check(await utteranceCount()===70,'utterance list still truncates matching rows');
   const count=()=>page.evaluate(()=>window.monBrowserFixture.calls.filter(c=>c.command==='save_transcript_draft').length);
   await editor.getByRole('button',{name:'田中の発言で絞り込み',exact:true}).click();
-  check(await body.getByRole('article').count()===24,'speaker filter includes wrong rows');
-  await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('本文0');check(await body.getByRole('article').count()===1,'speaker/text filters do not intersect');
+  check(await utteranceCount()===24,'speaker filter includes wrong rows');
+  await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('本文0');check(await utteranceCount()===1,'speaker/text filters do not intersect');
   const unknown=editor.getByRole('button',{name:'話者不明の発言 23',exact:true});check(await unknown.isVisible(),'unknown speaker count is missing or affected by search');
-  await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('');await unknown.click();check(await body.getByRole('article').count()===23,'unknown filter invents an assigned speaker');
-  await editor.getByRole('button',{name:/^すべての発言/}).click();check(await body.getByRole('article').count()===70,'clearing filters loses utterances');check(await editor.locator('.transcript-pages').count()===0,'utterance pagination remains');check(await body.locator('[data-utterance-id]').last().getAttribute('data-utterance-id')==='speech-69','final utterance is not in sequence');
+  await editor.getByRole('searchbox',{name:'発言を検索',exact:true}).fill('');await unknown.click();check(await utteranceCount()===23,'unknown filter invents an assigned speaker');
+  await editor.getByRole('button',{name:/^すべての発言/}).click();check(await utteranceCount()===70,'clearing filters loses utterances');check(await editor.locator('.transcript-pages').count()===0,'utterance pagination remains');
+  if(virtual){
+    await body.evaluate(list=>{list.scrollTop=list.scrollHeight;});
+    await body.locator('[data-utterance-id="speech-69"]').waitFor();
+  }
+  check(await body.locator('[data-utterance-id]').last().getAttribute('data-utterance-id')==='speech-69','final utterance is not in sequence');
   results.push('speaker unknown and text filters combine correctly and all 70 rows remain available without pagination');
   await editor.getByRole('button',{name:'田中の名前を変更',exact:true}).click();
   const name=page.getByRole('dialog',{name:'話者名を変更',exact:true}),input=name.getByRole('textbox',{name:'表示名',exact:true});await input.waitFor();

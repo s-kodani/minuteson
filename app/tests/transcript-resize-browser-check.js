@@ -17,7 +17,9 @@ async (page, capturePath) => {
   const main = editor.locator('.transcript-main');
   const body = editor.getByRole('region', { name: '発言本文', exact: true });
   await body.getByRole('article').last().waitFor();
-  check(await body.getByRole('article').count() === 70, 'fixture does not retain the long transcript');
+  const virtual = await page.evaluate(() => window.monTranscriptVirtualizeThreshold === 0);
+  const count = virtual ? Number(await body.getByRole('listitem').first().getAttribute('aria-setsize')) : await body.getByRole('article').count();
+  check(count === 70, 'fixture does not retain the long transcript');
   const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const width = async () => (await speaker.boundingBox()).width;
   const dragBy = async delta => {
