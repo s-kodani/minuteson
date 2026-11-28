@@ -183,6 +183,26 @@ fn placement_cancellation_after_move_keeps_destination_and_resumes_same_package(
     assert!(f.place(&|| false, &|| {}).unwrap().placement_recorded);
 }
 #[test]
+fn placement_resume_checks_device_inode_and_birth_in_transfer_record() {
+    for index in 0..3 {
+        let f = Fixture::new();
+        let stopped = Cell::new(false);
+        assert!(f.place(&|| stopped.get(), &|| stopped.set(true)).is_err());
+        let path = f.staging.join(&f.receipt.operation_id).join(TRANSFER);
+        let mut transfer: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for field in ["source", "destinationRoot"] {
+            let value = &mut transfer[field][index];
+            *value = serde_json::json!(value.as_u64().unwrap() + 1);
+        }
+        std::fs::write(path, serde_json::to_vec(&transfer).unwrap()).unwrap();
+        assert_eq!(
+            f.place(&|| false, &|| {}).is_ok(),
+            cfg!(target_os = "macos") && index == 0,
+        );
+    }
+}
+#[test]
 fn placement_rejects_changed_bytes_and_foreign_destinations_without_overwrite() {
     let f = Fixture::new();
     std::fs::write(f.receipt.directory.join("model.bin"), b"changed").unwrap();

@@ -718,8 +718,15 @@ fn activation_selection_freezes_old_storage_then_cold_start_admits_same_owned_me
     // Cold startup must not need any live source snapshot/root/SQLite handle.
     let retained = source.with_extension("retained");
     std::fs::rename(&source, &retained).unwrap();
+    let mut document: Document =
+        serde_json::from_slice(&std::fs::read(config.join(NAME)).unwrap()).unwrap();
+    document.record.current.directory.device += 100;
+    document.record.current.database.device += 100;
+    document.sha256 = hash(&serde_json::to_vec(&document.record).unwrap());
+    std::fs::write(config.join(NAME), serde_json::to_vec(&document).unwrap()).unwrap();
     let b = Bootstrap::open(&config, &legacy).unwrap();
     assert_eq!(b.root(), target);
+    assert!(b.recovery_view().unwrap().is_none());
     let db = Connection::open(config.join(format!(".relocation-{}.sqlite3", f.operation))).unwrap();
     assert_eq!(
         db.query_row("SELECT count(*) FROM admission", [], |r| r.get::<_, i64>(0))

@@ -40,6 +40,24 @@ pub(super) fn chain(base: &Path, owner: &str, auxiliary_invalid: bool) {
 }
 
 #[test]
+fn saved_wav_owner_allows_only_a_macos_device_number_change_during_recovery() {
+    let (_root, storage, session, base) = fixture(true);
+    let path = base.join("single-wav-owner.json");
+    let original = value(&path);
+    let directory = Directory::open(&base).unwrap();
+    for field in ["device", "inode", "birthNanoseconds"] {
+        let mut saved = original.clone();
+        saved[field] = serde_json::json!(saved[field].as_u64().unwrap() + 1);
+        json(&path, &saved);
+        assert!(recovery::inspect(&storage, &directory, &session.id, false, &|| false).is_err());
+        assert_eq!(
+            recovery::inspect(&storage, &directory, &session.id, true, &|| false).is_ok(),
+            cfg!(target_os = "macos") && field == "device",
+        );
+    }
+}
+
+#[test]
 fn descriptive_manifest_failures_save_all_verified_pcm() {
     for condition in [
         "missing",
@@ -265,7 +283,7 @@ fn same_invocation_completion_reuses_evidence_but_detects_file_changes() {
     let (_root, storage, session, base) = fixture(true);
     let _observations = crate::operation_observation::Scope::enter("recording_save", |_| {});
     let (saved, proof) = storage
-        .finalize_single_wav_recording(&session, &|| false)
+        .finalize_single_wav_recording(&session, false, &|| false)
         .unwrap();
     let checked = crate::operation_observation::measurements();
     assert_eq!(checked, (64000, 1));

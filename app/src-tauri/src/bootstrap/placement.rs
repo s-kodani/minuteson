@@ -96,6 +96,8 @@ pub(crate) struct Placement<'a> {
     path: PathBuf,
     file: File,
     root: File,
+    target_identity: Identity,
+    cold: bool,
     proof: ControlProof,
     db: Connection,
     expected_schema: Vec<(String, String, String)>,
@@ -175,8 +177,16 @@ impl Bootstrap {
         snapshot_manifest: Option<&Manifest>,
     ) -> Result<Placement<'a>, String> {
         let target = directory(&pending.target)?;
+        let target_identity = Identity::read(&target)?;
+        let cold = snapshot_manifest.is_none();
         local(&pending.target)?;
-        if target.mode() & 0o077 != 0 || !pending.target_directory.matches(&target) {
+        if target.mode() & 0o077 != 0
+            || !(if cold {
+                pending.target_directory.same_persistent(&target_identity)
+            } else {
+                pending.target_directory == target_identity
+            })
+        {
             return Err("確認した移動先の実体・権限が変更されています".into());
         }
         let root = std::fs::OpenOptions::new()
@@ -184,9 +194,7 @@ impl Bootstrap {
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&pending.target)
             .map_err(|e| e.to_string())?;
-        if !pending
-            .target_directory
-            .matches(&crate::native_fs::metadata(&root).map_err(|e| e.to_string())?)
+        if !target_identity.matches(&crate::native_fs::metadata(&root).map_err(|e| e.to_string())?)
         {
             return Err("配置先が開く途中で変更されています".into());
         }
@@ -440,6 +448,8 @@ impl Bootstrap {
             path,
             file,
             root,
+            target_identity,
+            cold,
             proof,
             db,
             expected_schema,
@@ -531,11 +541,10 @@ impl Placement<'_> {
         }
         record.current.verify()?;
         let target = directory(&self.pending.target)?;
-        if !self.pending.target_directory.matches(&target)
+        if !self.target_identity.matches(&target)
             || target.mode() & 0o077 != 0
             || !self
-                .pending
-                .target_directory
+                .target_identity
                 .matches(&crate::native_fs::metadata(&self.root).map_err(|e| e.to_string())?)
             || ControlProof::read(
                 &crate::native_fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?,
@@ -598,7 +607,11 @@ impl Placement<'_> {
         self.guard()
     }
     fn metadata_matches(&self, node: &Node, m: &Metadata) -> Result<(), String> {
-        if !node.identity.as_ref().is_some_and(|p| p.matches(m))
+        let current = Identity::read(m)?;
+        if !node
+            .identity
+            .as_ref()
+            .is_some_and(|p| self.matches_saved_target(p, &current))
             || m.mode() & 0o077 != 0
             || (node.entry.directory && !m.is_dir())
             || (!node.entry.directory && !regular(m, true))
@@ -606,6 +619,13 @@ impl Placement<'_> {
             return Err("配置した対象の所有・実体・権限が変更されています".into());
         }
         Ok(())
+    }
+    fn matches_saved_target(&self, saved: &Identity, current: &Identity) -> bool {
+        saved == current
+            || (self.cold
+                && saved.device == self.pending.target_directory.device
+                && current.device == self.target_identity.device
+                && saved.same_persistent(current))
     }
     fn parent(&self, name: &str) -> Result<(File, String), String> {
         self.guard()?;
