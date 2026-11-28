@@ -167,6 +167,55 @@ fn preview(storage: &Storage, meeting: &str) -> crate::storage::deletion::audio:
 }
 
 #[test]
+fn flac_relocation_startup_accepts_only_a_saved_device_difference() {
+    use crate::test_support::relocation_identity::with_change;
+
+    let f = failed();
+    let control = control_temp();
+    let config = control.path().join("config");
+    let target = control.path().join("target");
+    let source = f.storage.root().to_owned();
+    let relative = f.base.strip_prefix(&source).unwrap().to_owned();
+    let bytes = std::fs::read(f.base.join(PARTIAL_PLAN)).unwrap();
+    let storage = with_change("flac", true, || {
+        move_storage(f.storage, &config, &source, &target)
+    });
+    assert!(!storage.data_write_blocked());
+
+    let mut plan: Plan = serde_json::from_slice(&bytes).unwrap();
+    super::super::relocation::effective_plan(
+        &storage,
+        &target.join(&relative),
+        PARTIAL_PLAN,
+        &bytes,
+        &mut plan,
+    )
+    .unwrap();
+    let mut plan: Plan = serde_json::from_slice(&bytes).unwrap();
+    assert!(with_change("flac-live", true, || {
+        super::super::relocation::effective_plan(
+            &storage,
+            &target.join(&relative),
+            PARTIAL_PLAN,
+            &bytes,
+            &mut plan,
+        )
+    })
+    .is_err());
+    assert_eq!(
+        std::fs::read(target.join(&relative).join(PARTIAL_PLAN)).unwrap(),
+        bytes
+    );
+    drop(storage);
+
+    let bootstrap = Bootstrap::open(&config, &source).unwrap();
+    let error = with_change("flac", false, || bootstrap.open_storage())
+        .err()
+        .expect("inode が違う FLAC 履歴を受け付けない");
+    assert!(error.contains("FLACの承認した元領域・DBと移動先が一致しません"));
+}
+
+#[test]
 fn flac_relocation_normal_rollback_cold_resume_preserves_ids_pcm_and_original_receipts() {
     let f = failed();
     let control = control_temp();

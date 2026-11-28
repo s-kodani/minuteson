@@ -648,6 +648,20 @@ impl RootAnchor {
         }
         Err("履歴の保存先フォルダーの実体が一致しません".into())
     }
+    #[cfg(target_os = "macos")]
+    pub(super) fn verify_relocated_models_directory(
+        &self,
+        operation: &str,
+        directory: &Directory,
+        saved: &Identity,
+    ) -> Result<bool, String> {
+        let Some(history) = &self.inspection_history else {
+            return Ok(false);
+        };
+        history.verify_anchor(&self.root.path, &self.identity()?)?;
+        directory.verify()?;
+        history.verify_models_directory(operation, &directory.path, saved, &directory.identity)
+    }
     /// Read-only backup traversal starts from the SAME root inode as SQLite,
     /// never a newly opened path that could have been substituted meanwhile.
     pub(in crate::storage) fn backup_input_root(&self) -> Result<File, String> {

@@ -43,6 +43,14 @@ struct Control {
     wav_history: Option<serde_json::Value>,
     excluded_area: String,
 }
+fn matches_destination(saved: &fs::Identity, current: &fs::Identity) -> bool {
+    if cfg!(target_os = "macos") {
+        saved.same_persistent(current)
+    } else {
+        saved == current
+    }
+}
+
 fn sha(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
@@ -195,18 +203,39 @@ pub(in crate::storage) fn admitted_history(
         return Err("移動由来の削除履歴が元の制御記録と一致しません".into());
     }
     let source: SourceFacts = serde_json::from_value(facts).map_err(|e| e.to_string())?;
-    let destination: DestinationFacts = serde_json::from_value(
+    #[cfg(all(test, target_os = "macos"))]
+    let source = {
+        let mut source = source;
+        if let Some(identity) = &mut source.models_identity {
+            crate::test_support::relocation_identity::perturb(
+                "models",
+                &mut identity.device,
+                &mut identity.inode,
+            );
+        }
+        source
+    };
+    let mut destination: DestinationFacts = serde_json::from_value(
         local
             .get("deletion_binding")
             .ok_or("削除履歴の所有対応がありません")?
             .clone(),
     )
     .map_err(|e| e.to_string())?;
+    #[cfg(all(test, target_os = "macos"))]
+    crate::test_support::relocation_identity::perturb(
+        "deletion",
+        &mut destination.root.device,
+        &mut destination.root.inode,
+    );
     source.root.validate(true)?;
     source.database.validate(false)?;
     destination.root.validate(true)?;
     destination.database.validate(false)?;
     let (path, root_id, db_id) = admission.source();
+    let anchor = fs::RootAnchor::bind(fs::RootAnchor::directory(admission.root())?)?;
+    let current = anchor.identity()?;
+    root.verify_identity(&current.0)?;
     if source.version != 4
         || source.source_root != path
         || source.root.registered()? != root_id
@@ -239,7 +268,9 @@ pub(in crate::storage) fn admitted_history(
         || destination.operation != admission.operation()
         || destination.native_hash != admission.native_hash()
         || destination.target_root != admission.root()
-        || destination.root != root.identity
+        || !matches_destination(&destination.root, &current.0)
+        || !matches_destination(&destination.database, &current.1)
+        || destination.database.registered()? != admission.owned_path("meetings.sqlite3", false)?
         || destination.directories.len() != source.directories.len()
         || destination.historical_directories.len() != source.historical_directories.len()
     {
@@ -268,10 +299,16 @@ pub(in crate::storage) fn admitted_history(
     if has_models != source.models_identity.is_some() {
         return Err("承認済みモデル領域の実体記録が欠落しています".into());
     }
-    if let Some(expected) = &source.models_identity {
+    let models = if let Some(expected) = &source.models_identity {
         expected.validate(true)?;
-        fs::Directory::root(admission.models_root())?.verify_identity(expected)?;
-    }
+        let directory = fs::Directory::root(admission.models_root())?;
+        if !matches_destination(expected, &directory.identity) {
+            return Err("承認済みのモデル削除履歴の保存先が一致しません".into());
+        }
+        Some(directory)
+    } else {
+        None
+    };
     if source
         .directories
         .windows(2)
@@ -322,20 +359,36 @@ pub(in crate::storage) fn admitted_history(
         }
         previous = Some(key);
     }
+    // 台帳との照合が済んだ、配置先と同じボリュームの親証拠をメモリ上で束縛する。
+    // 過去の削除記録と台帳は保持し、実際に参照する親は現在の番号でも完全一致を要求する。
+    if cfg!(target_os = "macos") {
+        for directory in destination
+            .directories
+            .iter_mut()
+            .chain(&mut destination.historical_directories)
+        {
+            if directory.copied.device == destination.root.device {
+                directory.copied.device = current.0.device;
+            }
+        }
+    }
     let aliases = Arc::new(Aliases {
         target: destination.target_root,
         original: (source.root.clone(), source.database.clone()),
-        current: (destination.root, destination.database),
+        current,
         records: source
             .records
             .iter()
             .map(|r| (r.operation_id.clone(), r.clone()))
             .collect(),
         directories: directory_index(destination.directories, destination.historical_directories)?,
+        #[cfg(target_os = "macos")]
+        models: models
+            .as_ref()
+            .map(|directory| (source.models_root.clone(), directory.identity.clone())),
         cold: true,
     });
-    let mut anchor = fs::RootAnchor::bind(fs::RootAnchor::directory(admission.root())?)?
-        .with_inspection_history(aliases.clone())?;
+    let mut anchor = anchor.with_inspection_history(aliases.clone())?;
     anchor.seal_controls()?;
     let db = inspection_database(&anchor, admission.root(), &|| admission.read_snapshot())?;
     db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA query_only=ON;")
@@ -367,6 +420,9 @@ pub(in crate::storage) fn admitted_history(
     records(&db, &source)?;
     db.finish()?;
     anchor.verify()?;
+    if let Some(directory) = models {
+        directory.verify()?;
+    }
     root.verify_file(".mon-scratch.sqlite3", &held_registry)?;
     admission.verify()?;
     if admission.control()? != saved {
@@ -374,6 +430,72 @@ pub(in crate::storage) fn admitted_history(
     }
     verify_registry_unchanged(admission, &registry, &local_json)?;
     Ok(Some(aliases))
+}
+
+#[cfg(test)]
+fn synthetic_aliases() -> Aliases {
+    let identity = fs::Identity {
+        device: 1,
+        inode: 2,
+        birth_seconds: 3,
+        birth_nanos: 4,
+        mode: 0o040700,
+    };
+    let path = PathBuf::from(crate::test_support::absolute("/relocated"));
+    Aliases {
+        target: path,
+        original: (identity.clone(), identity.clone()),
+        current: (identity.clone(), identity.clone()),
+        records: BTreeMap::new(),
+        directories: BTreeMap::new(),
+        #[cfg(target_os = "macos")]
+        models: None,
+        cold: true,
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn deletion_relocation_anchor_rejects_a_device_change_after_admission() {
+    let aliases = synthetic_aliases();
+    assert!(aliases
+        .verify_anchor(&aliases.target, &aliases.current)
+        .is_ok());
+    let mut changed = aliases.current.clone();
+    changed.0.device ^= 1;
+    assert!(aliases.verify_anchor(&aliases.target, &changed).is_err());
+}
+
+#[cfg(all(test, target_os = "macos"))]
+#[test]
+fn model_relocation_anchor_rejects_a_device_change_after_admission() {
+    let mut aliases = synthetic_aliases();
+    let path = PathBuf::from("/models");
+    let current = aliases.current.0.clone();
+    aliases.models = Some((path.clone(), current.clone()));
+    aliases.records.insert(
+        "model".into(),
+        Record {
+            operation_id: "model".into(),
+            kind: "delete_assets".into(),
+            state: "recovered".into(),
+            validation: "keptModel".into(),
+            target_hash: String::new(),
+            row_hash: String::new(),
+            path_count: 0,
+            paths_hash: String::new(),
+            immutable_hash: String::new(),
+            historical_roots: Vec::new(),
+        },
+    );
+    let mut saved = current.clone();
+    saved.device ^= 1;
+    assert!(aliases
+        .verify_models_directory("model", &path, &saved, &current)
+        .unwrap());
+    assert!(aliases
+        .verify_models_directory("model", &path, &saved, &saved)
+        .is_err());
 }
 
 struct InspectionDatabase {
