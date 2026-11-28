@@ -80,6 +80,23 @@ async page => {
   await status("処理が完了しました").waitFor();check(await calls("get_analysis_notification_output")===1,"proof repeated after invalidations");await noWork();
   results.push("rapid invalidations coalesce around one pending exact-output proof");
 
+  await boot();await start();await dismiss();
+  await page.clock.pauseAt(new Date(await page.evaluate(()=>Date.now())+100));
+  await page.evaluate(()=>{
+    const f=window.monBrowserFixture;
+    f.notificationProofMode="delay";
+    Object.assign(f.notificationJobs[0],{state:"succeeded",updatedAt:Date.now(),completedUnits:2,outputAnalysisId:"missed-event"});
+  });
+  check(await calls("get_analysis_notification_output")===0,"eventless completion received an early output read");
+  await page.clock.runFor(3000);
+  check(await calls("get_analysis_notification_output")===1,"periodic read missed completion within three seconds");
+  check(await status("処理が完了しました").count()===0,"unverified polled output announced completion");
+  await page.evaluate(()=>window.monBrowserFixture.releaseNotificationProof());
+  await page.clock.runFor(100);
+  await status("処理が完了しました").waitFor();
+  await page.clock.resume();
+  results.push("a missing job event is recovered within three seconds and announces completion after output verification");
+
   await boot();await start();await dismiss();await update({state:"pausing"});
   check(await status("一時停止しました").count()===0,"pause request treated as checkpoint");
   await update({state:"paused",pauseReason:"recording"});await status("録音・取り込み優先").waitFor();await dismiss();

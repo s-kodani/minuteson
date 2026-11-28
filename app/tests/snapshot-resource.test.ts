@@ -18,10 +18,12 @@ function fixture() {
   });
   return { resource, reads, event: (value: Value) => event(value), poll: () => poll(), focus: () => focus(), stopped: () => stopped };
 }
-test("snapshot readers share one subscription and coalesce focus and timer reads", async () => {
+test("snapshot readers share one subscription and queue only one focus verification during a read", async () => {
   const f = fixture(); const a = f.resource.subscribe(() => {}), b = f.resource.subscribe(() => {});
-  await flush(); f.poll(); f.focus(); assert.equal(f.reads.length, 1);
+  await flush(); f.poll(); f.focus(); f.focus(); assert.equal(f.reads.length, 1);
   f.reads[0].resolve({ revision: 1 }); await flush();
+  assert.equal(f.reads.length, 2);
+  f.reads[1].resolve({ revision: 2 }); await flush();
   a(); assert.equal(f.stopped(), 0); b(); assert.equal(f.stopped(), 3);
 });
 test("a failed older read cannot overwrite a successful newer event", async () => {
@@ -39,6 +41,37 @@ test("unmount invalidates pending reads and a remount verifies retained state", 
   const next = f.resource.subscribe(() => {}); await flush(); assert.equal(f.reads.length, 2);
   f.reads[0].resolve({ revision: 9 }); await flush(); assert.equal(f.resource.getSnapshot().snapshot, null);
   f.reads[1].resolve({ revision: 2 }); await flush(); assert.equal(f.resource.getSnapshot().snapshot?.revision, 2); next();
+});
+
+test("recording verification stays on the short interval until subscription and reads recover", async () => {
+  let subscribeAttempts = 0, failRead = false, delay = 0;
+  let focus!: () => void, poll!: () => void;
+  const resource = new SnapshotResource<number>({
+    read: async () => { if (failRead) throw Error("offline"); return 1; },
+    subscribe: async () => {
+      if (++subscribeAttempts === 1) throw Error("unavailable");
+      return () => {};
+    },
+    accept: (_prior, value) => value,
+    intervalMs: 1000, eventIntervalMs: 5000,
+    schedule: (read, ms) => { poll = read; delay = ms; return () => {}; },
+    focus: read => { focus = read; return () => {}; },
+  });
+  const stop = resource.subscribe(() => {});
+  await flush();
+  assert.equal(delay, 1000);
+  focus();
+  await flush(); await flush();
+  assert.equal(delay, 5000);
+  failRead = true;
+  poll();
+  await flush();
+  assert.equal(delay, 1000);
+  failRead = false;
+  poll();
+  await flush();
+  assert.equal(delay, 5000);
+  stop();
 });
 
 test("read-only invalidations queue one verification after an event or focus during a read", async () => {
