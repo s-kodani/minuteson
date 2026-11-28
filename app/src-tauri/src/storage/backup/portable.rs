@@ -16,6 +16,7 @@ pub(super) const TABLES: &[&str] = &[
     "track_inputs",
     "meeting_audio_commits",
     "analysis_revisions",
+    "analysis_vocabulary_diagnostics",
     "speakers",
     "speaker_segments",
     "utterances",

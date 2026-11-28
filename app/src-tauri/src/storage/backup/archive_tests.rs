@@ -25,12 +25,17 @@ pub(in crate::storage::backup) fn cached_archive(
 }
 
 pub(in crate::storage) fn meeting(storage: &Storage, operation: &str) -> String {
-    meeting_source(storage, operation, false)
+    meeting_source(storage, operation, false, &[])
 }
 pub(in crate::storage::backup) fn meeting_with_mix(storage: &Storage, operation: &str) -> String {
-    meeting_source(storage, operation, true)
+    meeting_source(storage, operation, true, &[])
 }
-fn meeting_source(storage: &Storage, operation: &str, mixed: bool) -> String {
+fn meeting_source(
+    storage: &Storage,
+    operation: &str,
+    mixed: bool,
+    ignored: &[mon_contracts::IgnoredHotword],
+) -> String {
     let options = ImportOptions {
         meeting_vocabulary: vec![VocabularyEntry {
             id: Uuid::new_v4().to_string(),
@@ -76,6 +81,13 @@ fn meeting_source(storage: &Storage, operation: &str, mixed: bool) -> String {
         config:json!({"executable":{"path":"C:\\Users\\source-machine\\llama.exe","size":9,"sha256":"c".repeat(64)}}),
         speakers:vec![],segments:vec![],utterances:vec![UtteranceInput {track_id:track,start_us:0,end_us:1_000_000,text:"点検日を確認する。発言に含まれる /Users/fictional はそのまま保持。".into(),speaker_keys:vec![],confidence:None}],
     }).unwrap();
+    super::super::super::analysis_vocabulary::insert(
+        &storage.connection.lock().unwrap(),
+        &analysis,
+        ignored,
+        false,
+    )
+    .unwrap();
     let version = storage
         .get_meeting(&saved.meeting_id)
         .unwrap()
@@ -132,57 +144,75 @@ fn payloads(archive: &VerifiedArchive) -> Vec<Vec<u8>> {
 }
 
 #[test]
-fn format8_schema39_portable_contents_restore_then_export_as_schema40() {
+fn format8_schema39_and_40_portable_contents_restore_then_export_as_current() {
     let root = tempfile::tempdir().unwrap();
     let source = Storage::open(root.path().into()).unwrap();
     meeting(&source, "portable-schema39");
     let out = tempfile::tempdir().unwrap();
     let (current, _) = write(&source, out.path());
     let archive = verified(&current, out.path());
-    assert_eq!(archive.manifest.schema_version, 40);
+    assert_eq!(archive.manifest.schema_version, SCHEMA_VERSION);
     let mut old = archive.manifest.clone();
     // Schema40 changes no portable column or record. This envelope is the
     // exact format8/schema39 contract, not an executable old SQL database.
-    old.schema_version = 39;
-    let old_path = out.path().join("schema39.monbackup");
-    pack(&old_path, &old, &payloads(&archive));
-    drop(archive);
-    let target_root = tempfile::tempdir().unwrap();
-    let target = Storage::open(target_root.path().into()).unwrap();
-    let selection = target
-        .prepare_additive_restore(&old_path, &|| false, &|_| {})
-        .unwrap();
-    let restored = selection
-        .publish(
-            &target,
-            &selection.preview().confirmation_id,
-            &|| false,
-            &|_| {},
-        )
-        .unwrap();
-    assert_eq!(restored.meeting_ids.len(), 1);
-    target
-        .verify_canonical_audio(&restored.meeting_ids[0], &|| false)
-        .unwrap();
-    verify_database_schema(&target.connection.lock().unwrap()).unwrap();
-    let new_path = out.path().join("schema40.monbackup");
-    target.create_backup_archive(&new_path, &|| false).unwrap();
-    let new_archive = verified(&new_path, out.path());
-    assert_eq!(new_archive.manifest.format_version, 8);
-    assert_eq!(new_archive.manifest.schema_version, 40);
-    verify_database_schema(&new_archive.database).unwrap();
+    for old_version in [39, 40] {
+        old.schema_version = old_version;
+        let old_path = out.path().join(format!("schema{old_version}.monbackup"));
+        pack(&old_path, &old, &payloads(&archive));
+        let target_root = tempfile::tempdir().unwrap();
+        let target = Storage::open(target_root.path().into()).unwrap();
+        let selection = target
+            .prepare_additive_restore(&old_path, &|| false, &|_| {})
+            .unwrap();
+        let restored = selection
+            .publish(
+                &target,
+                &selection.preview().confirmation_id,
+                &|| false,
+                &|_| {},
+            )
+            .unwrap();
+        assert_eq!(restored.meeting_ids.len(), 1);
+        target
+            .verify_canonical_audio(&restored.meeting_ids[0], &|| false)
+            .unwrap();
+        verify_database_schema(&target.connection.lock().unwrap()).unwrap();
+        let new_path = out
+            .path()
+            .join(format!("schema{old_version}-upgraded.monbackup"));
+        target.create_backup_archive(&new_path, &|| false).unwrap();
+        let new_archive = verified(&new_path, out.path());
+        assert_eq!(new_archive.manifest.format_version, 8);
+        assert_eq!(new_archive.manifest.schema_version, SCHEMA_VERSION);
+        verify_database_schema(&new_archive.database).unwrap();
+    }
 }
 
 #[test]
 fn current_contents_roundtrip_has_one_baseline_and_no_jobs_or_edits() {
     let root = tempfile::tempdir().unwrap();
     let storage = Storage::open(root.path().into()).unwrap();
-    let meeting = meeting(&storage, "current-content");
+    let ignored = [mon_contracts::IgnoredHotword {
+        term: "C#".into(),
+        reason: mon_contracts::HotwordRejectionReason::ReservedSyntax,
+    }];
+    let meeting = meeting_source(&storage, "current-content", false, &ignored);
     let out = tempfile::tempdir().unwrap();
     let (path, _) = write(&storage, out.path());
     let archive = verified(&path, out.path());
     assert_eq!(archive.manifest.format_version, 8);
     assert_eq!(archive.manifest.schema_version, SCHEMA_VERSION);
+    let restored_revision: String = archive
+        .database
+        .query_row("SELECT current_analysis_id FROM meetings", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        super::super::super::analysis_vocabulary::read(&archive.database, &restored_revision)
+            .unwrap(),
+        ignored,
+    );
     for table in [
         "processing_jobs",
         "job_checkpoints",
@@ -228,13 +258,31 @@ fn current_contents_roundtrip_has_one_baseline_and_no_jobs_or_edits() {
             .unwrap(),
         "点検日"
     );
-    let body = std::fs::read(path).unwrap();
+    let body = std::fs::read(&path).unwrap();
     assert!(!String::from_utf8_lossy(&body).contains("source-machine"));
     assert!(!serde_json::to_value(&archive.manifest)
         .unwrap()
         .as_object()
         .unwrap()
         .contains_key("tables"));
+    let target_root = tempfile::tempdir().unwrap();
+    let target = Storage::open(target_root.path().into()).unwrap();
+    let selection = target
+        .prepare_additive_restore(&path, &|| false, &|_| {})
+        .unwrap();
+    let receipt = selection
+        .publish(
+            &target,
+            &selection.preview().confirmation_id,
+            &|| false,
+            &|_| {},
+        )
+        .unwrap();
+    let published = target
+        .load_current_analysis_presentation(&receipt.meeting_ids[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(published.ignored_hotwords, ignored);
 }
 #[test]
 fn format8_reader_rejects_corruption_truncation_extra_bytes_and_old_versions() {

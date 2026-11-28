@@ -770,8 +770,12 @@ fn user_pause_is_not_resumed_by_recording_and_candidate_completion_is_atomic() {
         segments: vec![],
         utterances: vec![],
     };
+    let ignored = [mon_contracts::IgnoredHotword {
+        term: "C#".into(),
+        reason: mon_contracts::HotwordRejectionReason::ReservedSyntax,
+    }];
     assert!(storage
-        .finish_transcription_candidate(&meeting, &job.id, 0, input.clone())
+        .finish_transcription_candidate(&meeting, &job.id, 0, input.clone(), &ignored)
         .is_err());
     assert_eq!(
         storage
@@ -787,14 +791,19 @@ fn user_pause_is_not_resumed_by_recording_and_candidate_completion_is_atomic() {
         .save_job_checkpoint(&job.id, 0, 1, serde_json::json!({"outputs":[]}))
         .unwrap();
     let candidate = storage
-        .finish_transcription_candidate(&meeting, &job.id, 1, input.clone())
+        .finish_transcription_candidate(&meeting, &job.id, 1, input.clone(), &ignored)
         .unwrap();
     assert_eq!(
         storage.get_job(&job.id).unwrap().output_analysis_id,
-        Some(candidate)
+        Some(candidate.clone())
     );
+    assert_eq!(
+        super::analysis_vocabulary::read(&storage.connection.lock().unwrap(), &candidate).unwrap(),
+        ignored,
+    );
+    assert!(storage.notification_output(&job.id).is_ok());
     assert!(storage
-        .finish_transcription_candidate(&meeting, &job.id, 1, input)
+        .finish_transcription_candidate(&meeting, &job.id, 1, input, &[])
         .is_err());
     assert_eq!(
         storage

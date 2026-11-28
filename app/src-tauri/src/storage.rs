@@ -111,8 +111,10 @@ pub(crate) use vocabulary::{
     VocabularyBook, VocabularyEntry, VocabularySnapshot, VocabularyStamp, VocabularyView,
 };
 
-pub(crate) const SCHEMA_VERSION: usize = 40;
+pub(crate) const SCHEMA_VERSION: usize = 41;
+mod analysis_vocabulary;
 mod schema_40;
+mod schema_41;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1167,7 +1169,7 @@ fn empty_or_current_database(connection: &Connection) -> Result<bool, Box<dyn Er
         |row| row.get(0),
     )?;
     if !empty {
-        schema_40::verify_startup(connection)?;
+        schema_41::verify_startup(connection)?;
     }
     Ok(empty)
 }
@@ -1181,7 +1183,7 @@ fn initialize_database_with_guidance(
     guidance: bool,
 ) -> Result<(), Box<dyn Error>> {
     if !empty_or_current_database(connection)? {
-        schema_40::migrate(connection)?;
+        schema_41::migrate(connection)?;
         return salvage_schema::migrate(connection);
     }
     let transaction =
@@ -1213,7 +1215,7 @@ fn schema_checksum() -> &'static str {
 }
 
 pub(crate) fn verify_database_schema(connection: &Connection) -> Result<(), Box<dyn Error>> {
-    schema_40::current_layout(connection).map(|_| ())
+    schema_41::current_layout(connection).map(|_| ())
 }
 
 fn hash_file(path: &Path) -> Result<(i64, String), String> {

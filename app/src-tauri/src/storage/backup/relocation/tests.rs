@@ -20,12 +20,15 @@ impl Fixture {
         if layout == crate::storage::schema_40::Layout::Crlf {
             let path = root.path().join("meetings.sqlite3");
             drop(private_file(&path).unwrap());
-            let sql = crate::storage::schema_40::current_sql(layout).unwrap();
+            let sql = crate::storage::schema_41::current_sql(layout);
             let db = Connection::open(&path).unwrap();
             db.execute_batch(&sql).unwrap();
             db.execute(
-                "INSERT INTO schema_migrations VALUES(40,?1,0)",
-                [digest(sql.as_bytes())],
+                "INSERT INTO schema_migrations VALUES(?1,?2,0)",
+                rusqlite::params![
+                    crate::storage::SCHEMA_VERSION as i64,
+                    digest(sql.as_bytes())
+                ],
             )
             .unwrap();
             drop(db);
@@ -129,7 +132,7 @@ fn first_placement_schema39_validation_keeps_original_census_and_bytes() {
                 })
                 .unwrap();
         let mut db = Connection::open(&database).unwrap();
-        db.execute_batch(&format!("PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON; DROP TABLE IF EXISTS salvage_meetings; DROP TABLE IF EXISTS salvage_receipt; DROP TRIGGER audio_import_ready_assets; {}",&sql[start..end])).unwrap();
+        db.execute_batch(&format!("PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON; DROP TABLE analysis_vocabulary_diagnostics; DROP TABLE IF EXISTS salvage_meetings; DROP TABLE IF EXISTS salvage_receipt; DROP TRIGGER audio_import_ready_assets; {}",&sql[start..end])).unwrap();
         db.execute(
             "UPDATE schema_migrations SET version=39,checksum=?1",
             [digest(sql.as_bytes())],

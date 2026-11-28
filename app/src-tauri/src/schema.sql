@@ -2,6 +2,25 @@
 
 CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL);
 
+CREATE TABLE analysis_vocabulary_diagnostics (
+    analysis_revision_id TEXT PRIMARY KEY NOT NULL REFERENCES analysis_revisions(id) ON DELETE CASCADE,
+    ignored_hotwords_json TEXT NOT NULL CHECK (json_valid(ignored_hotwords_json)
+        AND json_type(ignored_hotwords_json) = 'array'
+        AND json_array_length(ignored_hotwords_json) BETWEEN 1 AND 1000
+        AND length(CAST(ignored_hotwords_json AS BLOB)) <= 2097152)
+);
+
+CREATE TRIGGER analysis_vocabulary_diagnostics_insert BEFORE INSERT ON analysis_vocabulary_diagnostics
+WHEN (SELECT publication_state FROM analysis_revisions WHERE id = NEW.analysis_revision_id) NOT IN ('building','candidate')
+BEGIN SELECT RAISE(ABORT, 'analysis vocabulary diagnostics are immutable'); END;
+
+CREATE TRIGGER analysis_vocabulary_diagnostics_update BEFORE UPDATE ON analysis_vocabulary_diagnostics
+BEGIN SELECT RAISE(ABORT, 'analysis vocabulary diagnostics are immutable'); END;
+
+CREATE TRIGGER analysis_vocabulary_diagnostics_delete BEFORE DELETE ON analysis_vocabulary_diagnostics
+WHEN (SELECT publication_state FROM analysis_revisions WHERE id = OLD.analysis_revision_id) IN ('committed','internal_snapshot')
+BEGIN SELECT RAISE(ABORT, 'analysis vocabulary diagnostics are immutable'); END;
+
 CREATE TABLE analysis_flows (
     id TEXT PRIMARY KEY,
     meeting_id TEXT NOT NULL UNIQUE REFERENCES meetings(id),

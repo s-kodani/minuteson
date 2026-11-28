@@ -71,6 +71,8 @@ pub(in crate::storage) struct MeetingContents {
     pub(in crate::storage) manifest: Asset,
     pub(in crate::storage) audio: Option<Audio>,
     pub(in crate::storage) transcript: Option<AnalysisView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::storage) ignored_hotwords: Vec<mon_contracts::IgnoredHotword>,
     pub(in crate::storage) manual_assignment_lineages: Vec<String>,
     pub(in crate::storage) segments: Vec<Segment>,
     pub(in crate::storage) markdown: Option<String>,
@@ -183,24 +185,26 @@ impl Contents {
             let (started_at, duration, current): (Option<i64>, i64, Option<String>) = db.query_row(
                 "SELECT started_at_utc_ms,duration_us,current_analysis_id FROM meetings WHERE id=?1", [&meeting.id],
                 |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(err)?;
-            let (transcript, manual_assignment_lineages) = if let Some(current) = current {
-                let tx = db.unchecked_transaction().map_err(err)?;
-                let transcript = super::super::voice::working(&tx, &meeting.id)?.0;
-                let manual =
-                    super::super::speaker_assignment_update::manual_lineages(&tx, &current)?;
-                let lineages =
-                    super::super::minutes_input::lineage_map(&tx, "utterances", &current)?;
-                let mut markers: Vec<_> = transcript
-                    .utterances
-                    .iter()
-                    .filter(|u| manual.contains(lineages.get(&u.id).unwrap_or(&u.id)))
-                    .map(|u| u.id.clone())
-                    .collect();
-                markers.sort_unstable();
-                (Some(transcript), markers)
-            } else {
-                (None, Vec::new())
-            };
+            let (transcript, manual_assignment_lineages, ignored_hotwords) =
+                if let Some(current) = current {
+                    let tx = db.unchecked_transaction().map_err(err)?;
+                    let transcript = super::super::voice::working(&tx, &meeting.id)?.0;
+                    let manual =
+                        super::super::speaker_assignment_update::manual_lineages(&tx, &current)?;
+                    let lineages =
+                        super::super::minutes_input::lineage_map(&tx, "utterances", &current)?;
+                    let mut markers: Vec<_> = transcript
+                        .utterances
+                        .iter()
+                        .filter(|u| manual.contains(lineages.get(&u.id).unwrap_or(&u.id)))
+                        .map(|u| u.id.clone())
+                        .collect();
+                    markers.sort_unstable();
+                    let ignored = super::super::analysis_vocabulary::read(&tx, &current)?;
+                    (Some(transcript), markers, ignored)
+                } else {
+                    (None, Vec::new(), Vec::new())
+                };
             let salvage = super::super::salvage_schema::meeting(db, &meeting.id)?;
             let rescued_without_audio = salvage
                 .as_ref()
@@ -315,6 +319,7 @@ impl Contents {
                 manifest,
                 audio,
                 transcript,
+                ignored_hotwords,
                 manual_assignment_lineages,
                 segments,
                 markdown,
@@ -520,6 +525,9 @@ impl Contents {
             return Err("未対応の会議バックアップ形式です".into());
         }
         for m in &self.meetings {
+            if m.transcript.is_none() && !m.ignored_hotwords.is_empty() {
+                return Err("除外用語の診断に対応する文字起こしがありません".into());
+            }
             if m.transcript
                 .as_ref()
                 .is_some_and(|t| t.meeting_id != m.meeting.id)
@@ -748,6 +756,12 @@ impl Contents {
                 }
                 config["speakerIdentification"] = serde_json::Value::Object(identifications);
                 tx.execute("INSERT INTO analysis_revisions(id,meeting_id,revision_no,origin,publication_state,audio_manifest_hash,profile_snapshot_json,config_json,content_hash,schema_version,created_at) VALUES(?1,?2,1,'manual_snapshot','building',?3,'{}',?4,?5,1,?6)",params![analysis,mid,m.manifest.hash,config.to_string(),"0".repeat(64),m.meeting.created_at]).map_err(err)?;
+                super::super::analysis_vocabulary::insert(
+                    &tx,
+                    &analysis,
+                    &m.ignored_hotwords,
+                    false,
+                )?;
                 let speakers: BTreeSet<_> = t.speakers.iter().map(|s| s.id.as_str()).collect();
                 for s in &t.speakers {
                     tx.execute("INSERT INTO speakers(id,analysis_revision_id,lineage_id,label,display_name,input_scope,identification_state,created_at) VALUES(?1,?2,?3,?4,?5,'all','unknown',?6)",params![get("speakers",&s.id)?,analysis,get("speaker_lineage",&s.id)?,s.label,s.display_name,m.meeting.created_at]).map_err(err)?;
