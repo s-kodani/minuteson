@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 test("capture polling and stopping dispatch lock waits and file reads off the native UI thread",()=>{
   const commandSources = {
-    get_recording_levels: "lib.rs",
-    get_recording_writes: "lib.rs",
-    get_recording_input_status: "lib.rs",
+    get_recording_levels: "recorder/commands.rs",
+    get_recording_writes: "recorder/commands.rs",
+    get_recording_input_status: "recorder/commands.rs",
     get_capture_test_levels: "capture_test/commands.rs",
     get_capture_test_snapshot: "capture_test/commands.rs",
     cancel_capture_test: "capture_test/commands.rs",
