@@ -1,6 +1,6 @@
 # CIと手元で同じコンパイラを使うための固定です。版を上げる条件と手順は
 # docs/guides/development-workflow.md の「Rustの版の固定」を参照してください。
 [toolchain]
-channel = "1.99.1"
+channel = "1.100.1"
 components = ["rustfmt"]
 profile = "minimal"

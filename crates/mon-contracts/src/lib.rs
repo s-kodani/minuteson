@@ -2,6 +2,26 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HotwordRejectionReason {
+    Empty,
+    InvalidUtf8,
+    ControlCharacter,
+    ReservedSyntax,
+    Whitespace,
+    OutsideVocabulary,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct IgnoredHotword {
+    pub term: String,
+    pub reason: HotwordRejectionReason,
+}
+
 macro_rules! wire_enum {
     ($name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

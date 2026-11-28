@@ -1,3 +1,5 @@
+import type { IgnoredHotword } from "./generated/contracts";
+
 export interface Speaker { id: string; label: string; displayName: string | null }
 export interface SpeakerIdentification {
   similarityMilli: number;
@@ -16,6 +18,7 @@ export interface Utterance {
 export interface RecognitionReviewRange { trackId: string; startUs: number; endUs: number; reason: "repetition_after_recovery" }
 export interface Analysis {
   speakerColorKeys?: Record<string, string>;
+  ignoredHotwords?: IgnoredHotword[];
   reviewRanges?: RecognitionReviewRange[];
   id: string; meetingId: string; contentHash: string;
   speakers: Speaker[]; utterances: Utterance[];

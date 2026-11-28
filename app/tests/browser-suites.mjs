@@ -24,6 +24,7 @@ export const browserSuites = [
   ["notification-archive", null, "notification-archive-browser-check.js"],
   ["simple-transcript", "browser-fixture.js", "simple-transcript-browser-check.js"],
   ["recognition-review", "browser-fixture.js", "recognition-review-browser-check.js"],
+  ["vocabulary-application", "browser-fixture.js", "vocabulary-application-browser-check.js"],
   ["transcript-consolidation", "browser-fixture.js", "transcript-groups-browser-check.js"],
   ["speaker-assignment", "browser-fixture.js", "speaker-assignment-browser-check.js"],
   ["speaker-assignment-scroll", "browser-fixture.js", "speaker-assignment-scroll-browser-check.js"],

@@ -477,7 +477,7 @@ fn validate_placed_database(
 ) -> Result<(), String> {
     check_cancelled(cancelled)?;
     if verify_database_schema(db).is_err() {
-        super::schema_40::verify_readonly_previous(db).map_err(|error| error.to_string())?;
+        super::schema_41::verify_readonly_previous(db).map_err(|error| error.to_string())?;
     }
     validate_database_contents(db, cancelled)
 }
@@ -504,6 +504,7 @@ fn validate_database_contents(
         return Err("DBスナップショットの参照または構造が破損しています".into());
     }
     let tx = db.transaction().map_err(|e| e.to_string())?;
+    let has_vocabulary_diagnostics = super::schema_41::current_layout(&tx).is_ok();
     for (table, kind) in [("analysis_revisions", "解析")] {
         let mut statement = tx
             .prepare(&format!("SELECT id,content_hash FROM {table} ORDER BY id"))
@@ -516,6 +517,9 @@ fn validate_database_contents(
             let actual = super::revisions::analysis_content_hash(&tx, &id)?;
             if expected != actual {
                 return Err(format!("{kind}版の内容ハッシュが一致しません"));
+            }
+            if has_vocabulary_diagnostics {
+                super::analysis_vocabulary::read(&tx, &id)?;
             }
         }
     }
