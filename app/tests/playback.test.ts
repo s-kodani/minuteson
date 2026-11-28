@@ -9,9 +9,13 @@ function packet(frames: number, channels = 1, rate = 48000, sampleAt = (_frame: 
   view.setUint32(4, channels, true);
   view.setUint32(8, frames, true);
   for (let frame = 0; frame < frames; frame++) {
-    for (let channel = 0; channel < channels; channel++) view.setFloat32(12 + (frame * channels + channel) * 4, sampleAt(frame, channel), true);
+    for (let channel = 0; channel < channels; channel++) view.setFloat32(12 + (channel * frames + frame) * 4, sampleAt(frame, channel), true);
   }
   return buffer;
+}
+
+function ipcResponses(buffer: ArrayBuffer) {
+  return [buffer, Array.from(new Uint8Array(buffer))];
 }
 
 const info: PlaybackInfo = { token: "token", sampleRate: 48000, channels: 1, totalFrames: 65536 * 5, startUs: 0, endUs: 10000000, trackKind: "mic", alignment: "unverified" };
@@ -56,15 +60,49 @@ test("starting at a reference continues beyond its end until manual pause or rec
   assert.equal(player.snapshot().rate,1.5);
 });
 
-test("binary PCM is deinterleaved and malformed packets are rejected", () => {
-  const decoded = decodeAudioPacket(packet(3, 2));
-  assert.deepEqual([...decoded.channels[0]], [0.25, 0.25, 0.25]);
-  assert.deepEqual([...decoded.channels[1]], [-0.5, -0.5, -0.5]);
-  assert.throws(() => decodeAudioPacket(new ArrayBuffer(4)), /短すぎ/);
-  assert.throws(() => decodeAudioPacket(packet(0)), /形式/);
-  const corrupt = packet(1);
-  new DataView(corrupt).setFloat32(12, NaN, true);
-  assert.throws(() => decodeAudioPacket(corrupt), /サンプル/);
+test("チャネル順 PCM は同じ受信バッファのビューを返す", () => {
+  const buffer = packet(3, 2, 48000, (frame, channel) => (frame + 1) / 4 * (channel ? -1 : 1));
+  const decoded = decodeAudioPacket(buffer);
+  assert.deepEqual([...decoded.channels[0]], [0.25, 0.5, 0.75]);
+  assert.deepEqual([...decoded.channels[1]], [-0.25, -0.5, -0.75]);
+  assert.deepEqual(decoded.channels.map(channel => channel.byteOffset), [12, 24]);
+  assert.ok(decoded.channels.every(channel => channel.buffer === buffer));
+  assert.deepEqual(decodeAudioPacket([...new Uint8Array(buffer)]).channels, decoded.channels);
+});
+
+test("音声パケットのバイト長、フレーム数、チャネル数、サンプルを検証する", () => {
+  for (const bytes of ipcResponses(new ArrayBuffer(4))) {
+    assert.throws(() => decodeAudioPacket(bytes), /短すぎ/);
+  }
+  const wrongChannelCount = packet(3, 2);
+  new DataView(wrongChannelCount).setUint32(4, 1, true);
+  const wrongFrameCount = packet(3, 2);
+  new DataView(wrongFrameCount).setUint32(8, 4, true);
+  for (const malformed of [packet(1).slice(0, 15), wrongChannelCount, wrongFrameCount, packet(0), packet(65537), packet(1, 0), packet(1, 9)]) {
+    for (const bytes of ipcResponses(malformed)) {
+      assert.throws(() => decodeAudioPacket(bytes), /形式/);
+    }
+  }
+  for (const sample of [NaN, Infinity, -Infinity, -1.25, 1.25]) {
+    const malformed = packet(1, 2, 48000, (_, channel) => channel === 0 ? 0 : sample);
+    for (const bytes of ipcResponses(malformed)) {
+      assert.throws(() => decodeAudioPacket(bytes), /サンプル/);
+    }
+  }
+});
+
+test("再生セッションと一致しないパケットはスケジュールしない", async () => {
+  for (const buffer of [packet(2, 1, 16000), packet(2, 2), packet(1)]) {
+    for (const bytes of ipcResponses(buffer)) {
+      const clock = new FakeClock();
+      const player = new ChunkPlayer(clock, async () => bytes, () => {});
+      player.load({ ...info, totalFrames: 2 });
+      await player.play();
+      assert.equal(clock.parts.length, 0);
+      assert.equal(player.snapshot().playing, false);
+      assert.match(player.snapshot().error!, /一致しません/);
+    }
+  }
 });
 
 test("long utterances schedule only three packets and refill without audio-clock gaps", async () => {

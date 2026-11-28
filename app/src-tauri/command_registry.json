@@ -3041,6 +3041,7 @@
     {
       "name": "read_playback_chunk",
       "handler": "read_playback_chunk",
+      "binaryResponse": "12 バイトのヘッダー（サンプルレート、チャネル数、フレーム数の順に u32 LE）に続き、チャネルごとに全フレームの f32 LE サンプルを格納する。",
       "roles": [
         "main"
       ],

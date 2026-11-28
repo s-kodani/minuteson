@@ -245,8 +245,6 @@ impl PlaybackStore {
         Ok(())
     }
 
-    // Binary packet: rate, channels, frames (three u32 LE), then interleaved
-    // float32 LE samples. No full-recording transfer, paths or native pointers.
     pub fn read(&self, token: &str, offset_frames: u64) -> Result<Vec<u8>, String> {
         let mut sessions = self.0.lock().map_err(|_| "再生ロックを取得できません")?;
         let session = sessions
@@ -263,12 +261,95 @@ impl PlaybackStore {
         if let PreparedPlayback::Interval(audio) = &session.audio {
             frames = audio.readable_frames(offset_frames, frames)?;
         }
-        let mut result =
-            Vec::with_capacity(12 + frames as usize * session.info.channels as usize * 4);
-        result.extend_from_slice(&session.info.sample_rate.to_le_bytes());
-        result.extend_from_slice(&session.info.channels.to_le_bytes());
-        result.extend_from_slice(&(frames as u32).to_le_bytes());
-        result.extend_from_slice(&session.audio.read_pcm(offset_frames, frames)?);
-        Ok(result)
+        let pcm = session.audio.read_pcm(offset_frames, frames)?;
+        encode_playback_packet(
+            session.info.sample_rate,
+            session.info.channels,
+            frames,
+            &pcm,
+        )
+    }
+}
+
+// IPC はサンプルレート・チャネル数・フレーム数を u32 LE で並べ、
+// 12 バイトのヘッダーの直後にチャネル順の f32 LE を連続して格納する。
+fn encode_playback_packet(
+    sample_rate: u32,
+    channels: u32,
+    frames: u64,
+    pcm: &[u8],
+) -> Result<Vec<u8>, String> {
+    const SAMPLE_BYTES: usize = size_of::<f32>();
+    if !(8_000..=384_000).contains(&sample_rate)
+        || !(1..=8).contains(&channels)
+        || !(1..=PREVIEW_FRAMES).contains(&frames)
+    {
+        return Err("音声パケットの形式が不正です".into());
+    }
+    let stride = channels as usize * SAMPLE_BYTES;
+    if pcm.len() != frames as usize * stride {
+        return Err("音声パケットの形式が不正です".into());
+    }
+
+    let mut packet = Vec::with_capacity(12 + pcm.len());
+    packet.extend_from_slice(&sample_rate.to_le_bytes());
+    packet.extend_from_slice(&channels.to_le_bytes());
+    packet.extend_from_slice(&(frames as u32).to_le_bytes());
+    if channels == 1 {
+        packet.extend_from_slice(pcm);
+    } else {
+        for channel in 0..channels as usize {
+            let start = channel * SAMPLE_BYTES;
+            for frame in pcm.chunks_exact(stride) {
+                packet.extend_from_slice(&frame[start..start + SAMPLE_BYTES]);
+            }
+        }
+    }
+    Ok(packet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playback_packet_groups_samples_by_channel_in_little_endian() {
+        let pcm = [0.25_f32, -0.5, -0.25, 0.75];
+        let pcm: Vec<_> = pcm.into_iter().flat_map(f32::to_le_bytes).collect();
+        let packet = encode_playback_packet(48_000, 2, 2, &pcm).unwrap();
+        let header: Vec<_> = [48_000_u32, 2, 2]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        let samples: Vec<_> = [0.25_f32, -0.25, -0.5, 0.75]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        assert_eq!(&packet[..12], header);
+        assert_eq!(&packet[12..], samples);
+    }
+
+    #[test]
+    fn playback_packet_rejects_invalid_shape() {
+        for (channels, frames, bytes) in [
+            (2, 2, 15),
+            (2, 2, 8),
+            (2, 1, 16),
+            (1, 0, 0),
+            (1, PREVIEW_FRAMES + 1, (PREVIEW_FRAMES as usize + 1) * 4),
+            (0, 1, 0),
+            (9, 1, 36),
+        ] {
+            assert!(encode_playback_packet(48_000, channels, frames, &vec![0; bytes]).is_err());
+        }
+    }
+
+    #[test]
+    fn playback_read_rejects_unknown_session() {
+        let store = PlaybackStore::default();
+        assert!(store
+            .read("別のセッション", 0)
+            .unwrap_err()
+            .contains("セッションがありません"));
     }
 }

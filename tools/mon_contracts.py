@@ -306,7 +306,11 @@ def typescript_commands(commands):
         result += f'  {json.dumps(command["name"])}: ' + ("{ " + members + " }" if arguments else "Record<string, never>") + ";\n"
     result += "}\nexport type CommandName = keyof CommandArguments;\n"
     result += "export type CommandArgs<C extends CommandName> = CommandArguments[C];\n"
-    result += "export const commandContracts = " + json.dumps({c["name"]: c["signature"] for c in commands}, ensure_ascii=False, indent=2) + " as const;\n"
+    contracts = {c["name"]: dict(c["signature"]) for c in commands}
+    for command in commands:
+        if "binaryResponse" in command:
+            contracts[command["name"]]["binaryResponse"] = command["binaryResponse"]
+    result += "export const commandContracts = " + json.dumps(contracts, ensure_ascii=False, indent=2) + " as const;\n"
     return result
 
 
