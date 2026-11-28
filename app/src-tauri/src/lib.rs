@@ -132,6 +132,7 @@ use data_controller::commands::{
 #[cfg(any(target_os = "macos", windows))]
 use data_controller::commands::{get_storage_bootstrap, review_storage_move};
 use data_controller::DataController;
+use diarization::commands::get_diarization_preferences;
 use generation::commands::minutes_app;
 use generation::commands::{
     get_meeting_body_for_review, get_minutes_markdown, get_minutes_preferences,
@@ -174,20 +175,6 @@ use transcription::commands::{
 #[derive(Default)]
 struct ExitGuard(AtomicBool);
 
-#[tauri::command]
-fn get_diarization_preferences(
-    window: WebviewWindow,
-) -> Result<storage::DiarizationPreferencesSnapshot, mon_contracts::AppError> {
-    let result: Result<storage::DiarizationPreferencesSnapshot, String> = (|| {
-        if window.label() != "main" {
-            return Err("Only the main window can read diarization settings".into());
-        }
-        window.state::<Storage>().diarization_preferences()
-    })();
-    result.map_err(|message| {
-        mon_contracts::AppError::from_command("get_diarization_preferences", message)
-    })
-}
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportStatus {
