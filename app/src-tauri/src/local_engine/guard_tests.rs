@@ -4,29 +4,51 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+fn libc_artifact(test_binary: &Path) -> Result<PathBuf, String> {
+    let directory = test_binary.parent().ok_or("test binary has no parent")?;
+    // Cargo 1.100 はテストと依存クレートを debug/build/<パッケージ>/<ハッシュ>/out
+    // に分ける。旧配置ではテストと libc が同じ deps にある。
+    let directories = if directory.ends_with("out") {
+        let build = directory
+            .ancestors()
+            .nth(3)
+            .filter(|p| p.ends_with("build"))
+            .ok_or("test binary has no Cargo build directory")?;
+        std::fs::read_dir(build.join("libc"))
+            .map_err(|e| e.to_string())?
+            .map(|entry| entry.map(|entry| entry.path().join("out")))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    } else {
+        vec![directory.to_path_buf()]
+    };
+    directories
+        .iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("liblibc-") && name.ends_with(".rlib"))
+        })
+        .max_by_key(|path| std::fs::metadata(path).ok().and_then(|m| m.modified().ok()))
+        .ok_or_else(|| {
+            format!(
+                "compiled libc dependency is missing for {}",
+                test_binary.display()
+            )
+        })
+}
+
 pub(super) fn executable() -> Result<PathBuf, String> {
     static BINARY: OnceLock<Result<(tempfile::TempDir, PathBuf), String>> = OnceLock::new();
     BINARY
         .get_or_init(|| {
             // Compile the exact production headless core, without a test harness's
             // stdout banner or any Tauri/UI startup. No model/device is loaded.
-            let deps = std::env::current_exe()
-                .map_err(|e| e.to_string())?
-                .parent()
-                .ok_or("test binary has no parent")?
-                .to_path_buf();
-            let mut libs = std::fs::read_dir(deps)
-                .map_err(|e| e.to_string())?
-                .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("liblibc-") && n.ends_with(".rlib"))
-                })
-                .collect::<Vec<_>>();
-            libs.sort_by_key(|p| std::fs::metadata(p).ok().and_then(|m| m.modified().ok()));
-            let libc = libs.last().ok_or("compiled libc dependency is missing")?;
+            let libc = libc_artifact(&std::env::current_exe().map_err(|e| e.to_string())?)?;
             let directory = tempfile::Builder::new()
                 .prefix("mon-owned-engine-core-")
                 .tempdir()

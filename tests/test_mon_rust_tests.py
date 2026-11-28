@@ -10,24 +10,13 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-if os.name == "nt":
-    raise unittest.SkipTest("The shared Rust test-cache runner requires POSIX file locks and descriptor-relative I/O")
-
 SPEC = importlib.util.spec_from_file_location(
     "mon_rust_tests", Path(__file__).resolve().parents[1] / "tools" / "mon_rust_tests.py")
 runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
 
 
-class RustRunnerTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name).resolve()
-        self.repository = self.root / "repo"
-        self.repository.mkdir()
-        self.cache = runner.Cache(self.repository / ".cache" / "tests", self.repository)
-
+class RustTestInventoryTests(unittest.TestCase):
     def test_inventory_and_exact_partition_cover_every_test_once(self):
         names = [f"module{i % 17}::test_{i}" for i in range(1730)]
         output = "\n".join(f"{name}: test" for name in names) + "\n1730 tests, 0 benchmarks\n"
@@ -46,6 +35,17 @@ class RustRunnerTests(unittest.TestCase):
     def test_argument_budget_rejects_a_single_excessive_name(self):
         with self.assertRaises(ValueError):
             runner.batches(["x" * 513], 512)
+
+
+@unittest.skipIf(os.name == "nt", "The shared Rust test cache requires POSIX file locks and descriptor-relative I/O")
+class RustRunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.repository = self.root / "repo"
+        self.repository.mkdir()
+        self.cache = runner.Cache(self.repository / ".cache" / "tests", self.repository)
 
     def test_owned_cache_reuses_dependencies_and_trims_incremental_first(self):
         with redirect_stdout(io.StringIO()), self.cache.locked():
@@ -120,8 +120,14 @@ class RustRunnerTests(unittest.TestCase):
                     self.cache.remove_debug(True, entry)
 
     def test_completed_unshared_objects_are_evicted_before_latest_incremental(self):
+        self.assert_completed_object_evicted("debug/deps")
+
+    def test_completed_unshared_objects_are_evicted_in_per_unit_output(self):
+        self.assert_completed_object_evicted("debug/build/mon-desktop/0123456789abcdef/out")
+
+    def assert_completed_object_evicted(self, directory):
         with redirect_stdout(io.StringIO()), self.cache.locked():
-            deps = self.cache.path / "debug/deps"
+            deps = self.cache.path / directory
             deps.mkdir(parents=True)
             executable = deps / "mon_lib-0123456789abcdef"
             executable.write_bytes(b"completed test executable")
@@ -193,6 +199,22 @@ class RustRunnerTests(unittest.TestCase):
             debug = self.cache.path / "debug"
             debug.mkdir()
             (debug / "deps").symlink_to(external, target_is_directory=True)
+            with self.assertRaises(OSError):
+                self.cache.remove_completed_objects(1)
+        self.assertEqual(keep.read_bytes(), b"outside")
+
+    def test_object_cleanup_refuses_linked_unit_output(self):
+        external = self.root / "external"
+        external.mkdir()
+        binary = external / "mon_lib-0123456789abcdef"
+        binary.touch(mode=0o700)
+        keep = external / (binary.name + ".old.unit.rcgu.o")
+        keep.write_bytes(b"outside")
+        os.utime(keep, ns=(1, 1))
+        with redirect_stdout(io.StringIO()), self.cache.locked():
+            unit = self.cache.path / "debug/build/mon-desktop/0123456789abcdef"
+            unit.mkdir(parents=True)
+            (unit / "out").symlink_to(external, target_is_directory=True)
             with self.assertRaises(OSError):
                 self.cache.remove_completed_objects(1)
         self.assertEqual(keep.read_bytes(), b"outside")
@@ -311,6 +333,7 @@ class RustRunnerTests(unittest.TestCase):
         self.assertIn("--offline", command)
         self.assertEqual(command[command.index("--jobs") + 1], str(min(4, os.cpu_count() or 1)))
         self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.cache.path))
+        self.assertEqual(environment["CARGO_BUILD_BUILD_DIR"], str(self.cache.path))
         self.assertEqual(units.call_args.args[-1], fd)
         self.assertIn("--doc", doc.call_args.args[0])
         self.assertIn("--jobs", doc.call_args.args[0])
