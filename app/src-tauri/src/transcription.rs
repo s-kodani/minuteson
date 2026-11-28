@@ -279,6 +279,34 @@ struct Unit {
     run_index: Option<usize>,
 }
 
+impl Unit {
+    fn utterance(
+        &self,
+        segment: asr::Segment,
+        sample_rate: u64,
+        track_id: &str,
+        origin: i64,
+        known_end: i64,
+    ) -> Option<UtteranceInput> {
+        let window_start = self.window_first * 1_000_000 / sample_rate;
+        let midpoint = (segment.start_us as u64 + segment.end_us as u64) / 2 + window_start;
+        let core_first = self.core_first * 1_000_000 / sample_rate;
+        let core_end = self.core_end * 1_000_000 / sample_rate;
+        // 文脈を含む認識窓から、担当範囲に中点が入る発言区間を採用する。
+        if midpoint < core_first || midpoint >= core_end {
+            return None;
+        }
+        Some(UtteranceInput {
+            track_id: track_id.to_owned(),
+            start_us: origin + window_start as i64 + segment.start_us,
+            end_us: (origin + window_start as i64 + segment.end_us).min(known_end),
+            text: segment.text,
+            speaker_keys: vec![],
+            confidence: None,
+        })
+    }
+}
+
 #[derive(Default, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Checkpoint {
@@ -1030,23 +1058,15 @@ pub(crate) fn process(
                 }
             }
             for segment in saved_output(storage, &spec, &parameters, output, duration)? {
-                let window_start = unit.window_first * 1_000_000 / u64::from(track.sample_rate);
-                let midpoint = (segment.start_us as u64 + segment.end_us as u64) / 2 + window_start;
-                let core_first = unit.core_first * 1_000_000 / u64::from(track.sample_rate);
-                let core_end = unit.core_end * 1_000_000 / u64::from(track.sample_rate);
-                // Two seconds of context on both sides, with midpoint ownership
-                // to avoid publishing the same context segment in two units.
-                if midpoint < core_first || midpoint >= core_end {
-                    continue;
+                if let Some(utterance) = unit.utterance(
+                    segment,
+                    u64::from(track.sample_rate),
+                    &track.id,
+                    origin,
+                    known_end,
+                ) {
+                    utterances.push(utterance);
                 }
-                utterances.push(UtteranceInput {
-                    track_id: track.id.clone(),
-                    start_us: origin + window_start as i64 + segment.start_us,
-                    end_us: (origin + window_start as i64 + segment.end_us).min(known_end),
-                    text: segment.text,
-                    speaker_keys: vec![],
-                    confidence: None,
-                });
             }
         }
         utterances.sort_by(|left, right| {
@@ -1133,6 +1153,9 @@ pub(crate) fn process(
     }
     attempt
 }
+
+#[cfg(test)]
+mod boundary_tests;
 
 #[cfg(test)]
 mod recognition_policy_tests {
