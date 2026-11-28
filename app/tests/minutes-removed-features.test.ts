@@ -17,7 +17,7 @@ test("obsolete minutes operations have no native handler, registration or client
     start_markdown_minutes_generation: "generation/commands.rs",
     export_plain_minutes_markdown: "exports/commands.rs",
     get_plain_minutes_export_status: "exports/commands.rs",
-    prepare_markdown_interval_playback: "lib.rs",
+    prepare_markdown_interval_playback: "playback/commands.rs",
   };
   for(const [command, file] of Object.entries(commandSources)) {
     const native=readFileSync(new URL("../src-tauri/src/"+file,import.meta.url),"utf8");
