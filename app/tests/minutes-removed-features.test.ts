@@ -15,8 +15,8 @@ test("obsolete minutes operations have no native handler, registration or client
     get_minutes_markdown: "generation/commands.rs",
     save_minutes_markdown: "generation/commands.rs",
     start_markdown_minutes_generation: "generation/commands.rs",
-    export_plain_minutes_markdown: "lib.rs",
-    get_plain_minutes_export_status: "lib.rs",
+    export_plain_minutes_markdown: "exports/commands.rs",
+    get_plain_minutes_export_status: "exports/commands.rs",
     prepare_markdown_interval_playback: "lib.rs",
   };
   for(const [command, file] of Object.entries(commandSources)) {
